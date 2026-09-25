@@ -15,14 +15,22 @@ func init() {
 // Default 返回当前默认 Logger。
 func Default() Logger { return *defaultLogger.Load() }
 
-// SetDefault 替换默认 Logger(应用启动期调用一次)。
-func SetDefault(l Logger) { defaultLogger.Store(&l) }
+// SetDefault 替换默认 Logger(应用启动期调用一次)，nil Logger 会 panic。
+func SetDefault(l Logger) {
+	if isNilInterface(l) {
+		panic("logit: nil logger")
+	}
+	defaultLogger.Store(&l)
+}
 
-// Swap 原子替换默认 Logger 并返回旧值,测试捕获输出用:
+// Swap 原子替换默认 Logger 并返回旧值；nil Logger 会 panic。测试捕获输出用:
 //
 //	old := logit.Swap(logit.MustNew(logit.OptWriter(buf)))
 //	defer logit.Swap(old)
 func Swap(l Logger) (old Logger) {
+	if isNilInterface(l) {
+		panic("logit: nil logger")
+	}
 	previous := defaultLogger.Swap(&l)
 	return *previous
 }

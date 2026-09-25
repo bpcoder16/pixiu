@@ -210,3 +210,32 @@ func TestNamedLoggers(t *testing.T) {
 		t.Errorf("default fallback: %q", out)
 	}
 }
+
+func TestSetNamedRejectsNilLogger(t *testing.T) {
+	const name = "nil-registration"
+	original := MustNew(OptWriter(NewWriter(&bytes.Buffer{})))
+	SetNamed(name, original)
+	t.Cleanup(func() { namedLoggers.Delete(name) })
+
+	for _, input := range []struct {
+		name   string
+		logger Logger
+	}{
+		{name: "nil"},
+		{name: "typed nil", logger: (*coreLogger)(nil)},
+	} {
+		t.Run(input.name, func(t *testing.T) {
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Error("nil Logger 未在注册时 panic")
+					}
+				}()
+				SetNamed(name, input.logger)
+			}()
+			if got := Named(name); got != original {
+				t.Errorf("无效注册改变了命名 Logger: %T", got)
+			}
+		})
+	}
+}

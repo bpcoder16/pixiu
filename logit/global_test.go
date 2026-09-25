@@ -200,6 +200,42 @@ func TestSwapIsAtomicExchange(t *testing.T) {
 	}
 }
 
+type typedNilLogger struct{ logit.Logger }
+
+func TestGlobalLoggerRegistrationRejectsNil(t *testing.T) {
+	original := logit.Default()
+	t.Cleanup(func() { logit.SetDefault(original) })
+	for _, input := range []struct {
+		name   string
+		logger logit.Logger
+	}{
+		{name: "nil"},
+		{name: "typed nil", logger: (*typedNilLogger)(nil)},
+	} {
+		for _, register := range []struct {
+			name string
+			fn   func(logit.Logger)
+		}{
+			{name: "SetDefault", fn: logit.SetDefault},
+			{name: "Swap", fn: func(l logit.Logger) { logit.Swap(l) }},
+		} {
+			t.Run(register.name+"/"+input.name, func(t *testing.T) {
+				func() {
+					defer func() {
+						if recover() == nil {
+							t.Error("nil Logger 未在注册时 panic")
+						}
+					}()
+					register.fn(input.logger)
+				}()
+				if got := logit.Default(); got != original {
+					t.Errorf("无效注册改变了默认 Logger: %T", got)
+				}
+			})
+		}
+	}
+}
+
 // lockedBuffer 是并发安全的 bytes.Buffer(bytes.Buffer 不满足 Writer 并发契约)。
 type lockedBuffer struct {
 	mu  sync.Mutex
