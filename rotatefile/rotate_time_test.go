@@ -1,4 +1,4 @@
-package logit
+package rotatefile
 
 import (
 	"os"
@@ -22,9 +22,9 @@ func TestRotateNamesPreviousPeriodAtBoundary(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "app.log")
-			cfg := defaultRotateConfig()
+			cfg := defaultConfig()
 			cfg.every = tt.every
-			r, err := openRotateFile(path, cfg, tt.before)
+			r, err := openFile(path, cfg, tt.before)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -59,10 +59,10 @@ func TestRotateNamesPreviousPeriodAtBoundary(t *testing.T) {
 func TestRotateRestartOpensCurrentPeriodWithoutBackfill(t *testing.T) {
 	loc := time.FixedZone("CST", 8*3600)
 	path := filepath.Join(t.TempDir(), "app.log")
-	cfg := defaultRotateConfig()
+	cfg := defaultConfig()
 	cfg.every = 24 * time.Hour
 	first := time.Date(2026, 9, 23, 0, 0, 0, 0, loc)
-	r, err := openRotateFile(path, cfg, first)
+	r, err := openFile(path, cfg, first)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestRotateRestartOpensCurrentPeriodWithoutBackfill(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := openRotateFile(path, cfg, first.AddDate(0, 0, 3))
+	reopened, err := openFile(path, cfg, first.AddDate(0, 0, 3))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestRotateRestartOpensCurrentPeriodWithoutBackfill(t *testing.T) {
 
 func TestRotateRestartWithinPeriodAppends(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	first, err := NewRotateFile(path)
+	first, err := New(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestRotateRestartWithinPeriodAppends(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	second, err := NewRotateFile(path)
+	second, err := New(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,9 +133,9 @@ func TestRotateMaxFilesCountsCurrentPhysicalFile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cfg := defaultRotateConfig()
+	cfg := defaultConfig()
 	cfg.maxFiles = 3
-	r, err := openRotateFile(path, cfg, now)
+	r, err := openFile(path, cfg, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,10 +154,10 @@ func TestRotateMaxFilesCountsCurrentPhysicalFile(t *testing.T) {
 
 func TestRotateMaxFilesThreeKeepsPreviousPeriods(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	cfg := defaultRotateConfig()
+	cfg := defaultConfig()
 	cfg.maxFiles = 3
 	start := time.Date(2026, 9, 22, 23, 0, 0, 0, time.Local)
-	r, err := openRotateFile(path, cfg, start)
+	r, err := openFile(path, cfg, start)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,10 +201,10 @@ func TestRotateCleanupCountsCurrentPeriodAndPreservesUnrelatedFiles(t *testing.T
 	if err := os.Symlink(filepath.Base(path)+".notes", path+".20260919"); err != nil {
 		t.Fatal(err)
 	}
-	cfg := defaultRotateConfig()
+	cfg := defaultConfig()
 	cfg.every = 24 * time.Hour
 	cfg.maxFiles = 3
-	r, err := openRotateFile(path, cfg, time.Date(2026, 9, 23, 12, 0, 0, 0, time.Local))
+	r, err := openFile(path, cfg, time.Date(2026, 9, 23, 12, 0, 0, 0, time.Local))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,19 +224,19 @@ func TestRotateCleanupCountsCurrentPeriodAndPreservesUnrelatedFiles(t *testing.T
 }
 
 func TestRotateRejectsInvalidPeriodAndFileLimit(t *testing.T) {
-	for _, opts := range [][]RotateOption{
-		{OptRotateEvery(0)},
-		{OptRotateEvery(-time.Hour)},
-		{OptRotateEvery(5 * time.Minute)},
-		{OptRotateEvery(2 * time.Hour)},
-		{OptRotateMaxFiles(1)},
-		{OptRotateMaxFiles(2)},
-		{OptRotateMaxFiles(0)},
-		{OptRotateMaxFiles(-1)},
+	for _, opts := range [][]Option{
+		{OptEvery(0)},
+		{OptEvery(-time.Hour)},
+		{OptEvery(5 * time.Minute)},
+		{OptEvery(2 * time.Hour)},
+		{OptMaxFiles(1)},
+		{OptMaxFiles(2)},
+		{OptMaxFiles(0)},
+		{OptMaxFiles(-1)},
 	} {
-		_, err := NewRotateFile(filepath.Join(t.TempDir(), "app.log"), opts...)
+		_, err := New(filepath.Join(t.TempDir(), "app.log"), opts...)
 		if err == nil {
-			t.Fatalf("NewRotateFile accepted invalid options: %v", opts)
+			t.Fatalf("New accepted invalid options: %v", opts)
 		}
 	}
 }
@@ -244,9 +244,9 @@ func TestRotateRejectsInvalidPeriodAndFileLimit(t *testing.T) {
 func TestRotateRejectsRelativePath(t *testing.T) {
 	t.Chdir(t.TempDir())
 	for _, path := range []string{"app.log", "./app.log"} {
-		if w, err := NewRotateFile(path); err == nil {
+		if w, err := New(path); err == nil {
 			_ = w.Close()
-			t.Errorf("NewRotateFile accepted relative path %q", path)
+			t.Errorf("New accepted relative path %q", path)
 		}
 	}
 }

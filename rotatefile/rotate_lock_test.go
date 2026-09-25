@@ -1,7 +1,8 @@
-package logit
+package rotatefile
 
 import (
 	"context"
+	"github.com/bpcoder16/pixiu/logit"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,9 +11,9 @@ import (
 
 func TestRotateCleanupDoesNotTakeWriteLock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	cfg := defaultRotateConfig()
+	cfg := defaultConfig()
 	cfg.maxFiles = 3
-	r, err := openRotateFile(path, cfg, time.Now())
+	r, err := openFile(path, cfg, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,23 +60,23 @@ func TestE2ERotateClockRollbackKeepsCurrentFile(t *testing.T) {
 	for _, every := range []time.Duration{time.Hour, 24 * time.Hour} {
 		t.Run(every.String(), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "app.log")
-			cfg := defaultRotateConfig()
+			cfg := defaultConfig()
 			cfg.every = every
 			// 已进入更晚的时段，随后 Write 看到的当前时间相当于发生了回拨。
-			r, err := openRotateFile(path, cfg, time.Now().Add(every))
+			r, err := openFile(path, cfg, time.Now().Add(every))
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer r.Close()
 			current, boundary := r.f.Name(), r.boundary
-			l := MustNew(OptWriter(r))
+			l := logit.MustNew(logit.OptWriter(logit.NewWriter(r)))
 			l.Info(context.Background(), "clock rollback")
 			if r.f.Name() != current || !r.boundary.Equal(boundary) {
 				t.Fatal("时钟回拨不应重新打开较早时段的文件")
 			}
 			assertLink(t, path, current)
 			data, count := readAll(t, filepath.Dir(path), "app.log")
-			if count != 1 || len(data) == 0 || l.(WriteErrorStats).WriteErrors() != 0 {
+			if count != 1 || len(data) == 0 || l.(logit.WriteErrorStats).WriteErrors() != 0 {
 				t.Fatalf("回拨期间仍应成功写入当前文件: count=%d, data=%q", count, data)
 			}
 		})

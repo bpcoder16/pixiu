@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bpcoder16/pixiu/rotatefile"
 )
 
 func TestHookStderrCapturesWrites(t *testing.T) {
@@ -55,7 +57,7 @@ func TestHookStderrCapturesWrites(t *testing.T) {
 
 func TestHookStdoutWithRotateFile(t *testing.T) {
 	dir := t.TempDir()
-	rf, err := NewRotateFile(filepath.Join(dir, "stdout.log"))
+	rf, err := rotatefile.New(filepath.Join(dir, "stdout.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +71,8 @@ func TestHookStdoutWithRotateFile(t *testing.T) {
 		_ = closeFd(saved)
 	})
 
-	if err := HookStdout(rf); err != nil {
-		t.Fatalf("rotateFile should expose Fd: %v", err)
+	if err := HookStdout(NewWriter(rf)); err != nil {
+		t.Fatalf("轮转文件经 NewWriter 适配后应透传 Fd: %v", err)
 	}
 	fmt.Println("stdout goes to file")
 

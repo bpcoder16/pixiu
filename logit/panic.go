@@ -37,8 +37,8 @@ func PanicLogger() Logger {
 	return nil
 }
 
-// SetPanicLogger 从 Writer 构造 panic 专用 Logger(推荐使用独立 panic 文件,如
-// NewRotateFile("/var/log/app/panic.log"))。只路由 Fatal，固定文本编码、无 caller，
+// SetPanicLogger 从 Writer 构造 panic 专用 Logger(推荐使用独立 panic 文件，
+// 需要轮转时由外部创建文件并通过 NewWriter 适配)。只路由 Fatal，固定文本编码、无 caller，
 // 写入并尽力 Sync 后继续运行；无效 Writer 在此处 panic。
 func SetPanicLogger(w Writer) {
 	if isNilInterface(w) {

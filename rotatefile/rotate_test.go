@@ -1,4 +1,4 @@
-package logit
+package rotatefile
 
 import (
 	"errors"
@@ -47,11 +47,11 @@ func assertLink(t *testing.T, path, target string) {
 
 func TestRotateCreatesPeriodFileAndStableLink(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	w, err := NewRotateFile(path)
+	w, err := New(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := w.(*rotateFile)
+	r := w
 	want := path + "." + periodStart(time.Now(), time.Hour).Format(hourlyLayout)
 	assertLink(t, path, want)
 	if _, err := w.Write([]byte("hello\n")); err != nil {
@@ -77,7 +77,7 @@ func TestRotateCreatesPeriodFileAndStableLink(t *testing.T) {
 
 func TestRotateConcurrent(t *testing.T) {
 	dir := t.TempDir()
-	w, err := NewRotateFile(filepath.Join(dir, "app.log"))
+	w, err := New(filepath.Join(dir, "app.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestRotateRejectsRegularPath(t *testing.T) {
 	if err := os.WriteFile(path, []byte("old data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewRotateFile(path); err == nil {
+	if _, err := New(path); err == nil {
 		t.Fatal("regular path was accepted as stable link")
 	}
 	data, err := os.ReadFile(path)
@@ -120,7 +120,7 @@ func TestRotateRejectsRegularPath(t *testing.T) {
 func TestRotateLongNameLeavesNoTemporaryFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, strings.Repeat("a", 220)+".log")
-	w, err := NewRotateFile(path)
+	w, err := New(path)
 	if err != nil {
 		t.Fatal(err)
 	}

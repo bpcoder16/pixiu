@@ -8,7 +8,43 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/bpcoder16/pixiu/rotatefile"
 )
+
+// readAll 只读取实际文件，避免通过稳定软链重复读取活动文件。
+func readAll(t *testing.T, dir, prefix string) (string, int) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sb strings.Builder
+	files := 0
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), prefix+".") || !e.Type().IsRegular() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sb.Write(data)
+		files++
+	}
+	return sb.String(), files
+}
+
+func assertLink(t *testing.T, path, target string) {
+	t.Helper()
+	got, err := os.Readlink(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != filepath.Base(target) {
+		t.Fatalf("link %s = %q, want %q", path, got, filepath.Base(target))
+	}
+}
 
 func TestE2ERotateOnWriteAfterIdle(t *testing.T) {
 	for _, every := range []time.Duration{time.Hour, 24 * time.Hour} {
@@ -16,10 +52,11 @@ func TestE2ERotateOnWriteAfterIdle(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				dir := t.TempDir()
 				path := filepath.Join(dir, "app.log")
-				w, err := NewRotateFile(path, OptRotateEvery(every))
+				file, err := rotatefile.New(path, rotatefile.OptEvery(every))
 				if err != nil {
 					t.Fatal(err)
 				}
+				w := NewWriter(file)
 				l := MustNew(OptWriter(w))
 				defer func() {
 					if err := Close(l); err != nil {
@@ -47,11 +84,11 @@ func TestE2ERotateOnWriteAfterIdle(t *testing.T) {
 				}
 
 				l.Info(ctx, "after idle")
-				layout := hourlyLayout
+				layout := "2006010215"
 				if every == 24*time.Hour {
-					layout = dailyLayout
+					layout = "20060102"
 				}
-				currentPath := path + "." + periodStart(time.Now(), every).Format(layout)
+				currentPath := path + "." + time.Now().Format(layout)
 				assertLink(t, path, currentPath)
 				if data, err := os.ReadFile(currentPath); err != nil || !strings.Contains(string(data), "after idle") || strings.Contains(string(data), "before idle") {
 					t.Fatalf("恢复写入后应只写入当前时段: %q, %v", data, err)
@@ -73,18 +110,18 @@ func TestE2ERotateOnWriteAfterIdle(t *testing.T) {
 func TestE2EDispatchSyncRotateWF(t *testing.T) {
 	dir := t.TempDir()
 
-	mainFile, err := NewRotateFile(filepath.Join(dir, "app.log"), OptRotateMaxFiles(3))
+	mainFile, err := rotatefile.New(filepath.Join(dir, "app.log"), rotatefile.OptMaxFiles(3))
 	if err != nil {
 		t.Fatal(err)
 	}
-	wfFile, err := NewRotateFile(filepath.Join(dir, "app.wf.log"),
-		OptRotateMaxFiles(5))
+	wfFile, err := rotatefile.New(filepath.Join(dir, "app.wf.log"),
+		rotatefile.OptMaxFiles(5))
 	if err != nil {
 		t.Fatal(err)
 	}
 	l := MustNew(OptDispatch(
-		Target{Levels: []Level{DebugLevel, InfoLevel}, Writer: mainFile},
-		Target{Levels: []Level{WarnLevel, ErrorLevel, FatalLevel}, Writer: wfFile},
+		Target{Levels: []Level{DebugLevel, InfoLevel}, Writer: NewWriter(mainFile)},
+		Target{Levels: []Level{WarnLevel, ErrorLevel, FatalLevel}, Writer: NewWriter(wfFile)},
 	), OptFilterKeys("token"))
 
 	ctx := newTestContextWithLogID()
@@ -164,12 +201,12 @@ func TestE2EDispatchSyncRotateWF(t *testing.T) {
 // TestE2EPanicDedicatedFile 验证 panic 走独立轮转文件且堆栈保留多行。
 func TestE2EPanicDedicatedFile(t *testing.T) {
 	dir := t.TempDir()
-	panicFile, err := NewRotateFile(filepath.Join(dir, "panic.log"), OptRotateMaxFiles(3))
+	panicFile, err := rotatefile.New(filepath.Join(dir, "panic.log"), rotatefile.OptMaxFiles(3))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = panicFile.Close() })
-	SetPanicLogger(panicFile)
+	SetPanicLogger(NewWriter(panicFile))
 	t.Cleanup(func() {
 		panicLoggerPtr.Store(nil)
 	})

@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/bpcoder16/pixiu/rotatefile"
 )
 
 // newTestLogger 返回写进 buf 的 logger 与 buf。
@@ -606,10 +608,11 @@ func TestLoggerIgnoresSharedWriterStats(t *testing.T) {
 }
 
 func TestCloseSharedRotateWriterOnce(t *testing.T) {
-	w, err := NewRotateFile(filepath.Join(t.TempDir(), "app.log"))
+	f, err := rotatefile.New(filepath.Join(t.TempDir(), "app.log"))
 	if err != nil {
-		t.Fatalf("NewRotateFile: %v", err)
+		t.Fatalf("rotatefile.New: %v", err)
 	}
+	w := NewWriter(f)
 	t.Cleanup(func() { _ = w.Close() })
 	l := MustNew(OptDispatch(
 		Target{Levels: []Level{InfoLevel}, Writer: w},

@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 )
 
-// Writer 是日志落盘目标的接口。实现:同步直写(NewWriter/OpenFile)
-// 与轮转文件(NewRotateFile)。
+// Writer 是日志落盘目标的接口。NewWriter 可适配普通 io.Writer，
+// OpenFile 提供同步追加文件；轮转文件可由外部按需创建后适配。
 //
 // 契约:Write 必须并发安全且单次调用写入完整记录(普通日志一行，panic 堆栈可多行)。
 // WriterKey 必须返回生命周期内不变的非零 key；同一 Writer 的副本共享 key。
@@ -63,7 +63,8 @@ func (s *writeErrorTracker) lastValue() error {
 }
 
 // NewWriter 把非 nil io.Writer 适配为并发安全的 Writer；nil 输入立即 panic。
-// 底层实现 io.Closer 时 Close 透传。非 *os.File 目标发生短写时会在同一把锁内继续，避免与其他调用交错。
+// 底层实现 io.Closer 时 Close 透传；带 Fd 的 io.WriteCloser 也透传文件描述符。
+// 非 *os.File 目标发生短写时会在同一把锁内继续，避免与其他调用交错。
 func NewWriter(w io.Writer) Writer {
 	if isNilInterface(w) {
 		panic("logit: nil io.Writer")
@@ -77,7 +78,11 @@ func NewWriter(w io.Writer) Writer {
 		return &discardWriter{key: NewWriterKey()}
 	}
 	if wc, ok := w.(io.WriteCloser); ok {
-		return &closerWriter{w: wc, key: NewWriterKey()}
+		wrapped := &closerWriter{w: wc, key: NewWriterKey()}
+		if fd, ok := w.(interface{ Fd() uintptr }); ok {
+			return &fdCloserWriter{closerWriter: wrapped, fd: fd}
+		}
+		return wrapped
 	}
 	return &plainWriter{w: w, key: NewWriterKey()}
 }
@@ -164,6 +169,14 @@ type closerWriter struct {
 	w   io.WriteCloser
 	key WriterKey
 }
+
+// fdCloserWriter 保留底层文件描述符能力，供显式的标准流重定向使用。
+type fdCloserWriter struct {
+	*closerWriter
+	fd interface{ Fd() uintptr }
+}
+
+func (w *fdCloserWriter) Fd() uintptr { return w.fd.Fd() }
 
 func (c *closerWriter) Write(b []byte) (int, error) {
 	c.mu.Lock()

@@ -1,7 +1,8 @@
-package logit
+package rotatefile
 
 import (
 	"context"
+	"github.com/bpcoder16/pixiu/logit"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,7 @@ func TestRotateWriteFailureKeepsPreviousPeriodAndRecovers(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "app.log")
 			now := periodStart(time.Now(), time.Hour)
-			r, err := openRotateFile(path, defaultRotateConfig(), now.Add(-time.Hour))
+			r, err := openFile(path, defaultConfig(), now.Add(-time.Hour))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -72,9 +73,9 @@ func TestRotateCleanupFailureRetriesOnNextTick(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "app.log")
-		cfg := defaultRotateConfig()
+		cfg := defaultConfig()
 		cfg.maxFiles = 3
-		r, err := openRotateFile(path, cfg, time.Now().Add(-time.Hour))
+		r, err := openFile(path, cfg, time.Now().Add(-time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -86,7 +87,7 @@ func TestRotateCleanupFailureRetriesOnNextTick(t *testing.T) {
 			}
 		}
 		callbacks := 0
-		l := MustNew(OptWriter(r), OptOnWriteError(func(error) { callbacks++ }))
+		l := logit.MustNew(logit.OptWriter(logit.NewWriter(r)), logit.OptOnWriteError(func(error) { callbacks++ }))
 		l.Info(context.Background(), "current")
 		if err := r.Sync(); err != nil {
 			t.Fatal(err)
@@ -101,10 +102,10 @@ func TestRotateCleanupFailureRetriesOnNextTick(t *testing.T) {
 		time.Sleep(time.Hour)
 		synctest.Wait()
 		failedOutput := stderr()
-		if !strings.Contains(failedOutput, "logit: cleanup") || !strings.Contains(failedOutput, path) {
+		if !strings.Contains(failedOutput, "rotatefile: cleanup") || !strings.Contains(failedOutput, path) {
 			t.Fatalf("定时清理错误未输出到 stderr: %q", failedOutput)
 		}
-		stats := l.(WriteErrorStats)
+		stats := l.(logit.WriteErrorStats)
 		if callbacks != 0 || stats.WriteErrors() != 0 || stats.LastWriteError() != nil {
 			t.Fatal("后台错误不应进入 Write 错误统计或回调")
 		}

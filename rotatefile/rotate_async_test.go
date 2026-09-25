@@ -1,8 +1,9 @@
-package logit
+package rotatefile
 
 import (
 	"context"
 	"errors"
+	"github.com/bpcoder16/pixiu/logit"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +13,7 @@ import (
 )
 
 // 用管道的在用 fd 引用阻塞 Close，无需给生产实现注入慢 I/O 钩子。
-func holdRotateOldFile(t *testing.T, r *rotateFile) func() {
+func holdRotateOldFile(t *testing.T, r *File) func() {
 	t.Helper()
 	reader, writer, err := os.Pipe()
 	if err != nil {
@@ -54,14 +55,14 @@ func TestE2ERotateMaintenanceDoesNotBlockWrites(t *testing.T) {
 		t.Run(finish, func(t *testing.T) {
 			stderr := captureRotateStderr(t)
 			path := filepath.Join(t.TempDir(), "app.log")
-			r, err := openRotateFile(path, defaultRotateConfig(), time.Now().Add(-time.Hour))
+			r, err := openFile(path, defaultConfig(), time.Now().Add(-time.Hour))
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = r.Close() })
 			unblock := holdRotateOldFile(t, r)
 			var callbacks int
-			l := MustNew(OptWriter(r), OptOnWriteError(func(error) { callbacks++ }))
+			l := logit.MustNew(logit.OptWriter(logit.NewWriter(r)), logit.OptOnWriteError(func(error) { callbacks++ }))
 			written := make(chan struct{})
 			go func() {
 				l.Info(context.Background(), "cross boundary")
@@ -79,7 +80,7 @@ func TestE2ERotateMaintenanceDoesNotBlockWrites(t *testing.T) {
 			done := make(chan error, 1)
 			go func() {
 				if finish == "close" {
-					done <- Close(l)
+					done <- logit.Close(l)
 				} else {
 					done <- r.Sync()
 				}
@@ -99,10 +100,10 @@ func TestE2ERotateMaintenanceDoesNotBlockWrites(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("释放旧文件后仍未完成，可能持锁等待后台任务")
 			}
-			if output := stderr(); !strings.Contains(output, "logit: close old file") {
+			if output := stderr(); !strings.Contains(output, "rotatefile: close old file") {
 				t.Fatalf("旧文件错误未输出到 stderr: %q", output)
 			}
-			stats := l.(WriteErrorStats)
+			stats := l.(logit.WriteErrorStats)
 			if stats.WriteErrors() != 0 || stats.LastWriteError() != nil || callbacks != 0 {
 				t.Fatalf("后台错误统计/回调异常: count=%d, last=%v, callbacks=%d", stats.WriteErrors(), stats.LastWriteError(), callbacks)
 			}
@@ -112,7 +113,7 @@ func TestE2ERotateMaintenanceDoesNotBlockWrites(t *testing.T) {
 
 func TestRotateWriteErrorStatsOwnedByLogger(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	r, err := openRotateFile(path, defaultRotateConfig(), time.Now().Add(-time.Hour))
+	r, err := openFile(path, defaultConfig(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,12 +122,12 @@ func TestRotateWriteErrorStatsOwnedByLogger(t *testing.T) {
 		t.Fatal(err)
 	}
 	callbacks := 0
-	l := MustNew(OptWriter(r), OptOnWriteError(func(error) { callbacks++ }))
+	l := logit.MustNew(logit.OptWriter(logit.NewWriter(r)), logit.OptOnWriteError(func(error) { callbacks++ }))
 	l.Info(context.Background(), "cannot open current period")
-	if _, ok := any(r).(WriteErrorStats); ok {
+	if _, ok := any(r).(logit.WriteErrorStats); ok {
 		t.Fatal("轮转 Writer 不应独立暴露错误统计")
 	}
-	stats := l.(WriteErrorStats)
+	stats := l.(logit.WriteErrorStats)
 	if callbacks != 1 || stats.WriteErrors() != 1 || stats.LastWriteError() == nil {
 		t.Fatal("轮转 Writer 的同步错误必须由 Logger 统计并触发回调")
 	}
@@ -140,7 +141,7 @@ func TestRotateWriteErrorStatsOwnedByLogger(t *testing.T) {
 
 func TestRotateCleanupPreservesCurrentPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	w, err := NewRotateFile(path, OptRotateMaxFiles(3))
+	w, err := New(path, OptMaxFiles(3))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,9 +158,9 @@ func TestRotateCleanupDoesNotWaitForPendingFiles(t *testing.T) {
 	captureRotateStderr(t)
 	path := filepath.Join(t.TempDir(), "app.log")
 	start := periodStart(time.Now(), time.Hour)
-	cfg := defaultRotateConfig()
+	cfg := defaultConfig()
 	cfg.maxFiles = 3
-	r, err := openRotateFile(path, cfg, start.Add(-time.Hour))
+	r, err := openFile(path, cfg, start.Add(-time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +221,7 @@ func TestRotateCleanupDoesNotWaitForPendingFiles(t *testing.T) {
 
 func TestRotateConcurrentWritesDuringRepeatedRotations(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	r, err := openRotateFile(path, defaultRotateConfig(), time.Now())
+	r, err := openFile(path, defaultConfig(), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,9 +262,9 @@ func TestRotateConcurrentWritesDuringRepeatedRotations(t *testing.T) {
 func TestRotateConcurrentCleanupNeverUnlinksActiveFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
 	start := periodStart(time.Now(), time.Hour)
-	cfg := defaultRotateConfig()
+	cfg := defaultConfig()
 	cfg.maxFiles = 3
-	r, err := openRotateFile(path, cfg, start)
+	r, err := openFile(path, cfg, start)
 	if err != nil {
 		t.Fatal(err)
 	}

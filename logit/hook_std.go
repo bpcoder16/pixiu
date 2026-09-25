@@ -9,7 +9,7 @@ var errNilHookWriter = errors.New("logit: nil hook writer")
 // 原本走 stdout 的输出改写入 w(推荐使用 OpenFile 打开独立文件)。
 // w 需实现 Fd() uintptr；nil Writer 返回错误。进程级一次性操作,重复调用以最后一次为准。
 //
-// 注意:dup2 劫持绑定的是打开瞬间的文件描述符;若目标是 rotateFile,
+// 注意:dup2 劫持绑定的是打开瞬间的文件描述符;若目标文件会轮转,
 // 轮转发生后续写仍落在已转出的旧文件(随保留策略被清理)。
 // 建议劫持到独立的非轮转文件(如专用 std.log)。
 func HookStdout(w Writer) error { return dupToFd(w, 1) }

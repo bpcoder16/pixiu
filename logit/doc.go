@@ -1,7 +1,7 @@
 // Package logit 是 pixiu 的日志模块:门面与核心同包,零第三方依赖,性能优先。
 // 设计文档见 docs/log-module-design.md。
 //
-// 日常使用(业务代码只需 import logit 一个包):
+// 日常使用(不需要轮转时只需 import logit 一个包):
 //
 //	ctx = logit.WithContext(ctx)                    // 入口初始化日志字段
 //	logit.AddMeta(ctx, logit.Str("logId", logit.NewLogID())) // 按需添加链路 ID
@@ -17,7 +17,8 @@
 //
 // 生产落盘链路:
 //
-//	rotated, _ := logit.NewRotateFile("/var/log/app/app.log") // 要求绝对路径；app.log 是软链，默认按小时轮转，最多 48 个实际文件
+//	file, _ := rotatefile.New("/var/log/app/app.log") // 独立轮转包；要求绝对路径
+//	rotated := logit.NewWriter(file)
 //	logger := logit.MustNew(logit.OptDispatch(
 //	    logit.Target{Levels: []logit.Level{logit.DebugLevel, logit.InfoLevel}, Writer: rotated},
 //	))

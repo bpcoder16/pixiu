@@ -1,7 +1,8 @@
-package logit
+package rotatefile
 
 import (
 	"context"
+	"github.com/bpcoder16/pixiu/logit"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,9 +38,9 @@ func TestE2ERotateHourlyCleanupWithoutWrites(t *testing.T) {
 				start := time.Date(now.Year(), now.Month(), now.Day(), now.Hour()+1, 17, 23, 0, now.Location())
 				time.Sleep(start.Sub(now))
 				path := filepath.Join(t.TempDir(), "app.log")
-				cfg := defaultRotateConfig()
+				cfg := defaultConfig()
 				cfg.every, cfg.maxFiles = every, 3
-				r, err := openRotateFile(path, cfg, time.Now().Add(-every))
+				r, err := openFile(path, cfg, time.Now().Add(-every))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -52,7 +53,7 @@ func TestE2ERotateHourlyCleanupWithoutWrites(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				l := MustNew(OptWriter(r))
+				l := logit.MustNew(logit.OptWriter(logit.NewWriter(r)))
 				l.Info(context.Background(), "current period")
 				if err := r.Sync(); err != nil {
 					t.Fatal(err)
@@ -88,7 +89,7 @@ func TestE2ERotateHourlyCleanupWithoutWrites(t *testing.T) {
 				if _, err := os.Stat(expired); !os.IsNotExist(err) {
 					t.Fatalf("后续整点应继续清理: %v", err)
 				}
-				if err := Close(l); err != nil {
+				if err := logit.Close(l); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(expired, []byte("after close\n"), 0o644); err != nil {
@@ -120,7 +121,7 @@ func TestE2ERotateSwitchGranularityPreservesOtherFiles(t *testing.T) {
 				start := time.Date(now.Year(), now.Month(), now.Day()+1, 12, 17, 0, 0, now.Location())
 				time.Sleep(start.Sub(now))
 				path := filepath.Join(t.TempDir(), "app.log")
-				previous, err := NewRotateFile(path, OptRotateEvery(tt.previous), OptRotateMaxFiles(3))
+				previous, err := New(path, OptEvery(tt.previous), OptMaxFiles(3))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -150,12 +151,12 @@ func TestE2ERotateSwitchGranularityPreservesOtherFiles(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				current, err := NewRotateFile(path, OptRotateEvery(tt.current), OptRotateMaxFiles(3))
+				current, err := New(path, OptEvery(tt.current), OptMaxFiles(3))
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer current.Close()
-				l := MustNew(OptWriter(current))
+				l := logit.MustNew(logit.OptWriter(logit.NewWriter(current)))
 				l.Info(context.Background(), "new mode")
 				currentPath := path + "." + start.Format(tt.layout)
 				assertPreserved := func() {
