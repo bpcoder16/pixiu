@@ -15,6 +15,20 @@ func collectCtxFields(ctx context.Context, lineLevel Level) []string {
 	return keys
 }
 
+func collectCtxFieldValues(ctx context.Context, lineLevel Level) []string {
+	var fields []string
+	eachVisible(ctx, lineLevel, func(f Field) {
+		fields = append(fields, f.Key+"="+f.str)
+	})
+	return fields
+}
+
+func newTestContextWithLogID() context.Context {
+	ctx := WithContext(context.Background())
+	AddMeta(ctx, Str("logId", NewLogID()))
+	return ctx
+}
+
 func TestWithContextIdempotent(t *testing.T) {
 	ctx := WithContext(context.Background())
 	s1 := findStore(ctx, ctxKeyFields)
@@ -24,17 +38,13 @@ func TestWithContextIdempotent(t *testing.T) {
 	}
 }
 
-func TestAddFieldOrderAndOverride(t *testing.T) {
+func TestAddFieldPreservesDuplicates(t *testing.T) {
 	ctx := WithContext(context.Background())
 	AddField(ctx, Str("a", "1"), Str("b", "2"))
-	AddField(ctx, Str("a", "3")) // 覆盖,位置保持首次添加处
+	AddField(ctx, Str("a", "3"))
 
-	got := strings.Join(collectCtxFields(ctx, InfoLevel), ",")
-	if got != "a,b" {
-		t.Errorf("order after override = %q, want a,b", got)
-	}
-	if f, ok := findStore(ctx, ctxKeyFields).get("a"); !ok || f.field.str != "3" {
-		t.Errorf("override value = %q ok=%v", f.field.str, ok)
+	if got := strings.Join(collectCtxFieldValues(ctx, InfoLevel), ","); got != "a=1,b=2,a=3" {
+		t.Errorf("same-key fields = %q, want a=1,b=2,a=3", got)
 	}
 }
 
@@ -51,6 +61,31 @@ func TestFieldVisibility(t *testing.T) {
 	}
 }
 
+func TestDuplicateFieldVisibility(t *testing.T) {
+	ctx := WithContext(context.Background())
+	AddField(ctx, Str("payload", "all"))
+	AddDebugField(ctx, Str("payload", "debug"))
+
+	if got := strings.Join(collectCtxFieldValues(ctx, InfoLevel), ","); got != "payload=all" {
+		t.Errorf("info fields = %q, want payload=all", got)
+	}
+	if got := strings.Join(collectCtxFieldValues(ctx, DebugLevel), ","); got != "payload=all,payload=debug" {
+		t.Errorf("debug fields = %q, want both payload values", got)
+	}
+}
+
+func TestLogIDAllowedAsDebugField(t *testing.T) {
+	ctx := WithContext(context.Background())
+	AddDebugField(ctx, Str("logId", "debug-only"))
+
+	if got := collectCtxFields(ctx, InfoLevel); len(got) != 0 {
+		t.Errorf("info fields = %v, want none", got)
+	}
+	if got := strings.Join(collectCtxFieldValues(ctx, DebugLevel), ","); got != "logId=debug-only" {
+		t.Errorf("debug fields = %q, want logId=debug-only", got)
+	}
+}
+
 func TestEachVisibleMetaBeforeFields(t *testing.T) {
 	ctx := WithContext(context.Background())
 	AddField(ctx, Str("fieldA", "a"), Str("fieldB", "b"))
@@ -63,7 +98,7 @@ func TestEachVisibleMetaBeforeFields(t *testing.T) {
 
 func TestFieldsSharedAcrossDerivedContext(t *testing.T) {
 	ctx := WithContext(context.Background())
-	SetLogID(ctx, "L1")
+	AddMeta(ctx, Str("logId", "L1"))
 	AddField(ctx, Str("stage", "parent"))
 
 	child, cancel := context.WithCancel(ctx)
@@ -71,14 +106,12 @@ func TestFieldsSharedAcrossDerivedContext(t *testing.T) {
 	AddField(child, Str("stage", "child"))
 	AddMeta(child, Str("trace", "T1"))
 
-	if f, _ := findStore(ctx, ctxKeyFields).get("stage"); f.field.str != "child" {
-		t.Errorf("parent stage = %q, want child", f.field.str)
+	want := "logId=L1,trace=T1,stage=parent,stage=child"
+	if got := strings.Join(collectCtxFieldValues(ctx, InfoLevel), ","); got != want {
+		t.Errorf("parent fields = %q, want %q", got, want)
 	}
-	if _, ok := findStore(ctx, ctxKeyMeta).get("trace"); !ok {
-		t.Error("meta added in derived context should be visible in parent")
-	}
-	if got := LogID(child); got != "L1" {
-		t.Errorf("derived logId = %q, want L1", got)
+	if got := strings.Join(collectCtxFieldValues(child, InfoLevel), ","); got != want {
+		t.Errorf("derived fields = %q, want %q", got, want)
 	}
 }
 
@@ -103,27 +136,22 @@ func expectReservedFieldPanic(t *testing.T, fn func()) {
 
 func TestReservedFieldsContextWritesPanic(t *testing.T) {
 	tests := []struct {
-		name  string
-		add   func(context.Context, ...Field)
-		store ctxKey
+		name string
+		add  func(context.Context, ...Field)
 	}{
-		{"AddField", AddField, ctxKeyFields},
-		{"AddDebugField", AddDebugField, ctxKeyFields},
-		{"AddMeta", AddMeta, ctxKeyMeta},
+		{"AddField", AddField},
+		{"AddDebugField", AddDebugField},
+		{"AddMeta", AddMeta},
 	}
 	for _, tt := range tests {
-		for _, key := range []string{logIdKey, levelKey, tsKey, callerKey, msgKey} {
+		for _, key := range []string{levelKey, tsKey, callerKey, msgKey} {
 			t.Run(tt.name+"/"+key, func(t *testing.T) {
 				ctx := WithContext(context.Background())
-				SetLogID(ctx, "original")
 				expectReservedFieldPanic(t, func() {
 					tt.add(ctx, Str("safe", "value"), Str(key, "wrong"))
 				})
-				if _, ok := findStore(ctx, tt.store).get("safe"); ok {
+				if got := collectCtxFields(ctx, DebugLevel); len(got) != 0 {
 					t.Error("包含保留字段的批次不应部分写入")
-				}
-				if got := LogID(ctx); got != "original" {
-					t.Errorf("logId = %q, want original", got)
 				}
 			})
 		}
@@ -133,23 +161,20 @@ func TestReservedFieldsContextWritesPanic(t *testing.T) {
 func TestContextAcceptsLongUnicodeFieldKeys(t *testing.T) {
 	longKey := strings.Repeat("中", 33)
 	tests := []struct {
-		name  string
-		add   func(context.Context, ...Field)
-		store ctxKey
+		name string
+		add  func(context.Context, ...Field)
 	}{
-		{"AddField", AddField, ctxKeyFields},
-		{"AddDebugField", AddDebugField, ctxKeyFields},
-		{"AddMeta", AddMeta, ctxKeyMeta},
+		{"AddField", AddField},
+		{"AddDebugField", AddDebugField},
+		{"AddMeta", AddMeta},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := WithContext(context.Background())
 			tt.add(ctx, Str("safe", "value"), Str(longKey, "accepted"))
-			if got, ok := findStore(ctx, tt.store).get("safe"); !ok || got.field.str != "value" {
-				t.Errorf("普通字段未保存: %#v, %v", got, ok)
-			}
-			if got, ok := findStore(ctx, tt.store).get(longKey); !ok || got.field.str != "accepted" {
-				t.Errorf("长字段名未保存: %#v, %v", got, ok)
+			want := "safe=value," + longKey + "=accepted"
+			if got := strings.Join(collectCtxFieldValues(ctx, DebugLevel), ","); got != want {
+				t.Errorf("字段 = %q, want %q", got, want)
 			}
 		})
 	}

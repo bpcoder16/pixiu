@@ -3,8 +3,9 @@
 //
 // 日常使用(业务代码只需 import logit 一个包):
 //
-//	ctx = logit.NewTraceContext(ctx)             // 入口建立链路
-//	logit.AddField(ctx, logit.Str("uid", "42")) // 请求级字段
+//	ctx = logit.WithContext(ctx)                    // 入口初始化日志字段
+//	logit.AddMeta(ctx, logit.Str("logId", logit.NewLogID())) // 按需添加链路 ID
+//	logit.AddField(ctx, logit.Str("uid", "42"))    // 请求级字段
 //	logit.Info(ctx, "user login", logit.Int("uid", 42))
 //	svc := logit.With(logit.Str("mod", "Order")) // 模块级子 Logger
 //	svc.Error(ctx, "create failed", logit.Err(err))

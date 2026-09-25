@@ -18,7 +18,7 @@ func capturePanicLogger(t *testing.T) *bytes.Buffer {
 
 func TestReportPanicMultilineStack(t *testing.T) {
 	buf := capturePanicLogger(t)
-	ctx := NewTraceContext(context.Background())
+	ctx := newTestContextWithLogID()
 
 	if err := ReportPanic(ctx, "boom", Str("where", "line1\nline2"), Str("stack", "user\nvalue")); err != nil {
 		t.Fatal(err)

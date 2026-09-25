@@ -1,7 +1,6 @@
 package logit
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,7 +26,7 @@ func TestE2ERotateOnWriteAfterIdle(t *testing.T) {
 						t.Error(err)
 					}
 				}()
-				ctx := NewTraceContext(context.Background())
+				ctx := newTestContextWithLogID()
 				l.Info(ctx, "before idle")
 				previous, err := os.Readlink(path)
 				if err != nil {
@@ -88,7 +87,7 @@ func TestE2EDispatchSyncRotateWF(t *testing.T) {
 		Target{Levels: []Level{WarnLevel, ErrorLevel, FatalLevel}, Writer: wfFile},
 	), OptFilterKeys("token"))
 
-	ctx := NewTraceContext(context.Background())
+	ctx := newTestContextWithLogID()
 	AddField(ctx, Str("svc", "e2e"))
 
 	const (
@@ -175,7 +174,7 @@ func TestE2EPanicDedicatedFile(t *testing.T) {
 		panicLoggerPtr.Store(nil)
 	})
 
-	ctx := NewTraceContext(context.Background())
+	ctx := newTestContextWithLogID()
 	func() {
 		defer RecoverAndReport(ctx)
 		panic(fmt.Errorf("db connection refused: %w", errBoom))

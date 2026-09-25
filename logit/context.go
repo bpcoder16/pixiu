@@ -21,40 +21,23 @@ type ctxField struct {
 	vis   Level
 }
 
-// fieldStore 按添加顺序存储字段,同名 key 覆盖旧值。
+// fieldStore 按添加顺序存储字段,同名 key 保留每次添加的值。
 // 挂在 context 上的是 *fieldStore,对其的修改对共享同一 store 的所有 ctx 立即可见。
 type fieldStore struct {
-	mu    sync.RWMutex
-	order []string // 按首次添加顺序排列的 key
-	idx   map[string]ctxField
+	mu     sync.RWMutex
+	fields []ctxField
 }
 
 func newFieldStore() *fieldStore {
-	return &fieldStore{idx: make(map[string]ctxField)}
-}
-
-func (s *fieldStore) add(f Field, vis Level) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.idx[f.Key]; !ok {
-		s.order = append(s.order, f.Key)
-	}
-	s.idx[f.Key] = ctxField{field: f, vis: vis}
-}
-
-func (s *fieldStore) get(key string) (ctxField, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	f, ok := s.idx[key]
-	return f, ok
+	return &fieldStore{}
 }
 
 // rangeFields 按添加顺序遍历字段。
 func (s *fieldStore) rangeFields(fn func(f ctxField)) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, key := range s.order {
-		fn(s.idx[key])
+	for _, f := range s.fields {
+		fn(f)
 	}
 }
 
@@ -93,18 +76,23 @@ func AddDebugField(ctx context.Context, fields ...Field) {
 }
 
 // AddMeta 向 meta 作用域添加字段(全级别可见,派生 context 共享)。
-// 保留字段名会 panic；logId 须通过 SetLogID 设置。
+// 保留字段名会 panic。
 func AddMeta(ctx context.Context, fields ...Field) {
 	mustStore(ctx, ctxKeyMeta).addFields(AllLevels, fields)
 }
 
 func (s *fieldStore) addFields(vis Level, fields []Field) {
+	if len(fields) == 0 {
+		return
+	}
 	// 先验证整批字段，避免遇到无效键时已写入前面的字段。
 	for _, f := range fields {
 		rejectReservedField(f.Key)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, f := range fields {
-		s.add(f, vis)
+		s.fields = append(s.fields, ctxField{field: f, vis: vis})
 	}
 }
 

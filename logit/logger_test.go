@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,7 +29,7 @@ func newTestLogger(t *testing.T, opts ...Option) (Logger, *bytes.Buffer) {
 
 func TestLoggerLineFormat(t *testing.T) {
 	l, buf := newTestLogger(t)
-	ctx := NewTraceContext(context.Background())
+	ctx := newTestContextWithLogID()
 
 	l.Info(ctx, "user login", Int("uid", 42), Str("op", "login"))
 
@@ -75,7 +76,7 @@ func TestLoggerFieldOrderAndDuplicateKeys(t *testing.T) {
 	l, buf := newTestLogger(t)
 	l = l.With(Str("uid", "with"))
 	ctx := WithContext(context.Background())
-	AddField(ctx, Str("uid", "ctx"), Str("stage", "ctx"))
+	AddField(ctx, Str("uid", "ctx"), Str("stage", "ctx"), Str("uid", "ctx2"))
 	AddMeta(ctx, Str("uid", "meta"), Str("trace", "meta"))
 
 	l.Info(ctx, "m", Str("uid", "call"), Str("extra", "1"))
@@ -84,7 +85,7 @@ func TestLoggerFieldOrderAndDuplicateKeys(t *testing.T) {
 	remaining := line
 	for _, want := range []string{
 		"uid=[with]", "uid=[meta]", "trace=[meta]", "uid=[ctx]",
-		"stage=[ctx]", "uid=[call]", "extra=[1]",
+		"stage=[ctx]", "uid=[ctx2]", "uid=[call]", "extra=[1]",
 	} {
 		at := strings.Index(remaining, want)
 		if at < 0 {
@@ -92,17 +93,16 @@ func TestLoggerFieldOrderAndDuplicateKeys(t *testing.T) {
 		}
 		remaining = remaining[at+len(want):]
 	}
-	if got := strings.Count(line, "uid=["); got != 4 {
-		t.Fatalf("uid count = %d, want 4: %q", got, line)
+	if got := strings.Count(line, "uid=["); got != 5 {
+		t.Fatalf("uid count = %d, want 5: %q", got, line)
 	}
 }
 
 func TestReservedFieldsRejectedByLogger(t *testing.T) {
-	for _, key := range []string{logIdKey, levelKey, tsKey, callerKey, msgKey} {
+	for _, key := range []string{levelKey, tsKey, callerKey, msgKey} {
 		t.Run(key, func(t *testing.T) {
 			l, buf := newTestLogger(t, OptEncoder(DefaultJSONEncoder))
-			ctx := NewTraceContext(context.Background())
-			id := LogID(ctx)
+			ctx := WithContext(context.Background())
 
 			expectReservedFieldPanic(t, func() { l.With(Str(key, "wrong")) })
 			expectReservedFieldPanic(t, func() {
@@ -111,10 +111,6 @@ func TestReservedFieldsRejectedByLogger(t *testing.T) {
 			if buf.Len() != 0 {
 				t.Errorf("保留字段不应产生部分日志: %q", buf.String())
 			}
-			if got := LogID(ctx); got != id {
-				t.Errorf("logId 被修改: %q, want %q", got, id)
-			}
-
 			disabled, _ := newTestLogger(t, OptMinLevel(WarnLevel))
 			expectReservedFieldPanic(t, func() {
 				disabled.Info(ctx, "disabled", Str(key, "wrong"))
@@ -254,8 +250,8 @@ func TestLoggerDeferredContextFieldCanMutateContext(t *testing.T) {
 	if !strings.Contains(buf.String(), "dynamic=[resolved]") {
 		t.Fatalf("resolved deferred field missing: %q", buf.String())
 	}
-	if f, ok := findStore(ctx, ctxKeyFields).get("added"); !ok || f.field.str != "from-defer" {
-		t.Fatalf("context mutation from Defer was lost: %v %v", f, ok)
+	if !slices.Contains(collectCtxFieldValues(ctx, InfoLevel), "added=from-defer") {
+		t.Fatal("context mutation from Defer was lost")
 	}
 }
 
@@ -729,7 +725,7 @@ func (b *lockedBuffer) String() string {
 func TestLoggerConcurrent(t *testing.T) {
 	buf := &lockedBuffer{}
 	l := MustNew(OptWriter(NewWriter(buf)))
-	ctx := NewTraceContext(context.Background())
+	ctx := newTestContextWithLogID()
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
@@ -761,7 +757,7 @@ func TestRequestResponseLargeBodies(t *testing.T) {
 
 	buf := &bytes.Buffer{}
 	l := MustNew(OptEncoder(DefaultJSONEncoder), OptWriter(NewWriter(buf)), OptFilterKeys("password"))
-	ctx := NewTraceContext(context.Background())
+	ctx := newTestContextWithLogID()
 	AddField(ctx, Str("userId", "u_10086"))
 
 	l.Info(ctx, "http access",

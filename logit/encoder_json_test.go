@@ -66,7 +66,7 @@ func TestJSONEscapingMatchesStdlib(t *testing.T) {
 func TestJSONEncoderFullLine(t *testing.T) {
 	buf := &bytes.Buffer{}
 	l := MustNew(OptEncoder(DefaultJSONEncoder), OptWriter(NewWriter(buf)))
-	ctx := NewTraceContext(context.Background())
+	ctx := newTestContextWithLogID()
 
 	l.Info(ctx, "user login", Int("uid", 42), Str("op", "login"))
 
@@ -269,5 +269,44 @@ func TestJSONEncoderDuplicateFieldsFromCtx(t *testing.T) {
 	}
 	if !json.Valid([]byte(line)) {
 		t.Errorf("invalid JSON: %q", line)
+	}
+}
+
+func TestJSONEncoderOptionalLogID(t *testing.T) {
+	buf := &bytes.Buffer{}
+	l := MustNew(OptEncoder(DefaultJSONEncoder), OptWriter(NewWriter(buf)))
+	l.Info(context.Background(), "without id")
+
+	if strings.Contains(buf.String(), `"logId":`) {
+		t.Fatalf("logId should be optional: %q", buf.String())
+	}
+}
+
+func TestJSONEncoderLogIDFromAllSources(t *testing.T) {
+	buf := &bytes.Buffer{}
+	l := MustNew(OptEncoder(DefaultJSONEncoder), OptWriter(NewWriter(buf)))
+	l = l.With(Str("logId", "with"))
+	ctx := WithContext(context.Background())
+	AddMeta(ctx, Str("logId", "meta1"), Str("logId", "meta2"))
+	AddField(ctx, Str("logId", "context"))
+	l.Info(ctx, "ids", Str("logId", "call"))
+
+	line := buf.String()
+	remaining := line
+	for _, want := range []string{
+		`"logId":"with"`, `"logId":"meta1"`, `"logId":"meta2"`,
+		`"logId":"context"`, `"logId":"call"`,
+	} {
+		at := strings.Index(remaining, want)
+		if at < 0 {
+			t.Fatalf("field %q missing or out of order: %q", want, line)
+		}
+		remaining = remaining[at+len(want):]
+	}
+	if got := strings.Count(line, `"logId":`); got != 5 {
+		t.Fatalf("logId count = %d, want 5: %q", got, line)
+	}
+	if !json.Valid([]byte(line)) {
+		t.Fatalf("invalid JSON line: %q", line)
 	}
 }

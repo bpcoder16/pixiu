@@ -2,7 +2,6 @@ package logit
 
 import (
 	"bytes"
-	"context"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -185,24 +184,5 @@ func assertUUIDV4(t *testing.T, id string) {
 	}
 	if raw[8]&0xc0 != 0x80 {
 		t.Fatalf("logid %q variant bits = %08b, want 10xxxxxx", id, raw[8])
-	}
-}
-
-func TestTraceContext(t *testing.T) {
-	ctx := NewTraceContext(context.Background())
-	id := LogID(ctx)
-	if id == "" {
-		t.Fatal("NewTraceContext should stamp a logId")
-	}
-	// 已有 logId 则保留
-	ctx2 := NewTraceContext(ctx)
-	if LogID(ctx2) != id {
-		t.Errorf("existing logId overwritten: %q -> %q", id, LogID(ctx2))
-	}
-	// 手动设置
-	ctx3 := WithContext(context.Background())
-	SetLogID(ctx3, "fixed")
-	if LogID(ctx3) != "fixed" {
-		t.Errorf("SetLogID/LogID round trip failed")
 	}
 }
