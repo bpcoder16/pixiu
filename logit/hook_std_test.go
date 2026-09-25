@@ -100,6 +100,35 @@ func TestHookRequiresFd(t *testing.T) {
 	}
 }
 
+type typedNilFdWriter struct{ Writer }
+
+func (*typedNilFdWriter) Fd() uintptr { panic("typed nil Writer 的 Fd 不应被调用") }
+
+func TestHookRejectsNilWriter(t *testing.T) {
+	var typedNil *typedNilFdWriter
+	for _, input := range []struct {
+		name   string
+		writer Writer
+	}{
+		{name: "nil"},
+		{name: "typed nil", writer: typedNil},
+	} {
+		for _, hook := range []struct {
+			name string
+			fn   func(Writer) error
+		}{
+			{name: "stdout", fn: HookStdout},
+			{name: "stderr", fn: HookStderr},
+		} {
+			t.Run(hook.name+"/"+input.name, func(t *testing.T) {
+				if err := hook.fn(input.writer); err == nil {
+					t.Error("Hook 接受了 nil Writer")
+				}
+			})
+		}
+	}
+}
+
 func TestHookWithPlainFile(t *testing.T) {
 	for _, constructor := range []string{"OpenFile", "NewWriter"} {
 		for _, stream := range []struct {

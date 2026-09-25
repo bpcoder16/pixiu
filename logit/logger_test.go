@@ -504,6 +504,33 @@ func TestCloseAcceptsComparableTypeWithUncomparableValue(t *testing.T) {
 	}
 }
 
+type customCloseLogger struct {
+	Logger
+	closeErr error
+	closed   bool
+}
+
+func (l *customCloseLogger) Close() error {
+	l.closed = true
+	return l.closeErr
+}
+
+func TestCloseCustomLogger(t *testing.T) {
+	base := MustNew(OptWriter(NewWriter(&bytes.Buffer{})))
+	wantErr := errors.New("custom close failed")
+	custom := &customCloseLogger{Logger: base, closeErr: wantErr}
+	if err := Close(custom); !errors.Is(err, wantErr) || !custom.closed {
+		t.Fatalf("Close(custom) = %v, called = %v", err, custom.closed)
+	}
+	withoutClose := &struct{ Logger }{Logger: base}
+	if err := Close(withoutClose); !errors.Is(err, ErrLoggerCloseUnsupported) {
+		t.Fatalf("Close 对不支持关闭的自定义 Logger 返回 %v", err)
+	}
+	if err := Close(nil); !errors.Is(err, ErrLoggerCloseUnsupported) {
+		t.Fatalf("Close(nil) 返回 %v", err)
+	}
+}
+
 func TestNewRejectsZeroWriterKey(t *testing.T) {
 	w := uncomparableWriter{state: []byte("state"), closes: new(int)}
 	if _, err := New(OptWriter(w)); err == nil {

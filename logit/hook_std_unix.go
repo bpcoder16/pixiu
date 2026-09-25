@@ -6,6 +6,9 @@ import "syscall"
 
 // dupToFd 把 w 的文件描述符复制到进程标准 fd(1/2),实现输出劫持。
 func dupToFd(w Writer, fd int) error {
+	if isNilInterface(w) {
+		return errNilHookWriter
+	}
 	fw, ok := w.(interface{ Fd() uintptr })
 	if !ok {
 		return errNoFd

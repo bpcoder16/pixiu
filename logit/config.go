@@ -170,11 +170,21 @@ func MustNew(opts ...Option) Logger {
 	return l
 }
 
+// ErrLoggerCloseUnsupported 表示自定义 Logger 未提供 Close 方法。
+var ErrLoggerCloseUnsupported = errors.New("logit: logger does not support close")
+
 // Close 关闭 Logger 的全部目标 writer(应用优雅关闭的最后一步调用)。
+// 自定义 Logger 实现 Close() error 时调用该方法，否则返回 ErrLoggerCloseUnsupported。
 func Close(l Logger) error {
+	if isNilInterface(l) {
+		return ErrLoggerCloseUnsupported
+	}
 	cl, ok := l.(*coreLogger)
 	if !ok {
-		return nil
+		if closer, ok := l.(interface{ Close() error }); ok {
+			return closer.Close()
+		}
+		return ErrLoggerCloseUnsupported
 	}
 	var firstErr error
 	for _, w := range uniqueTargetWriters(cl.targets) {

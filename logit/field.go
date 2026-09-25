@@ -97,8 +97,11 @@ func Any(key string, v any) Field {
 }
 
 // Defer 构造惰性字段:只有当日志行级别检查通过、真正编码时才调用 fn 求值。
-// fn 应返回一个不含 deferType 的普通字段。
+// fn 应返回一个不含 deferType 的普通字段；nil 回调在构造时 panic。
 func Defer(key string, fn func() Field) Field {
+	if fn == nil {
+		panic("logit: nil defer callback")
+	}
 	return Field{Key: key, typ: deferType, val: fn}
 }
 

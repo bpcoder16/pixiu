@@ -102,3 +102,12 @@ func TestDefer(t *testing.T) {
 		t.Errorf("Defer resolve = %+v, called=%v", resolved, called)
 	}
 }
+
+func TestDeferRejectsNilCallback(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("Defer(nil) 未在构造时 panic")
+		}
+	}()
+	_ = Defer("lazy", nil)
+}
