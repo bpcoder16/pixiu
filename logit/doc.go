@@ -1,0 +1,28 @@
+// Package logit 是 pixiu 的日志模块:门面与核心同包,零第三方依赖,性能优先。
+// 设计文档见 docs/log-module-design.md。
+//
+// 日常使用(业务代码只需 import logit 一个包):
+//
+//	ctx = logit.NewTraceContext(ctx)             // 入口建立链路
+//	logit.AddField(ctx, logit.Str("uid", "42")) // 请求级字段
+//	logit.Info(ctx, "user login", logit.Int("uid", 42))
+//	svc := logit.With(logit.Str("mod", "Order")) // 模块级子 Logger
+//	svc.Error(ctx, "create failed", logit.Err(err))
+//
+// 构造专属实例(依赖注入 / 测试):
+//
+//	buf := &bytes.Buffer{}
+//	logger := logit.MustNew(logit.OptWriter(logit.NewWriter(buf)))
+//
+// 生产落盘链路:
+//
+//	rotated, _ := logit.NewRotateFile("log/app.log") // app.log 是软链；默认按小时在写入时轮转，最多 48 个实际文件
+//	logger := logit.MustNew(logit.OptDispatch(
+//	    logit.Target{Levels: []logit.Level{logit.DebugLevel, logit.InfoLevel}, Writer: rotated},
+//	))
+//	defer logit.Close(logger) // 应用退出最后一步
+//	_ = logit.SetMinLevel(logger, logit.InfoLevel) // 可在运行期原子调整
+//
+// 全局默认 Logger 输出到 stderr,启动期用 SetDefault 替换;
+// 测试捕获输出用 Swap(替换并返回旧值);panic 处理见 ReportPanic/RecoverAndReport。
+package logit

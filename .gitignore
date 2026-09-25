@@ -14,3 +14,7 @@
 *.log
 tmp/
 .cache/
+
+# Documentation
+docs/
+AGENTS.md
