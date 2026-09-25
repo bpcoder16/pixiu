@@ -79,8 +79,21 @@ func NewWriter(w io.Writer) Writer {
 	return &plainWriter{w: w, key: NewWriterKey()}
 }
 
-// Stderr 返回标准错误输出的 Writer。
-func Stderr() Writer { return NewWriter(os.Stderr) }
+// standardStreamWriter 借用进程标准流；关闭 Logger 不应关闭 stdout/stderr。
+type standardStreamWriter struct{ *fileWriter }
+
+func (*standardStreamWriter) Close() error { return nil }
+
+var (
+	stdoutWriter = &standardStreamWriter{&fileWriter{f: os.Stdout, key: NewWriterKey()}}
+	stderrWriter = &standardStreamWriter{&fileWriter{f: os.Stderr, key: NewWriterKey()}}
+)
+
+// Stdout 返回共享的标准输出 Writer；Close 不关闭进程标准输出。
+func Stdout() Writer { return stdoutWriter }
+
+// Stderr 返回共享的标准错误输出 Writer；Close 不关闭进程标准错误输出。
+func Stderr() Writer { return stderrWriter }
 
 type discardWriter struct{ key WriterKey }
 

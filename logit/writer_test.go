@@ -53,3 +53,16 @@ func TestNewWriterCompletesShortWrites(t *testing.T) {
 		t.Fatalf("underlying content = %q, want %q", underlying.buf.Bytes(), input)
 	}
 }
+
+func TestStandardWriterKeysStayStable(t *testing.T) {
+	stdout, stderr := Stdout(), Stderr()
+	if stdout.WriterKey() == (WriterKey{}) || stderr.WriterKey() == (WriterKey{}) {
+		t.Fatal("标准流 WriterKey 不得为零")
+	}
+	if stdout.WriterKey() != Stdout().WriterKey() || stderr.WriterKey() != Stderr().WriterKey() {
+		t.Fatal("同一标准流应复用 WriterKey")
+	}
+	if stdout.WriterKey() == stderr.WriterKey() {
+		t.Fatal("stdout 和 stderr 不得共享 WriterKey")
+	}
+}

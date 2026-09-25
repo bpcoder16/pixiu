@@ -3,6 +3,7 @@ package logit
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -19,7 +20,9 @@ func TestReportPanicSingleLine(t *testing.T) {
 	buf := capturePanicLogger(t)
 	ctx := NewTraceContext(context.Background())
 
-	ReportPanic(ctx, "boom", Str("where", "TestReportPanic"))
+	if err := ReportPanic(ctx, "boom", Str("where", "TestReportPanic")); err != nil {
+		t.Fatal(err)
+	}
 
 	out := buf.String()
 	if !strings.HasPrefix(out, "FATAL:") {
@@ -52,7 +55,9 @@ func TestReportPanicErrorValue(t *testing.T) {
 	buf := capturePanicLogger(t)
 	ctx := WithContext(context.Background())
 
-	ReportPanic(ctx, errBoom) // 复用 encoder_json_test 的 errBoom
+	if err := ReportPanic(ctx, errBoom); err != nil { // 复用 encoder_json_test 的 errBoom
+		t.Fatal(err)
+	}
 
 	if !strings.Contains(buf.String(), "panic=[boom]") {
 		t.Errorf("error value should be stringified: %q", buf.String())
@@ -86,12 +91,45 @@ func TestRecoverAndReportNoPanic(t *testing.T) {
 	}
 }
 
+func TestReportPanicWithoutLogger(t *testing.T) {
+	previous := panicLoggerPtr.Swap(nil)
+	t.Cleanup(func() { panicLoggerPtr.Store(previous) })
+
+	if got := PanicLogger(); got != nil {
+		t.Fatal("未配置时不应创建默认 panic Logger")
+	}
+	if err := ReportPanic(WithContext(context.Background()), "boom"); !errors.Is(err, ErrPanicLoggerNotConfigured) {
+		t.Fatalf("ReportPanic 错误 = %v, 期望 %v", err, ErrPanicLoggerNotConfigured)
+	}
+	if got := PanicLogger(); got != nil {
+		t.Fatal("ReportPanic 不应创建默认 panic Logger")
+	}
+}
+
+func TestRecoverAndReportWithoutLoggerRepanics(t *testing.T) {
+	previous := panicLoggerPtr.Swap(nil)
+	t.Cleanup(func() { panicLoggerPtr.Store(previous) })
+	original := errors.New("original panic")
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		func() {
+			defer RecoverAndReport(WithContext(context.Background()))
+			panic(original)
+		}()
+	}()
+	if recovered != original {
+		t.Fatalf("重新抛出的 panic = %v, 期望原值 %v", recovered, original)
+	}
+}
+
 func TestNamedLoggers(t *testing.T) {
 	main := &bytes.Buffer{}
 	req := &bytes.Buffer{}
+	previous := Default()
 	SetDefault(MustNew(OptWriter(NewWriter(main))))
 	t.Cleanup(func() {
-		SetDefault(MustNew(OptWriter(Stderr())))
+		SetDefault(previous)
 		namedLoggers.Delete("request")
 	})
 

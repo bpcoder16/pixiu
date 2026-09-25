@@ -249,18 +249,20 @@ func TestJSONEncoderEmptyFieldsAndMessage(t *testing.T) {
 	}
 }
 
-func TestJSONEncoderFieldMergeFromCtx(t *testing.T) {
+func TestJSONEncoderDuplicateFieldsFromCtx(t *testing.T) {
 	buf := &bytes.Buffer{}
 	l := MustNew(OptEncoder(DefaultJSONEncoder), OptWriter(NewWriter(buf)))
 	ctx := WithContext(context.Background())
 	AddField(ctx, Str("uid", "42"))
+	AddMeta(ctx, Str("uid", "meta"))
 	AddDebugField(ctx, Str("debugPayload", "x"))
 
 	l.Info(ctx, "m", Str("uid", "call"))
 
 	line := buf.String()
-	if !strings.Contains(line, `"uid":"call"`) || strings.Count(line, `"uid"`) != 1 {
-		t.Errorf("dedup failed: %q", line)
+	meta, field, call := strings.Index(line, `"uid":"meta"`), strings.Index(line, `"uid":"42"`), strings.Index(line, `"uid":"call"`)
+	if meta < 0 || field < meta || call < field || strings.Count(line, `"uid"`) != 3 {
+		t.Errorf("duplicate uid fields should appear in order: %q", line)
 	}
 	if strings.Contains(line, "debugPayload") {
 		t.Errorf("debug-only field leaked: %q", line)

@@ -10,9 +10,8 @@ import (
 
 func collectCtxFields(ctx context.Context, lineLevel Level) []string {
 	var keys []string
-	eachVisible(ctx, lineLevel, func(f Field) error {
+	eachVisible(ctx, lineLevel, func(f Field) {
 		keys = append(keys, f.Key)
-		return nil
 	})
 	return keys
 }
@@ -50,6 +49,16 @@ func TestFieldVisibility(t *testing.T) {
 	}
 	if got := strings.Join(collectCtxFields(ctx, InfoLevel), ","); got != "uid" {
 		t.Errorf("info line sees %q, want uid", got)
+	}
+}
+
+func TestEachVisibleMetaBeforeFields(t *testing.T) {
+	ctx := WithContext(context.Background())
+	AddField(ctx, Str("fieldA", "a"), Str("fieldB", "b"))
+	AddMeta(ctx, Str("metaA", "a"), Str("metaB", "b"))
+
+	if got := strings.Join(collectCtxFields(ctx, InfoLevel), ","); got != "metaA,metaB,fieldA,fieldB" {
+		t.Fatalf("visible field order = %q, want metaA,metaB,fieldA,fieldB", got)
 	}
 }
 

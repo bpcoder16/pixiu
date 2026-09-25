@@ -88,14 +88,12 @@ func (s *fieldStore) snapshot() []ctxField {
 	return fields
 }
 
-// rangeFields 按添加顺序遍历,fn 返回非 nil 时停止。
-func (s *fieldStore) rangeFields(fn func(f ctxField) error) {
+// rangeFields 按添加顺序遍历字段。
+func (s *fieldStore) rangeFields(fn func(f ctxField)) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, key := range s.order {
-		if err := fn(s.idx[key]); err != nil {
-			return
-		}
+		fn(s.idx[key])
 	}
 }
 
@@ -239,21 +237,20 @@ func RangeMeta(ctx context.Context, fn func(f Field) error) {
 	}
 }
 
-// eachVisible 是编码热路径:按"普通作用域在前、meta 作用域在后"的顺序,
-// 把在 lineLevel 级别可见的字段依次交给 fn,fn 返回非 nil 时停止该作用域遍历。
-func eachVisible(ctx context.Context, lineLevel Level, fn func(f Field) error) {
+// eachVisible 是编码热路径:按"meta 作用域在前、普通作用域在后"的顺序,
+// 把在 lineLevel 级别可见的字段依次交给 fn。
+func eachVisible(ctx context.Context, lineLevel Level, fn func(f Field)) {
 	walk := func(s *fieldStore) {
-		s.rangeFields(func(cf ctxField) error {
+		s.rangeFields(func(cf ctxField) {
 			if cf.vis.Is(lineLevel) {
-				return fn(cf.field)
+				fn(cf.field)
 			}
-			return nil
 		})
 	}
-	if s := findStore(ctx, ctxKeyFields); s != nil {
+	if s := findStore(ctx, ctxKeyMeta); s != nil {
 		walk(s)
 	}
-	if s := findStore(ctx, ctxKeyMeta); s != nil {
+	if s := findStore(ctx, ctxKeyFields); s != nil {
 		walk(s)
 	}
 }

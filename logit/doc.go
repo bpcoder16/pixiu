@@ -23,6 +23,6 @@
 //	defer logit.Close(logger) // 应用退出最后一步
 //	_ = logit.SetMinLevel(logger, logit.InfoLevel) // 可在运行期原子调整
 //
-// 全局默认 Logger 输出到 stderr,启动期用 SetDefault 替换;
+// 全局默认 Logger 输出到 stdout,启动期用 SetDefault 替换;
 // 测试捕获输出用 Swap(替换并返回旧值);panic 处理见 ReportPanic/RecoverAndReport。
 package logit

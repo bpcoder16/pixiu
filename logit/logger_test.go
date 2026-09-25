@@ -71,28 +71,29 @@ func TestLoggerLevelFilter(t *testing.T) {
 	}
 }
 
-func TestLoggerFieldMergePriority(t *testing.T) {
+func TestLoggerFieldOrderAndDuplicateKeys(t *testing.T) {
 	l, buf := newTestLogger(t)
+	l = l.With(Str("uid", "with"))
 	ctx := WithContext(context.Background())
 	AddField(ctx, Str("uid", "ctx"), Str("stage", "ctx"))
-	AddMeta(ctx, Str("trace", "meta"))
+	AddMeta(ctx, Str("uid", "meta"), Str("trace", "meta"))
 
-	// 调用点覆盖 ctx 同名字段,位置保持首次出现处
 	l.Info(ctx, "m", Str("uid", "call"), Str("extra", "1"))
 
 	line := buf.String()
-	uidPos := strings.Index(line, "uid=[call]")
-	stagePos := strings.Index(line, "stage=[ctx]")
-	extraPos := strings.Index(line, "extra=[1]")
-	tracePos := strings.Index(line, "trace=[meta]")
-	if uidPos < 0 || stagePos < 0 || extraPos < 0 || tracePos < 0 {
-		t.Fatalf("missing fields: %q", line)
+	remaining := line
+	for _, want := range []string{
+		"uid=[with]", "uid=[meta]", "trace=[meta]", "uid=[ctx]",
+		"stage=[ctx]", "uid=[call]", "extra=[1]",
+	} {
+		at := strings.Index(remaining, want)
+		if at < 0 {
+			t.Fatalf("field %q missing or out of order: %q", want, line)
+		}
+		remaining = remaining[at+len(want):]
 	}
-	if uidPos > stagePos {
-		t.Errorf("uid should stay at first position: %q", line)
-	}
-	if tracePos < stagePos {
-		t.Errorf("meta fields should come after normal fields: %q", line)
+	if got := strings.Count(line, "uid=["); got != 4 {
+		t.Fatalf("uid count = %d, want 4: %q", got, line)
 	}
 }
 
@@ -126,8 +127,10 @@ func TestLoggerAcceptsLongUnicodeFieldKeys(t *testing.T) {
 	for _, key := range []string{strings.Repeat("a", 33), strings.Repeat("中", 33), strings.Repeat("🌟", 33), strings.Repeat("e\u0301", 17), strings.Repeat("x", 1024)} {
 		l, buf := newTestLogger(t)
 		l.With(Str(key, "with")).Info(context.Background(), "long key", Str(key, "call"))
-		if !strings.Contains(buf.String(), key+"=[call]") {
-			t.Fatalf("长字段名未写出或后值未覆盖: %q", buf.String())
+		line := buf.String()
+		first, last := strings.Index(line, key+"=[with]"), strings.Index(line, key+"=[call]")
+		if strings.Count(line, key+"=[") != 2 || first < 0 || last < first {
+			t.Fatalf("长字段名重复输出顺序错误: %q", line)
 		}
 		disabled, _ := newTestLogger(t, OptMinLevel(WarnLevel))
 		disabled.Info(context.Background(), "disabled", Str(key, "accepted"))
@@ -188,6 +191,26 @@ func TestLoggerFilterKeys(t *testing.T) {
 	}
 }
 
+func TestLoggerFilterKeysWithDuplicateFields(t *testing.T) {
+	l, buf := newTestLogger(t, OptFilterKeys("password"))
+	ctx := WithContext(context.Background())
+	AddField(ctx, Str("password", "ctx-secret"))
+	called := false
+
+	l.Info(ctx, "login", Defer("password", func() Field {
+		called = true
+		return Str("password", "defer-secret")
+	}), Str("password", "call-secret"))
+
+	line := buf.String()
+	if called || strings.Contains(line, "secret") {
+		t.Fatalf("filtered duplicate field was evaluated or leaked: %q", line)
+	}
+	if got := strings.Count(line, "password=[***]"); got != 3 {
+		t.Fatalf("masked duplicate count = %d, want 3: %q", got, line)
+	}
+}
+
 func TestLoggerDeferLazyAndFiltered(t *testing.T) {
 	l, buf := newTestLogger(t, OptMinLevel(InfoLevel))
 	ctx := WithContext(context.Background())
@@ -236,8 +259,8 @@ func TestLoggerDeferredContextFieldCanMutateContext(t *testing.T) {
 	}
 }
 
-func TestLoggerOnlyResolvesWinningDeferredField(t *testing.T) {
-	l, _ := newTestLogger(t)
+func TestLoggerResolvesEveryDeferredField(t *testing.T) {
+	l, buf := newTestLogger(t)
 	ctx := WithContext(context.Background())
 	called := false
 	AddField(ctx, Defer("same", func() Field {
@@ -246,8 +269,12 @@ func TestLoggerOnlyResolvesWinningDeferredField(t *testing.T) {
 	}))
 
 	l.Info(ctx, "override", Str("same", "new"))
-	if called {
-		t.Fatal("overridden deferred field should not be evaluated")
+	if !called {
+		t.Fatal("earlier deferred field should be evaluated")
+	}
+	line := buf.String()
+	if old, next := strings.Index(line, "same=[old]"), strings.Index(line, "same=[new]"); old < 0 || next < old {
+		t.Fatalf("deferred and call fields should both appear in order: %q", line)
 	}
 }
 
@@ -496,13 +523,14 @@ func TestNewWriterKeysAreStableAndDistinct(t *testing.T) {
 }
 
 type countedStatsWriter struct {
-	key    WriterKey
-	err    error
-	closes *int
+	key      WriterKey
+	err      error
+	writeErr error
+	closes   *int
 }
 
-func (countedStatsWriter) Write(p []byte) (int, error) { return len(p), nil }
-func (w countedStatsWriter) WriterKey() WriterKey      { return w.key }
+func (w *countedStatsWriter) Write(p []byte) (int, error) { return len(p), w.writeErr }
+func (w *countedStatsWriter) WriterKey() WriterKey        { return w.key }
 func (w countedStatsWriter) Close() error {
 	*w.closes++
 	return nil
@@ -512,20 +540,28 @@ func (w countedStatsWriter) LastWriteError() error {
 	return w.err
 }
 
-func TestSharedWriterStatsCountedOnce(t *testing.T) {
+func TestLoggerIgnoresSharedWriterStats(t *testing.T) {
 	closes := 0
-	wantErr := errors.New("write failed")
-	w := countedStatsWriter{key: NewWriterKey(), err: wantErr, closes: &closes}
+	writerErr := errors.New("writer's prior error")
+	writeErr := errors.New("current write failed")
+	w := &countedStatsWriter{key: NewWriterKey(), err: writerErr, closes: &closes}
 	l := MustNew(OptDispatch(
 		Target{Levels: []Level{InfoLevel}, Writer: w},
 		Target{Levels: []Level{ErrorLevel}, Writer: w},
 	))
 	stats := l.(WriteErrorStats)
-	if got := stats.WriteErrors(); got != 3 {
-		t.Fatalf("WriteErrors = %d, want 3", got)
+	l.Info(context.Background(), "successful write")
+	if got := stats.WriteErrors(); got != 0 || stats.LastWriteError() != nil {
+		t.Fatalf("Writer's own stats leaked into Logger: count=%d, last=%v", got, stats.LastWriteError())
 	}
-	if got := stats.LastWriteError(); !errors.Is(got, wantErr) {
-		t.Fatalf("LastWriteError = %v, want %v", got, wantErr)
+	w.writeErr = writeErr
+	l.Info(context.Background(), "failed info")
+	l.Error(context.Background(), "failed error")
+	if got := stats.WriteErrors(); got != 2 {
+		t.Fatalf("WriteErrors = %d, want 2", got)
+	}
+	if got := stats.LastWriteError(); !errors.Is(got, writeErr) {
+		t.Fatalf("LastWriteError = %v, want %v", got, writeErr)
 	}
 	if err := Close(l); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -563,31 +599,27 @@ func TestOptFileNameOverriddenDoesNotOpenFile(t *testing.T) {
 	}
 }
 
-func TestLoggerMoreThanDedupTableFields(t *testing.T) {
+func TestLoggerManyFieldsPreserveDuplicateKeys(t *testing.T) {
 	l, buf := newTestLogger(t)
-	fields := make([]Field, 0, dedupTableSize+2)
-	for i := 0; i <= dedupTableSize; i++ {
+	const count = 130
+	fields := make([]Field, 0, count+1)
+	for i := 0; i < count; i++ {
 		fields = append(fields, Int(fmt.Sprintf("k%03d", i), i))
 	}
-	fields = append(fields, Int(fmt.Sprintf("k%03d", dedupTableSize), 999))
+	key := fmt.Sprintf("k%03d", count-1)
+	fields = append(fields, Int(key, 999))
 
-	done := make(chan struct{})
-	go func() {
-		l.Info(context.Background(), "many fields", fields...)
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("logging more fields than the fixed dedup table must not hang")
+	l.Info(context.Background(), "many fields", fields...)
+	line := buf.String()
+	if got := strings.Count(line, key+"=["); got != 2 {
+		t.Fatalf("duplicate key count = %d, want 2: %q", got, line)
 	}
-	key := fmt.Sprintf("k%03d=[999]", dedupTableSize)
-	if got := strings.Count(buf.String(), key); got != 1 {
-		t.Fatalf("overflow-table duplicate count = %d, want 1: %q", got, buf.String())
+	if first, last := strings.Index(line, key+"=[129]"), strings.Index(line, key+"=[999]"); first < 0 || last < first {
+		t.Fatalf("duplicate key order is wrong: %q", line)
 	}
 }
 
-func TestLoggerDedupKeysWithSameLongPrefix(t *testing.T) {
+func TestLoggerLongPrefixKeysPreserveDuplicates(t *testing.T) {
 	for _, prefix := range []string{strings.Repeat("shared-prefix-", 3), strings.Repeat("shared", 170)} {
 		l, buf := newTestLogger(t)
 		const count = 32
@@ -601,31 +633,35 @@ func TestLoggerDedupKeysWithSameLongPrefix(t *testing.T) {
 		line := buf.String()
 		for i := 0; i < count; i++ {
 			key := fmt.Sprintf("%sk%02d", prefix, i)
-			if got := strings.Count(line, key+"=["); got != 1 {
-				t.Fatalf("key %q count = %d, want 1: %q", key, got, line)
+			want := 1
+			if i == 0 {
+				want = 2
+			}
+			if got := strings.Count(line, key+"=["); got != want {
+				t.Fatalf("key %q count = %d, want %d: %q", key, got, want, line)
 			}
 		}
-		if !strings.Contains(line, prefix+"k00=[999]") {
-			t.Fatalf("duplicate key did not use final value: %q", line)
+		if !strings.Contains(line, prefix+"k00=[0]") || !strings.Contains(line, prefix+"k00=[999]") {
+			t.Fatalf("duplicate key values missing: %q", line)
 		}
-		if strings.Index(line, prefix+"k00=[999]") > strings.Index(line, prefix+"k01=[1]") {
-			t.Fatalf("duplicate key moved from first position: %q", line)
+		if strings.Index(line, prefix+"k00=[999]") < strings.Index(line, prefix+"k31=[31]") {
+			t.Fatalf("duplicate key should remain at the end: %q", line)
 		}
 	}
 }
 
-func TestLoggerDedupSampledHashCollision(t *testing.T) {
+func TestLoggerSimilarLongKeysRemainDistinct(t *testing.T) {
 	l, buf := newTestLogger(t)
 	base := strings.Repeat("x", 1024)
 	first := base[:100] + "a" + base[101:]
 	second := base[:100] + "b" + base[101:]
-	l.Info(context.Background(), "collision", Int(first, 1), Int(second, 2), Int(first, 3))
+	l.Info(context.Background(), "long keys", Int(first, 1), Int(second, 2), Int(first, 3))
 	line := buf.String()
-	if strings.Count(line, first+"=[") != 1 || !strings.Contains(line, first+"=[3]") {
-		t.Fatalf("第一个长字段名的去重结果错误: %q", line)
+	if strings.Count(line, first+"=[") != 2 || !strings.Contains(line, first+"=[1]") || !strings.Contains(line, first+"=[3]") {
+		t.Fatalf("第一个长字段名的重复输出错误: %q", line)
 	}
 	if strings.Count(line, second+"=[") != 1 || !strings.Contains(line, second+"=[2]") {
-		t.Fatalf("相同采样片段的字段名被错误覆盖: %q", line)
+		t.Fatalf("相似长字段名未正确输出: %q", line)
 	}
 }
 

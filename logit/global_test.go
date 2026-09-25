@@ -3,12 +3,51 @@ package logit_test
 import (
 	"bytes"
 	"context"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/bpcoder16/pixiu/logit"
 )
+
+func TestDefaultUsesStdoutAndStandardStreamsStayOpen(t *testing.T) {
+	const helperEnv = "PIXIU_TEST_STANDARD_STREAMS"
+	if os.Getenv(helperEnv) == "1" {
+		logit.Info(context.Background(), "default stdout info")
+		logit.Error(context.Background(), "default stdout error")
+		if err := logit.Close(logit.Default()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stdout.WriteString("stdout still open\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err := logit.Close(logit.MustNew(logit.OptWriter(logit.Stderr()))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stderr.WriteString("stderr still open\n"); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestDefaultUsesStdoutAndStandardStreamsStayOpen$")
+	cmd.Env = append(os.Environ(), helperEnv+"=1")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("子进程失败: %v; stdout=%q, stderr=%q", err, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"default stdout info", "default stdout error", "stdout still open"} {
+		if !strings.Contains(stdout.String(), want) || strings.Contains(stderr.String(), want) {
+			t.Errorf("%q 应只写入 stdout: stdout=%q, stderr=%q", want, stdout.String(), stderr.String())
+		}
+	}
+	if !strings.Contains(stderr.String(), "stderr still open") {
+		t.Errorf("标准错误输出被关闭: %q", stderr.String())
+	}
+}
 
 // capture 用 Swap 捕获默认 logger 的输出,并在测试结束后恢复。
 func capture(t *testing.T) *bytes.Buffer {
