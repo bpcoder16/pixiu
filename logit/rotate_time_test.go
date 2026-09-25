@@ -241,6 +241,16 @@ func TestRotateRejectsInvalidPeriodAndFileLimit(t *testing.T) {
 	}
 }
 
+func TestRotateRejectsRelativePath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, path := range []string{"app.log", "./app.log"} {
+		if w, err := NewRotateFile(path); err == nil {
+			_ = w.Close()
+			t.Errorf("NewRotateFile accepted relative path %q", path)
+		}
+	}
+}
+
 func TestPeriodStart(t *testing.T) {
 	loc := time.FixedZone("CST", 8*3600)
 	base := time.Date(2026, 9, 23, 10, 37, 22, 0, loc)

@@ -16,7 +16,7 @@
 //
 // 生产落盘链路:
 //
-//	rotated, _ := logit.NewRotateFile("log/app.log") // app.log 是软链；默认按小时在写入时轮转，最多 48 个实际文件
+//	rotated, _ := logit.NewRotateFile("/var/log/app/app.log") // 要求绝对路径；app.log 是软链，默认按小时轮转，最多 48 个实际文件
 //	logger := logit.MustNew(logit.OptDispatch(
 //	    logit.Target{Levels: []logit.Level{logit.DebugLevel, logit.InfoLevel}, Writer: rotated},
 //	))

@@ -13,7 +13,7 @@ import (
 // Writer 是日志落盘目标的接口。实现:同步直写(NewWriter/OpenFile)
 // 与轮转文件(NewRotateFile)。
 //
-// 契约:Write 必须并发安全且单次调用写入完整一行(如 O_APPEND 文件的单次 Write)。
+// 契约:Write 必须并发安全且单次调用写入完整记录(普通日志一行，panic 堆栈可多行)。
 // WriterKey 必须返回生命周期内不变的非零 key；同一 Writer 的副本共享 key。
 type Writer interface {
 	Write(p []byte) (int, error)
@@ -62,9 +62,12 @@ func (s *writeErrorTracker) lastValue() error {
 	return nil
 }
 
-// NewWriter 把任意 io.Writer 适配为并发安全的 Writer;底层实现 io.Closer 时
-// Close 透传。非 *os.File 目标发生短写时会在同一把锁内继续，避免与其他调用交错。
+// NewWriter 把非 nil io.Writer 适配为并发安全的 Writer；nil 输入立即 panic。
+// 底层实现 io.Closer 时 Close 透传。非 *os.File 目标发生短写时会在同一把锁内继续，避免与其他调用交错。
 func NewWriter(w io.Writer) Writer {
+	if isNilInterface(w) {
+		panic("logit: nil io.Writer")
+	}
 	// os.File 自身并发安全；额外锁让高并发写入先在 Go 互斥锁上排队。
 	// io.Discard 无状态，仍使用无锁适配器。
 	if f, ok := w.(*os.File); ok {
@@ -77,6 +80,19 @@ func NewWriter(w io.Writer) Writer {
 		return &closerWriter{w: wc, key: NewWriterKey()}
 	}
 	return &plainWriter{w: w, key: NewWriterKey()}
+}
+
+// isNilInterface 识别装在接口中的类型化 nil，避免到首次写入时才触发 panic。
+func isNilInterface(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	}
+	return false
 }
 
 // standardStreamWriter 借用进程标准流；关闭 Logger 不应关闭 stdout/stderr。
@@ -207,8 +223,11 @@ func openFileAppend(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 }
 
-// OpenFile 以追加模式打开日志文件(自动创建父目录),返回同步 Writer。
+// OpenFile 要求绝对路径，以追加模式打开日志文件(自动创建父目录),返回同步 Writer。
 func OpenFile(path string) (Writer, error) {
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("logit: file path must be absolute: %q", path)
+	}
 	f, err := openFileAppend(path)
 	if err != nil {
 		return nil, err

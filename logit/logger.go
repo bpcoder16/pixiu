@@ -78,7 +78,7 @@ type coreLogger struct {
 
 var _ Logger = (*coreLogger)(nil)
 
-// lineState 是每行日志的复用状态:编码缓冲 + 字段暂存。
+// lineState 是每条日志记录的复用状态:编码缓冲 + 字段暂存。
 type lineState struct {
 	buf   []byte
 	order []Field

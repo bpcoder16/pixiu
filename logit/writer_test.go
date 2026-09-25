@@ -2,9 +2,42 @@ package logit
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
+
+func TestFilePathsMustBeAbsolute(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(cwd, filepath.Join(t.TempDir(), "app.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.IsAbs(rel) {
+		t.Fatalf("测试路径不是相对路径: %q", rel)
+	}
+
+	w, err := OpenFile(rel)
+	if w != nil {
+		_ = w.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Errorf("OpenFile(%q) = %v, 预期绝对路径错误", rel, err)
+	}
+
+	l, err := New(OptFileName(rel))
+	if l != nil {
+		_ = Close(l)
+	}
+	if err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Errorf("OptFileName(%q) = %v, 预期绝对路径错误", rel, err)
+	}
+}
 
 func TestNewWriterSerializesConcurrentWrites(t *testing.T) {
 	var buf bytes.Buffer
@@ -51,6 +84,20 @@ func TestNewWriterCompletesShortWrites(t *testing.T) {
 	}
 	if !bytes.Equal(underlying.buf.Bytes(), input) {
 		t.Fatalf("underlying content = %q, want %q", underlying.buf.Bytes(), input)
+	}
+}
+
+func TestNewWriterPanicsOnNil(t *testing.T) {
+	var typedNil *bytes.Buffer
+	for _, w := range []interface{ Write([]byte) (int, error) }{nil, typedNil} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("NewWriter(%T) 未在调用时 panic", w)
+				}
+			}()
+			_ = NewWriter(w)
+		}()
 	}
 }
 

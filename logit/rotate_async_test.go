@@ -138,9 +138,9 @@ func TestRotateWriteErrorStatsOwnedByLogger(t *testing.T) {
 	}
 }
 
-func TestRotateCleanupPreservesCurrentRelativePath(t *testing.T) {
-	t.Chdir(t.TempDir())
-	w, err := NewRotateFile("./app.log", OptRotateMaxFiles(3))
+func TestRotateCleanupPreservesCurrentPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	w, err := NewRotateFile(path, OptRotateMaxFiles(3))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +148,8 @@ func TestRotateCleanupPreservesCurrentRelativePath(t *testing.T) {
 	if _, err := w.Write([]byte("current\n")); err != nil {
 		t.Fatal(err)
 	}
-	if data, err := os.ReadFile("./app.log"); err != nil || string(data) != "current\n" {
-		t.Fatalf("清理不能删除当前相对路径文件: %q, %v", data, err)
+	if data, err := os.ReadFile(path); err != nil || string(data) != "current\n" {
+		t.Fatalf("清理不能删除当前文件: %q, %v", data, err)
 	}
 }
 

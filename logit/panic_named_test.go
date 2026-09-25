@@ -11,16 +11,16 @@ import (
 func capturePanicLogger(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	SetPanicLogger(MustNew(OptWriter(NewWriter(buf)), OptNoExit()))
+	SetPanicLogger(NewWriter(buf))
 	t.Cleanup(func() { panicLoggerPtr.Store(nil) })
 	return buf
 }
 
-func TestReportPanicSingleLine(t *testing.T) {
+func TestReportPanicMultilineStack(t *testing.T) {
 	buf := capturePanicLogger(t)
 	ctx := NewTraceContext(context.Background())
 
-	if err := ReportPanic(ctx, "boom", Str("where", "TestReportPanic")); err != nil {
+	if err := ReportPanic(ctx, "boom", Str("where", "line1\nline2"), Str("stack", "user\nvalue")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -28,17 +28,14 @@ func TestReportPanicSingleLine(t *testing.T) {
 	if !strings.HasPrefix(out, "FATAL:") {
 		t.Errorf("should log at FATAL level (sync bypass): %q", out[:min(len(out), 40)])
 	}
-	if strings.Count(out, "\n") != 1 {
-		t.Errorf("panic log must be single line, got %d newlines", strings.Count(out, "\n"))
+	if strings.Count(out, "\n") < 3 {
+		t.Errorf("panic stack should contain physical newlines, got %d", strings.Count(out, "\n"))
 	}
 	if !strings.Contains(out, "panic=[boom]") {
 		t.Errorf("panic value missing: %q", out)
 	}
-	if !strings.Contains(out, `stack=[goroutine`) {
-		t.Errorf("escaped stack missing: %q", out)
-	}
-	if !strings.Contains(out, `\n`) {
-		t.Errorf("stack newlines should be escaped: %q", out)
+	if !strings.Contains(out, "stack=[\ngoroutine") {
+		t.Errorf("stack should preserve physical newlines: %q", out)
 	}
 	if !strings.Contains(out, "pid=[") || !strings.Contains(out, "processStart=[") {
 		t.Errorf("pid/processStart missing: %q", out)
@@ -46,8 +43,8 @@ func TestReportPanicSingleLine(t *testing.T) {
 	if !strings.Contains(out, "logId=[") {
 		t.Errorf("logId from ctx missing: %q", out)
 	}
-	if !strings.Contains(out, "where=[TestReportPanic]") {
-		t.Errorf("custom field missing: %q", out)
+	if !strings.Contains(out, `where=[line1\nline2]`) || !strings.Contains(out, `stack=[user\nvalue]`) {
+		t.Errorf("ordinary fields should keep text escaping: %q", out)
 	}
 }
 
@@ -61,6 +58,67 @@ func TestReportPanicErrorValue(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "panic=[boom]") {
 		t.Errorf("error value should be stringified: %q", buf.String())
+	}
+}
+
+func TestReportPanicDeepStack(t *testing.T) {
+	buf := &bytes.Buffer{}
+	SetPanicLogger(NewWriter(buf))
+	t.Cleanup(func() { panicLoggerPtr.Store(nil) })
+
+	var report func(int)
+	report = func(depth int) {
+		if depth == 0 {
+			if err := ReportPanic(context.Background(), "deep"); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		report(depth - 1)
+	}
+	report(200)
+
+	if !strings.Contains(buf.String(), "testing.tRunner") {
+		t.Fatalf("深调用栈被截断，缺少底部的 testing.tRunner；日志长度=%d", buf.Len())
+	}
+}
+
+func TestSetPanicLoggerFixedConfiguration(t *testing.T) {
+	w := &fatalSyncWriter{key: NewWriterKey()}
+	SetPanicLogger(w)
+	t.Cleanup(func() { panicLoggerPtr.Store(nil) })
+	l := PanicLogger()
+	if l == nil || !l.Enabled(FatalLevel) {
+		t.Fatal("panic Logger 必须路由 Fatal")
+	}
+	for _, level := range []Level{DebugLevel, InfoLevel, WarnLevel, ErrorLevel} {
+		if l.Enabled(level) {
+			t.Errorf("panic Logger 不应路由 %s", level)
+		}
+	}
+	if err := ReportPanic(context.Background(), "configured"); err != nil {
+		t.Fatal(err)
+	}
+	if w.syncCount != 1 {
+		t.Errorf("Fatal 应同步目标，次数=%d", w.syncCount)
+	}
+	prefix, _, _ := strings.Cut(w.buf.String(), " pid=[")
+	if parts := strings.Fields(prefix); len(parts) != 2 || parts[0] != "FATAL:" {
+		t.Errorf("预期无 caller 的文本前缀，得到 %q", prefix)
+	}
+}
+
+func TestSetPanicLoggerRejectsInvalidWriter(t *testing.T) {
+	var typedNil *fatalSyncWriter
+	for _, w := range []Writer{nil, typedNil, &fatalSyncWriter{}} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("SetPanicLogger(%T) 未在配置时 panic", w)
+				}
+			}()
+			SetPanicLogger(w)
+		}()
 	}
 }
 

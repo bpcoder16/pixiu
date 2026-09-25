@@ -20,6 +20,7 @@ const (
 	timeType
 	reflectType
 	deferType
+	panicStackType
 )
 
 // Field 是值类型的日志字段:数值直接存进 num,不经过 interface 装箱、不逃逸。

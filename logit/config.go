@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"reflect"
 	"sync"
 	"sync/atomic"
 )
@@ -51,8 +50,11 @@ func OptNoExit() Option {
 	return func(c *config) { c.noExit = true }
 }
 
-// OptEncoder 指定编码器,默认 DefaultTextEncoder。
+// OptEncoder 指定编码器,默认 DefaultTextEncoder；nil 编码器立即 panic。
 func OptEncoder(enc Encoder) Option {
+	if isNilInterface(enc) {
+		panic("logit: nil encoder")
+	}
 	return func(c *config) { c.encoder = enc }
 }
 
@@ -64,7 +66,7 @@ func OptWriter(w Writer) Option {
 	}
 }
 
-// OptFileName 设置追加模式日志文件作为单一目标。文件延迟到 New 最终校验后打开;
+// OptFileName 设置绝对路径的追加模式日志文件作为单一目标。文件延迟到 New 最终校验后打开;
 // 打开失败会让 New/MustNew 返回错误(启动期暴露,而不是静默丢日志)。
 func OptFileName(name string) Option {
 	return func(c *config) {
@@ -139,11 +141,7 @@ func New(opts ...Option) (Logger, error) {
 		}
 	}
 	for _, t := range targets {
-		if t.Writer == nil {
-			return nil, errors.New("log: target with nil writer")
-		}
-		v := reflect.ValueOf(t.Writer)
-		if v.Kind() == reflect.Pointer && v.IsNil() {
+		if isNilInterface(t.Writer) {
 			return nil, errors.New("log: target with nil writer")
 		}
 		if t.Writer.WriterKey() == (WriterKey{}) {

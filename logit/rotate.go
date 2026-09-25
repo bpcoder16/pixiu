@@ -69,7 +69,7 @@ var _ Writer = (*rotateFile)(nil)
 
 func (r *rotateFile) WriterKey() WriterKey { return r.key }
 
-// NewRotateFile 打开当前时段的实际文件并建立稳定软链，之后仅在 Write 进入更晚时段时轮转。
+// NewRotateFile 要求绝对路径，打开当前时段的实际文件并建立稳定软链，之后仅在 Write 进入更晚时段时轮转。
 // 空闲或停服期间不补建文件；每小时整点清理，使用结束后必须 Close 停止定时循环。
 func NewRotateFile(path string, opts ...RotateOption) (Writer, error) {
 	cfg := defaultRotateConfig()
@@ -86,6 +86,9 @@ func NewRotateFile(path string, opts ...RotateOption) (Writer, error) {
 }
 
 func openRotateFile(path string, cfg rotateConfig, now time.Time) (*rotateFile, error) {
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("logit: rotate path must be absolute: %q", path)
+	}
 	if cfg.every != time.Hour && cfg.every != 24*time.Hour {
 		return nil, errors.New("logit: rotate period must be time.Hour or 24*time.Hour")
 	}

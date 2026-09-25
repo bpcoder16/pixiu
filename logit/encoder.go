@@ -10,7 +10,7 @@ import (
 // timestampLayout 统一日志前缀与 Time 字段的固定毫秒 ISO 8601/RFC 3339 格式。
 const timestampLayout = "2006-01-02T15:04:05.000Z07:00"
 
-// Encoder 负责把一行日志的各部分按顺序追加进字节缓冲。
+// Encoder 负责把一条日志记录的各部分按顺序追加进字节缓冲。
 // 全部方法以 append 风格工作,编码过程零中间对象分配。
 type Encoder interface {
 	// AppendPrefix 追加行前缀(级别、时间,以及调用方已解析好的 caller)。
@@ -117,7 +117,7 @@ func appendFieldValue(buf []byte, f Field) []byte {
 const textHexDigits = "0123456789abcdef"
 
 // appendTextString 转义会破坏单行或方括号边界的字节。非 ASCII 内容原样保留;
-// 控制字符使用可读短转义或 \xNN,保证一次日志调用只有一个物理换行。
+// 控制字符使用可读短转义或 \xNN,保证普通字段不额外产生物理换行。
 func appendTextString(dst []byte, s string) []byte {
 	start := 0
 	for i := 0; i < len(s); i++ {

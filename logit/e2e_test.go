@@ -162,7 +162,7 @@ func TestE2EDispatchSyncRotateWF(t *testing.T) {
 	}
 }
 
-// TestE2EPanicDedicatedFile 验证 panic 走独立轮转文件且单行。
+// TestE2EPanicDedicatedFile 验证 panic 走独立轮转文件且堆栈保留多行。
 func TestE2EPanicDedicatedFile(t *testing.T) {
 	dir := t.TempDir()
 	panicFile, err := NewRotateFile(filepath.Join(dir, "panic.log"), OptRotateMaxFiles(3))
@@ -170,7 +170,7 @@ func TestE2EPanicDedicatedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = panicFile.Close() })
-	SetPanicLogger(MustNew(OptWriter(panicFile), OptNoExit()))
+	SetPanicLogger(panicFile)
 	t.Cleanup(func() {
 		panicLoggerPtr.Store(nil)
 	})
@@ -185,8 +185,8 @@ func TestE2EPanicDedicatedFile(t *testing.T) {
 	if !strings.Contains(all, "db connection refused") {
 		t.Errorf("panic message missing: %q", all)
 	}
-	if strings.Count(all, "\n") != 1 {
-		t.Errorf("panic should be single line: %q", all)
+	if strings.Count(all, "\n") < 3 {
+		t.Errorf("panic stack should contain physical newlines: %q", all)
 	}
 }
 

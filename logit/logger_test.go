@@ -408,14 +408,25 @@ func TestNewValidation(t *testing.T) {
 	if _, err := New(OptDispatch(Target{Levels: []Level{AllLevels}, Writer: NewWriter(&bytes.Buffer{})})); err == nil {
 		t.Error("multi-bit level should fail")
 	}
-	if _, err := New(OptEncoder(nil), OptWriter(NewWriter(&bytes.Buffer{}))); err == nil {
-		t.Error("nil encoder should fail")
-	}
 	if _, err := New(OptMinLevel(UnknownLevel), OptWriter(NewWriter(&bytes.Buffer{}))); err == nil {
 		t.Error("unknown minimum level should fail")
 	}
 	if _, err := New(OptMinLevel(AllLevels), OptWriter(NewWriter(&bytes.Buffer{}))); err == nil {
 		t.Error("multi-bit minimum level should fail")
+	}
+}
+
+func TestOptEncoderPanicsOnNil(t *testing.T) {
+	var typedNil *JSONEncoder
+	for _, enc := range []Encoder{nil, typedNil} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("OptEncoder(%T) 未在调用时 panic", enc)
+				}
+			}()
+			_ = OptEncoder(enc)
+		}()
 	}
 }
 
