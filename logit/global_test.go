@@ -96,12 +96,12 @@ func TestFacadeLogIDChain(t *testing.T) {
 	buf := capture(t)
 	ctx := logit.NewTraceContext(context.Background())
 
-	// 分支 + 后台任务都应携带同一 logId
-	child := logit.ForkContext(ctx)
-	bg := logit.CopyAllFields(context.Background(), child)
+	// 标准库派生的 context 应携带同一 logId。
+	child, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	logit.Info(child, "in fork")
-	logit.Info(bg, "in background")
+	logit.Info(ctx, "in parent")
+	logit.Info(child, "in child")
 
 	id := logit.LogID(ctx)
 	if id == "" {

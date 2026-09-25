@@ -254,7 +254,7 @@ func TestLoggerDeferredContextFieldCanMutateContext(t *testing.T) {
 	if !strings.Contains(buf.String(), "dynamic=[resolved]") {
 		t.Fatalf("resolved deferred field missing: %q", buf.String())
 	}
-	if f, ok := FindField(ctx, "added"); !ok || f.str != "from-defer" {
+	if f, ok := findStore(ctx, ctxKeyFields).get("added"); !ok || f.field.str != "from-defer" {
 		t.Fatalf("context mutation from Defer was lost: %v %v", f, ok)
 	}
 }

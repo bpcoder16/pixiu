@@ -17,8 +17,10 @@ func SetLogID(ctx context.Context, id string) {
 
 // LogID 返回 ctx 中的 logId,不存在返回空串。
 func LogID(ctx context.Context) string {
-	if f, ok := FindMeta(ctx, logIdKey); ok {
-		return f.str
+	if s := findStore(ctx, ctxKeyMeta); s != nil {
+		if f, ok := s.get(logIdKey); ok {
+			return f.field.str
+		}
 	}
 	return ""
 }
