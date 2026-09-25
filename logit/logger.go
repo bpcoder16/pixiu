@@ -220,10 +220,7 @@ func (l *coreLogger) Output(ctx context.Context, level Level, callDepth int, msg
 		// 普通日志只保证 Write 完成;Fatal 退出前还要尽力持久化。
 		if syncer, ok := w.(interface{ Sync() error }); ok {
 			if err := syncer.Sync(); err != nil {
-				l.writeState.record(err)
-				if l.onWriteError != nil {
-					l.onWriteError(err)
-				}
+				l.recordWriteError(err)
 			}
 		}
 		if l.exit != nil {
@@ -237,10 +234,17 @@ func (l *coreLogger) recordWriteResult(n, want int, err error) {
 	if err == nil {
 		return
 	}
+	l.recordWriteError(err)
+}
+
+func (l *coreLogger) recordWriteError(err error) {
 	l.writeState.record(err)
-	if l.onWriteError != nil {
-		l.onWriteError(err)
+	if l.onWriteError == nil {
+		return
 	}
+	l.writeState.callbackMu.Lock()
+	defer l.writeState.callbackMu.Unlock()
+	l.onWriteError(err)
 }
 
 func (l *coreLogger) WriteErrors() int64 { return l.writeState.countValue() }

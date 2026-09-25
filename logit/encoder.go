@@ -12,6 +12,8 @@ const timestampLayout = "2006-01-02T15:04:05.000Z07:00"
 
 // Encoder 负责把一条日志记录的各部分按顺序追加进字节缓冲。
 // 全部方法以 append 风格工作,编码过程零中间对象分配。
+// 包外自定义实现仅支持包装或嵌入内置编码器,由内置编码器处理 Field；
+// Field 的内部值不开放给包外独立实现字段编码。
 type Encoder interface {
 	// AppendPrefix 追加行前缀(级别、时间,以及调用方已解析好的 caller)。
 	AppendPrefix(buf []byte, level Level, now time.Time, caller string) []byte

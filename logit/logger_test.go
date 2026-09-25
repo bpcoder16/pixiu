@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -370,6 +371,57 @@ func TestFatalSyncErrorIsObserved(t *testing.T) {
 	}
 	if !errors.Is(callbackErr, want) {
 		t.Fatalf("sync failure callback = %v, want %v", callbackErr, want)
+	}
+}
+
+func TestOnWriteErrorSerializesAcrossWithLoggers(t *testing.T) {
+	const calls = 64
+	want := errors.New("write failed")
+	closes := 0
+	w := &countedStatsWriter{key: NewWriterKey(), writeErr: want, closes: &closes}
+	var active atomic.Int32
+	delivered := 0 // 回调内的普通变量应可安全累加。
+	var overlapped atomic.Bool
+	l := MustNew(OptWriter(w), OptOnWriteError(func(err error) {
+		if !errors.Is(err, want) {
+			t.Errorf("callback error = %v, want %v", err, want)
+		}
+		if active.Add(1) != 1 {
+			overlapped.Store(true)
+		}
+		// 延长回调执行时间，使并发写入时的重叠可稳定观察。
+		time.Sleep(time.Millisecond)
+		delivered++
+		active.Add(-1)
+	}))
+	child := l.With(Str("mod", "child"))
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < calls; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			if i%2 == 0 {
+				l.Info(context.Background(), "root")
+			} else {
+				child.Info(context.Background(), "child")
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	if overlapped.Load() {
+		t.Error("write error callbacks overlapped")
+	}
+	if got := delivered; got != calls {
+		t.Errorf("callback calls = %d, want %d", got, calls)
+	}
+	if got := l.(WriteErrorStats).WriteErrors(); got != calls {
+		t.Errorf("write errors = %d, want %d", got, calls)
+	}
+	if err := Close(l); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -38,8 +38,8 @@ func OptFilterKeys(keys ...string) Option {
 	return func(c *config) { c.filterKeys = append(c.filterKeys, keys...) }
 }
 
-// OptOnWriteError 注册写入错误回调。日志调用仍不返回该错误;回调应快速完成,
-// 且不要写回同一个持续失败的 Logger。
+// OptOnWriteError 注册写入错误回调。日志调用仍不返回该错误;同一 Logger
+// 及其 With 子 Logger 的回调串行执行。回调应快速完成,且不要写回同一个持续失败的 Logger。
 func OptOnWriteError(fn func(error)) Option {
 	return func(c *config) { c.onWriteError = fn }
 }

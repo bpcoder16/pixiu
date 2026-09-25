@@ -44,8 +44,9 @@ type WriteErrorStats interface {
 type writeErrorState struct{ err error }
 
 type writeErrorTracker struct {
-	count atomic.Int64
-	last  atomic.Pointer[writeErrorState]
+	count      atomic.Int64
+	last       atomic.Pointer[writeErrorState]
+	callbackMu sync.Mutex // 与 With 子 Logger 共享，防止同一错误回调并发执行
 }
 
 func (s *writeErrorTracker) record(err error) {

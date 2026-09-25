@@ -39,8 +39,8 @@ func TestJSONEscapingMatchesStdlib(t *testing.T) {
 		`quote"inside`,
 		`back\slash`,
 		"tab\tnewline\ncr\r",
-		"<html>&amp;</html>", // 不转义 HTML,与 SetEscapeHTML(false) 一致
-		"linesep",            // U+2028/U+2029
+		"<html>&amp;</html>",     // 不转义 HTML,与 SetEscapeHTML(false) 一致
+		"line\u2028sep\u2029end", // U+2028/U+2029
 		"mixed 中文 \"引号\" \\\t",
 		strings.Repeat("long-clean-string-", 100),
 		strings.Repeat("带\"引号\"的中文", 50),
