@@ -7,6 +7,7 @@
 //	import (
 //		"context"
 //		"fmt"
+//		"time"
 //
 //		"github.com/bpcoder16/pixiu/conc"
 //	)
@@ -15,24 +16,31 @@
 //		report, err := conc.RunNamed(context.Background(), map[string]conc.Task{
 //			"profile": func(context.Context) (any, error) { return "alice", nil },
 //			"orders":  func(context.Context) (any, error) { return 3, nil },
-//		}, conc.WithLimit(2), conc.WithCancelOnError())
-//		if err != nil {
-//			fmt.Println("任务失败:", err)
-//			return
+//		}, conc.WithCancelOnError(), conc.WithTimeout(500*time.Millisecond))
+//		for name, result := range report.Results {
+//			if result.TimedOut {
+//				fmt.Printf("%s 超时，是否启动: %t\n", name, result.Started)
+//				continue
+//			}
+//			fmt.Printf("%s 结果: %v，错误: %v，耗时: %s\n", name, result.Value, result.Err, result.Duration)
 //		}
-//		fmt.Println(report.Results["profile"].Value, report.Results["orders"].Value)
 //		fmt.Println("整组耗时:", report.Duration)
-//		fmt.Println("profile 执行耗时:", report.Results["profile"].Duration)
+//		if err != nil {
+//			fmt.Println("整组错误:", err)
+//		}
 //	}
 //
-// RunNamed 等待全部任务结束，返回整组耗时、每项任务的结果和带任务名的聚合错误。
-// Result.Duration 仅包含实际执行，Report.Duration 还包含调度与限流等待。
+// RunNamed 默认等待全部任务结束，返回整组耗时、每项任务的结果和带任务名的聚合错误。
+// 设置 WithTimeout 后，到时返回结果快照，不等待仍在执行的任务；快照前已完成的结果会保留。
+// 未完成任务以 Result.TimedOut=true、Result.Err=context.DeadlineExceeded 标记，
+// Result.Started 区分是否已经启动；其 Result.Duration 为零。
+// 已完成任务的 Result.Duration 仅包含实际执行，Report.Duration 还包含调度与限流等待。
 // 未执行的任务以 Result.Started=false、Result.Duration=0 表示。
 // 即使部分任务失败，返回的结果仍包含各任务的 Result，调用方可逐项检查 Result.Err。
 // 默认任务失败不会取消其他任务；WithCancelOnError 可让任务失败后取消传给任务的派生 context。
 // 调用方传入的 context 不会因此被取消。
-// 取消模式仍等待已启动的任务结束，任务函数需要自行响应 context。
-// 调用方可用 WithLimit 限制本次调用的并发数。
+// 未设置整体超时时，取消模式仍等待已启动的任务结束；任务函数需要自行响应 context。
+// 调用方可用 WithLimit 限制本次调用的并发数；WithLimit 与 WithTimeout 不能同时使用。
 // 任务来自 map，启动顺序及聚合错误的文本顺序不保证。
 // 传入的 context 取消后，尚未开始且已观察到取消的任务不会执行。
 // 任务 panic 会转为包含堆栈的 PanicError，由调用方决定如何记录或上报。

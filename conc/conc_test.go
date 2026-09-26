@@ -370,6 +370,223 @@ func TestRunNamedCancelOnErrorHandlesPanicAndNilTask(t *testing.T) {
 	}
 }
 
+func TestRunNamedTimeoutReturnsFrozenPartialReport(t *testing.T) {
+	failure := errors.New("已完成任务失败")
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	release := make(chan struct{})
+	taskDone := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	type outcome struct {
+		report Report
+		err    error
+	}
+	done := make(chan outcome, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		report, err := RunNamed(ctx, map[string]Task{
+			"finished": func(context.Context) (any, error) {
+				close(finished)
+				return "部分结果", failure
+			},
+			"slow": func(context.Context) (any, error) {
+				<-finished
+				close(started)
+				<-release // 故意忽略 context，验证超时不会等待运行中的任务。
+				close(taskDone)
+				return "超时后结果", nil
+			},
+		}, WithTimeout(500*time.Millisecond))
+		done <- outcome{report: report, err: err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("运行中任务未在超时前启动")
+	}
+	var got outcome
+	select {
+	case got = <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("超时后 RunNamed 未及时返回")
+	}
+	if ctx.Err() != nil || !errors.Is(got.err, failure) || !errors.Is(got.err, context.DeadlineExceeded) || len(got.report.Results) != 2 {
+		t.Fatalf("报告=%+v, 错误=%v", got.report, got.err)
+	}
+	completed := got.report.Results["finished"]
+	if !completed.Started || completed.TimedOut || completed.Value != "部分结果" || !errors.Is(completed.Err, failure) || completed.Duration <= 0 {
+		t.Fatalf("已完成任务结果=%+v", completed)
+	}
+	running := got.report.Results["slow"]
+	if !running.Started || !running.TimedOut || !errors.Is(running.Err, context.DeadlineExceeded) || running.Value != nil || running.Duration != 0 {
+		t.Fatalf("运行中任务结果=%+v", running)
+	}
+	close(release)
+	select {
+	case <-taskDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("解除阻塞后任务未返回")
+	}
+	if result := got.report.Results["slow"]; !result.TimedOut || result.Value != nil || !errors.Is(result.Err, context.DeadlineExceeded) {
+		t.Fatalf("超时报告被后台任务改动: %+v", result)
+	}
+}
+
+func TestRunNamedTimeoutKeepsUnstartedNames(t *testing.T) {
+	var called atomic.Bool
+	report, err := RunNamed(context.Background(), map[string]Task{
+		"pending": func(context.Context) (any, error) {
+			called.Store(true)
+			return nil, nil
+		},
+	}, WithTimeout(time.Nanosecond))
+	result := report.Results["pending"]
+	if called.Load() || len(report.Results) != 1 || !result.TimedOut || result.Started || !errors.Is(result.Err, context.DeadlineExceeded) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("未启动任务报告=%+v, 错误=%v, 调用=%v", report, err, called.Load())
+	}
+}
+
+func TestRunStateSnapshotKeepsResultFinishedAfterDeadline(t *testing.T) {
+	lateErr := errors.New("截止后完成")
+	state := &runState{
+		tasks:    make([]taskState, 1),
+		deadline: time.Now().Add(-time.Second),
+	}
+	state.finish(0, Result{Value: "已拿到的结果", Err: lateErr, Started: true, Duration: time.Millisecond})
+	report, err := collectResults([]namedTask{{name: "late"}}, state.snapshot())
+	result := report.Results["late"]
+	if !errors.Is(err, lateErr) || !errors.Is(result.Err, lateErr) || result.Value != "已拿到的结果" || !result.Started || result.TimedOut || result.Duration != time.Millisecond {
+		t.Fatalf("截止时间后已写入的结果未保留: %+v, 错误=%v", report, err)
+	}
+}
+
+func TestRunNamedTimeoutCompletesNormally(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	report, err := RunNamed(ctx, map[string]Task{
+		"ok": func(taskCtx context.Context) (any, error) {
+			if _, ok := taskCtx.Deadline(); !ok {
+				return nil, errors.New("任务未收到整体截止时间")
+			}
+			return 42, nil
+		},
+	}, WithTimeout(time.Second))
+	result := report.Results["ok"]
+	if err != nil || ctx.Err() != nil || len(report.Results) != 1 || result.Value != 42 || !result.Started || result.TimedOut || result.Duration <= 0 {
+		t.Fatalf("正常完成报告=%+v, 错误=%v", report, err)
+	}
+}
+
+func TestRunNamedTimeoutPreservesParentCancelWait(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	type outcome struct {
+		report Report
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		report, err := RunNamed(ctx, map[string]Task{
+			"slow": func(taskCtx context.Context) (any, error) {
+				close(started)
+				<-release
+				return nil, taskCtx.Err()
+			},
+		}, WithTimeout(3*time.Second))
+		done <- outcome{report: report, err: err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("任务未启动")
+	}
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("父 context 取消后不应立即返回")
+	default:
+	}
+	close(release)
+	select {
+	case got := <-done:
+		if !errors.Is(got.err, context.Canceled) || got.report.Results["slow"].TimedOut || !got.report.Results["slow"].Started {
+			t.Fatalf("父 context 取消报告=%+v, 错误=%v", got.report, got.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("任务返回后 RunNamed 未结束")
+	}
+}
+
+func TestRunNamedTimeoutAfterFailFastCancellation(t *testing.T) {
+	failure := errors.New("提前失败")
+	otherStarted := make(chan struct{})
+	cancelSeen := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	type outcome struct {
+		report Report
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		report, err := RunNamed(context.Background(), map[string]Task{
+			"failed": func(context.Context) (any, error) {
+				<-otherStarted
+				return nil, failure
+			},
+			"slow": func(ctx context.Context) (any, error) {
+				close(otherStarted)
+				<-ctx.Done()
+				close(cancelSeen)
+				<-release
+				return nil, ctx.Err()
+			},
+		}, WithCancelOnError(), WithTimeout(500*time.Millisecond))
+		done <- outcome{report: report, err: err}
+	}()
+	select {
+	case <-cancelSeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("失败后运行中的任务未收到取消")
+	}
+	select {
+	case <-done:
+		t.Fatal("失败取消提前返回，未等待整体超时")
+	default:
+	}
+	select {
+	case got := <-done:
+		if !errors.Is(got.err, failure) || !errors.Is(got.err, context.DeadlineExceeded) || !got.report.Results["slow"].TimedOut || !got.report.Results["slow"].Started {
+			t.Fatalf("失败后整体超时报告=%+v, 错误=%v", got.report, got.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("整体超时后 RunNamed 未返回")
+	}
+	close(release)
+}
+
 func TestRunNamedRecoversPanic(t *testing.T) {
 	report, err := RunNamed(context.Background(), map[string]Task{
 		"panic": func(context.Context) (any, error) { panic("boom") },
@@ -412,6 +629,27 @@ func TestRunNamedRejectsInvalidInput(t *testing.T) {
 	}
 	if _, err := RunNamed(context.Background(), nil, WithLimit(0)); !errors.Is(err, ErrInvalidLimit) {
 		t.Fatalf("无效限额错误 = %v", err)
+	}
+	for _, duration := range []time.Duration{0, -time.Nanosecond} {
+		invalid, err := RunNamed(context.Background(), nil, WithTimeout(duration))
+		if !errors.Is(err, ErrInvalidTimeout) || invalid.Results != nil || invalid.Duration != 0 {
+			t.Fatalf("无效超时 %s 的报告 = %+v, %v", duration, invalid, err)
+		}
+	}
+	for _, opts := range [][]Option{
+		{WithLimit(1), WithTimeout(time.Second)},
+		{WithTimeout(time.Second), WithLimit(1)},
+	} {
+		var called atomic.Bool
+		invalid, err := RunNamed(context.Background(), map[string]Task{
+			"should-not-run": func(context.Context) (any, error) {
+				called.Store(true)
+				return nil, nil
+			},
+		}, opts...)
+		if !errors.Is(err, ErrTimeoutWithLimit) || invalid.Results != nil || invalid.Duration != 0 || called.Load() {
+			t.Fatalf("互斥配置的报告 = %+v, 错误 = %v, 调用 = %v", invalid, err, called.Load())
+		}
 	}
 	report, err := RunNamed(context.Background(), map[string]Task{"nil": nil})
 	results := report.Results
