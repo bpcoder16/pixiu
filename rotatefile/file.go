@@ -1,4 +1,3 @@
-// Package rotatefile 提供独立于日志模块的按本地小时或天轮转的同步文件写入器。
 package rotatefile
 
 import (
