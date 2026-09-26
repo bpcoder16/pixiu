@@ -1,0 +1,177 @@
+package conc
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"runtime/debug"
+	"sync"
+	"time"
+)
+
+var (
+	ErrInvalidContext = errors.New("conc: context 不能为空")
+	ErrInvalidLimit   = errors.New("conc: 并发限额必须大于零")
+	ErrNilTask        = errors.New("conc: 任务函数不能为空")
+)
+
+// Task 是一次调用内的同步任务，返回值和错误会一并保留。
+type Task func(context.Context) (any, error)
+
+// Result 保存一个任务返回的值、错误和实际执行耗时。
+type Result struct {
+	Value any
+	Err   error
+	// Started 表示任务函数实际被调用；跳过的任务为 false。
+	Started bool
+	// Duration 仅包含任务函数的执行耗时；未执行时为零。
+	Duration time.Duration
+}
+
+// Report 保存本次调用的全部任务结果和整体耗时。
+type Report struct {
+	Results map[string]Result
+	// Duration 包含任务调度、限流等待、执行和结果汇总。
+	Duration time.Duration
+}
+
+// PanicError 表示任务发生 panic；堆栈来自发生 panic 的 goroutine。
+type PanicError struct {
+	TaskName string
+	Value    any
+	Stack    []byte
+}
+
+func (e *PanicError) Error() string {
+	return fmt.Sprintf("conc: 任务 %q panic: %v", e.TaskName, e.Value)
+}
+
+type options struct {
+	limit         int
+	limitSet      bool
+	cancelOnError bool
+}
+
+// Option 设置单次调用的执行选项。
+type Option func(*options)
+
+// WithLimit 限制本次调用同时执行的任务数；n 必须大于零。
+func WithLimit(n int) Option {
+	return func(o *options) {
+		o.limit = n
+		o.limitSet = true
+	}
+}
+
+// WithCancelOnError 在任务失败时取消传给任务的派生 context，不取消调用方的 context。
+// 已启动的任务仍会等待其返回。
+func WithCancelOnError() Option {
+	return func(o *options) { o.cancelOnError = true }
+}
+
+type namedTask struct {
+	name string
+	fn   Task
+}
+
+// RunNamed 等待全部任务结束，返回整体耗时、逐项结果和带任务名的聚合错误。
+// 整体耗时包含调度与限流等待；逐项耗时只包含实际执行。
+// 任务启动顺序和聚合错误的文本顺序不保证。
+// 调用期间不得修改传入的任务 map；默认任务失败不取消其他任务。
+func RunNamed(ctx context.Context, tasks map[string]Task, opts ...Option) (report Report, err error) {
+	if ctx == nil {
+		return Report{}, ErrInvalidContext
+	}
+	var o options
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	if o.limitSet && o.limit <= 0 {
+		return Report{}, ErrInvalidLimit
+	}
+	start := time.Now()
+	defer func() { report.Duration = time.Since(start) }()
+
+	items := make([]namedTask, 0, len(tasks))
+	for name, fn := range tasks {
+		items = append(items, namedTask{name: name, fn: fn})
+	}
+	report.Results = make(map[string]Result, len(items))
+	if len(items) == 0 {
+		return report, nil
+	}
+	runCtx := ctx
+	var cancel context.CancelFunc
+	if o.cancelOnError {
+		runCtx, cancel = context.WithCancel(ctx)
+		defer cancel()
+	}
+
+	workers := len(items)
+	if o.limit > 0 && o.limit < workers {
+		workers = o.limit
+	}
+	values := make([]Result, len(items))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				item := items[index]
+				if item.fn == nil {
+					values[index].Err = ErrNilTask
+					if cancel != nil {
+						cancel()
+					}
+					continue
+				}
+				if err := runCtx.Err(); err != nil {
+					// 取消后保留该名称的结果，但不执行尚未开始的任务。
+					values[index].Err = err
+					continue
+				}
+				values[index] = callTask(runCtx, item)
+				if values[index].Err != nil && cancel != nil {
+					cancel()
+				}
+			}
+		}()
+	}
+	for index := range items {
+		jobs <- index
+	}
+	close(jobs)
+	wg.Wait()
+
+	var taskErrors []error
+	for index, item := range items {
+		result := values[index]
+		report.Results[item.name] = result
+		if result.Err != nil {
+			taskErrors = append(taskErrors, fmt.Errorf("conc: 任务 %q: %w", item.name, result.Err))
+		}
+	}
+	return report, errors.Join(taskErrors...)
+}
+
+func callTask(ctx context.Context, item namedTask) (result Result) {
+	result.Started = true
+	start := time.Now()
+	defer func() {
+		recovered := recover()
+		result.Duration = time.Since(start)
+		if recovered != nil {
+			result.Err = &PanicError{
+				TaskName: item.name,
+				Value:    recovered,
+				Stack:    debug.Stack(),
+			}
+		}
+	}()
+	result.Value, result.Err = item.fn(ctx)
+	return result
+}
