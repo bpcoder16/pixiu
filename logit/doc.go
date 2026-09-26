@@ -25,6 +25,21 @@
 //	defer logit.Close(logger) // 应用退出最后一步
 //	_ = logit.SetMinLevel(logger, logit.InfoLevel) // 可在运行期原子调整
 //
+// 应用退出时，先停止接收新请求、等待后台任务结束并关闭其他组件，再关闭 Logger。
+// 其他组件在收尾期间可能仍需记录日志，因此 logit.Close 应是资源关闭的最后一步。
+//
+// 多资源关闭时，可用 lifecycle.Stack 替代上例的 defer，按登记的逆序关闭：
+//
+//	var stack lifecycle.Stack
+//	if err := stack.Register(func() error { return logit.Close(logger) }); err != nil {
+//	    return err
+//	}
+//	if err := stack.Register(client.Close); err != nil { // client 由应用创建
+//	    return err
+//	}
+//	// 停止业务入口并等待使用 client 的任务结束后：
+//	return stack.Close() // 先关闭 client，最后关闭 logger
+//
 // 全局默认 Logger 输出到 stdout,启动期用 SetDefault 替换;
 // 测试捕获输出用 Swap(替换并返回旧值);panic 处理见 ReportPanic/RecoverAndReport。
 package logit
