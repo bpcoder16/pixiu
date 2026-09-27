@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 )
@@ -37,7 +38,8 @@ func (s *Stack) Register(closeFunc func() error) error {
 
 // Close 逆序执行全部关闭函数并汇总错误；后续调用等待并返回已收集的错误。
 // 关闭函数不得递归调用同一个 Stack 的 Close。
-// 关闭函数 panic 时继续向上传播；尚未执行的关闭函数不会执行。
+// 关闭函数 panic 时继续执行其余关闭函数，随后向首次调用者传播第一个 panic。
+// 后续调用返回包含 panic 信息及关闭错误的汇总结果。
 func (s *Stack) Close() (err error) {
 	s.mu.Lock()
 	if s.done != nil {
@@ -53,7 +55,8 @@ func (s *Stack) Close() (err error) {
 	s.mu.Unlock()
 
 	var errs []error
-	// 即使关闭函数 panic，也要放行其他等待 Close 的调用。
+	var firstPanic any
+	// 在传播 panic 前发布汇总结果，放行其他等待 Close 的调用。
 	defer func() {
 		result := errors.Join(errs...)
 		s.mu.Lock()
@@ -61,11 +64,25 @@ func (s *Stack) Close() (err error) {
 		close(done)
 		s.mu.Unlock()
 		err = result
+		if firstPanic != nil {
+			panic(firstPanic)
+		}
 	}()
 	for _, closer := range slices.Backward(closers) {
-		if closeErr := closer(); closeErr != nil {
+		closeErr, recovered := callCloser(closer)
+		if recovered != nil {
+			if firstPanic == nil {
+				firstPanic = recovered
+			}
+			errs = append(errs, fmt.Errorf("lifecycle: close panic: %v", recovered))
+		} else if closeErr != nil {
 			errs = append(errs, closeErr)
 		}
 	}
 	return nil
+}
+
+func callCloser(closer func() error) (err error, recovered any) {
+	defer func() { recovered = recover() }()
+	return closer(), nil
 }

@@ -3,6 +3,7 @@ package lifecycle_test
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -125,10 +126,72 @@ func TestStackPanicUnblocksWaitingClose(t *testing.T) {
 	}
 	select {
 	case err := <-waiting:
-		if err != nil {
-			t.Fatalf("waiting Close() = %v", err)
+		if err == nil || !strings.Contains(err.Error(), "close failed") {
+			t.Fatalf("waiting Close() = %v, want panic information", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("waiting Close remained blocked after panic")
+	}
+}
+
+func TestStackPanicStillClosesRemainingResources(t *testing.T) {
+	var stack lifecycle.Stack
+	var order []string
+	firstErr := errors.New("first close failed")
+	lastErr := errors.New("last close failed")
+	for _, item := range []struct {
+		name string
+		fn   func() error
+	}{
+		{name: "first", fn: func() error { return firstErr }},
+		{name: "middle", fn: func() error { panic("middle close panicked") }},
+		{name: "last", fn: func() error { return lastErr }},
+	} {
+		if err := stack.Register(func() error {
+			order = append(order, item.name)
+			return item.fn()
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != "middle close panicked" {
+				t.Fatalf("Close panic = %v", recovered)
+			}
+		}()
+		_ = stack.Close()
+	}()
+	if !reflect.DeepEqual(order, []string{"last", "middle", "first"}) {
+		t.Fatalf("close order = %v", order)
+	}
+	for range 2 {
+		err := stack.Close()
+		if !errors.Is(err, firstErr) || !errors.Is(err, lastErr) ||
+			!strings.Contains(err.Error(), "middle close panicked") {
+			t.Fatalf("repeat Close() = %v, want errors and panic information", err)
+		}
+	}
+}
+
+func TestStackMultiplePanicsAreReported(t *testing.T) {
+	var stack lifecycle.Stack
+	for _, message := range []string{"first panic", "last panic"} {
+		if err := stack.Register(func() error { panic(message) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != "last panic" {
+				t.Fatalf("Close panic = %v, want last panic", recovered)
+			}
+		}()
+		_ = stack.Close()
+	}()
+	err := stack.Close()
+	if err == nil || !strings.Contains(err.Error(), "first panic") || !strings.Contains(err.Error(), "last panic") {
+		t.Fatalf("repeat Close() = %v, want both panics", err)
 	}
 }
