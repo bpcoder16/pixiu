@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -29,8 +31,9 @@ func (l restyStderrLogger) write(level, format string, args ...any) {
 
 // Client 是可复用的 HTTP 下游客户端。运行期可以并发发请求，Resty 配置应在启动期完成。
 type Client struct {
-	name  string
-	resty *resty.Client
+	name       string
+	resty      *resty.Client
+	logDetails bool
 }
 
 // Option 配置下游客户端，创建后不应在运行期并发修改配置。
@@ -42,6 +45,12 @@ func OptResty(configure func(*resty.Client)) Option {
 		panic("httpcall: nil resty configure")
 	}
 	return func(c *Client) { configure(c.resty) }
+}
+
+// OptLogDetails 控制是否记录请求和响应的详细信息，默认关闭。
+// 开启后会记录原始 Header 和可读取的 Body，不脱敏或截断。
+func OptLogDetails(enabled bool) Option {
+	return func(c *Client) { c.logDetails = enabled }
 }
 
 // New 创建下游客户端。默认每次 HTTP 尝试最长 60 秒，不自动重试。
@@ -108,25 +117,29 @@ func (c *Client) logSuccess(resp *resty.Response) {
 	} else if !logit.InfoEnabled(ctx) {
 		return
 	}
-	c.log(resp.Request, level, resp.StatusCode(), nil)
+	c.log(resp.Request, level, resp, nil)
 }
 
 func (c *Client) logError(req *resty.Request, err error) {
 	if !logit.ErrorEnabled(req.Context()) {
 		return
 	}
-	status := 0
+	var resp *resty.Response
 	if responseError, ok := errors.AsType[*resty.ResponseError](err); ok {
-		status = responseError.Response.StatusCode()
+		resp = responseError.Response
 	}
-	c.log(req, logit.ErrorLevel, status, err)
+	c.log(req, logit.ErrorLevel, resp, err)
 }
 
-func (c *Client) log(req *resty.Request, level logit.Level, status int, err error) {
+func (c *Client) log(req *resty.Request, level logit.Level, resp *resty.Response, err error) {
 	ctx := req.Context()
 	duration := time.Duration(0)
 	if started, ok := ctx.Value(startKey{}).(time.Time); ok {
 		duration = time.Since(started)
+	}
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode()
 	}
 	errText := ""
 	if err != nil {
@@ -139,12 +152,79 @@ func (c *Client) log(req *resty.Request, level logit.Level, status int, err erro
 		"status":  status,
 		"err":     errText,
 	}
+	if c.logDetails {
+		appendHTTPDetails(details, req, resp)
+	}
 	fields := logit.DownstreamFields("httpcall", c.name, duration, details)
 	// 跳过本方法和包级 Output 的栈帧，让 caller 指向 logSuccess/logError。
 	logit.Output(ctx, level, 1, "downstream http", fields...)
 }
 
-// 请求已构造时记录最终 URL；构造前失败时保留 Resty 请求中的原文。
+func appendHTTPDetails(details map[string]any, req *resty.Request, resp *resty.Response) {
+	requestHeaders := http.Header{}
+	requestContentLength := int64(0)
+	if req.RawRequest != nil {
+		requestHeaders = req.RawRequest.Header.Clone()
+		requestContentLength = req.RawRequest.ContentLength
+	} else if req.Header != nil {
+		requestHeaders = req.Header.Clone()
+	}
+	if requestHeaders == nil {
+		requestHeaders = http.Header{}
+	}
+
+	responseHeaders := http.Header{}
+	responseBody := ""
+	finalURL := ""
+	statusText := ""
+	proto := ""
+	responseContentLength := int64(0)
+	if resp != nil {
+		responseHeaders = resp.Header().Clone()
+		responseBody = string(resp.Body())
+		statusText = resp.Status()
+		proto = resp.Proto()
+		if raw := resp.RawResponse; raw != nil {
+			responseContentLength = raw.ContentLength
+			if raw.Request != nil && raw.Request.URL != nil {
+				finalURL = raw.Request.URL.String()
+			}
+		}
+	}
+	if responseHeaders == nil {
+		responseHeaders = http.Header{}
+	}
+
+	details["request_headers"] = requestHeaders
+	details["request_content_length"] = requestContentLength
+	details["request_body"] = requestBodyForLog(req)
+
+	details["response_proto"] = proto
+	details["response_headers"] = responseHeaders
+	details["response_body"] = responseBody
+	details["response_content_length"] = responseContentLength
+	details["response_status_text"] = statusText
+	details["final_url"] = finalURL
+}
+
+// 只读取 Resty 准备的可重读副本，不能消耗业务请求流。
+func requestBodyForLog(req *resty.Request) string {
+	if req.RawRequest == nil || req.RawRequest.GetBody == nil {
+		return ""
+	}
+	reader, err := req.RawRequest.GetBody()
+	if err != nil {
+		return ""
+	}
+	defer reader.Close()
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		return ""
+	}
+	return string(body)
+}
+
+// 已构造时取初始 HTTP 请求的 URL；构造前失败时取 Resty 请求中的原文。
 func requestURL(req *resty.Request) string {
 	if req.RawRequest != nil && req.RawRequest.URL != nil {
 		return req.RawRequest.URL.String()

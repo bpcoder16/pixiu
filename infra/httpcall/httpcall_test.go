@@ -170,6 +170,169 @@ func TestRequestMethodsAndUnifiedLog(t *testing.T) {
 	}
 }
 
+func TestLogDetailsCapturesRequestAndResponse(t *testing.T) {
+	buf := captureLogs(t)
+	requestBody := `{"secret":"request"}`
+	responseBody := `{"secret":"response"}`
+	client := httpcall.New("inventory",
+		httpcall.OptLogDetails(true),
+		httpcall.OptResty(func(r *resty.Client) {
+			r.SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				body, err := io.ReadAll(req.Body)
+				if err != nil || string(body) != requestBody {
+					t.Errorf("实际发送的请求体 = %q, %v", body, err)
+				}
+				resp := response(req, http.StatusCreated)
+				resp.Body = io.NopCloser(strings.NewReader(responseBody))
+				resp.Header = http.Header{"X-Response": {"one", "two"}}
+				resp.ContentLength = int64(len(responseBody))
+				resp.Status = "201 Created"
+				resp.Proto = "HTTP/1.1"
+				return resp, nil
+			}))
+		}),
+	)
+	const target = "https://example.test/items?trace=1"
+	if _, err := client.Request(context.Background()).
+		SetHeader("Authorization", "Bearer token").
+		SetBody(requestBody).
+		Post(target); err != nil {
+		t.Fatal(err)
+	}
+	logs := records(t, buf)
+	if len(logs) != 1 {
+		t.Fatalf("详细日志条数 = %d", len(logs))
+	}
+	details := downstreamDetails(t, logs[0])
+	if len(details) != 14 || details["request_body"] != requestBody ||
+		details["response_body"] != responseBody ||
+		details["final_url"] != target ||
+		details["response_status_text"] != "201 Created" ||
+		details["response_proto"] != "HTTP/1.1" ||
+		details["request_content_length"] != float64(len(requestBody)) ||
+		details["response_content_length"] != float64(len(responseBody)) {
+		t.Fatalf("详细信息不完整: %v", details)
+	}
+	requestHeaders, ok := details["request_headers"].(map[string]any)
+	if !ok {
+		t.Fatalf("请求 Header 不是对象: %v", details["request_headers"])
+	}
+	authorization, ok := requestHeaders["Authorization"].([]any)
+	if !ok || len(authorization) != 1 || authorization[0] != "Bearer token" {
+		t.Fatalf("请求 Header 未保留原文: %v", requestHeaders)
+	}
+	responseHeaders, ok := details["response_headers"].(map[string]any)
+	if !ok {
+		t.Fatalf("响应 Header 不是对象: %v", details["response_headers"])
+	}
+	values, ok := responseHeaders["X-Response"].([]any)
+	if !ok || len(values) != 2 || values[0] != "one" || values[1] != "two" {
+		t.Fatalf("响应 Header 未保留多值: %v", responseHeaders)
+	}
+}
+
+func TestLogDetailsMissingResponseAndStreamingBody(t *testing.T) {
+	t.Run("invalid request", func(t *testing.T) {
+		buf := captureLogs(t)
+		client := httpcall.New("inventory", httpcall.OptLogDetails(true))
+		if _, err := client.Request(context.Background()).
+			SetFileReader("file", "x.txt", strings.NewReader("x")).
+			Get("https://example.test/upload"); err == nil {
+			t.Fatal("预期请求构造前校验失败")
+		}
+		details := downstreamDetails(t, records(t, buf)[0])
+		if len(details) != 14 || details["request_body"] != "" ||
+			details["request_content_length"] != float64(0) ||
+			details["response_body"] != "" {
+			t.Fatalf("未构造请求的详细信息默认值: %v", details)
+		}
+		if headers, ok := details["request_headers"].(map[string]any); !ok || len(headers) != 0 {
+			t.Fatalf("未构造请求的 Header 应为空对象: %v", details["request_headers"])
+		}
+	})
+
+	t.Run("transport error", func(t *testing.T) {
+		buf := captureLogs(t)
+		client := httpcall.New("inventory",
+			httpcall.OptLogDetails(true),
+			httpcall.OptResty(func(r *resty.Client) {
+				r.SetTransport(roundTripFunc(func(*http.Request) (*http.Response, error) {
+					return nil, errors.New("dial failed")
+				}))
+			}),
+		)
+		if _, err := client.Request(context.Background()).Get("https://example.test/items"); err == nil {
+			t.Fatal("预期传输失败")
+		}
+		details := downstreamDetails(t, records(t, buf)[0])
+		if len(details) != 14 || details["request_body"] != "" ||
+			details["response_body"] != "" || details["final_url"] != "" ||
+			details["response_status_text"] != "" || details["response_proto"] != "" ||
+			details["response_content_length"] != float64(0) {
+			t.Fatalf("无响应时的详细信息默认值: %v", details)
+		}
+		if headers, ok := details["response_headers"].(map[string]any); !ok || len(headers) != 0 {
+			t.Fatalf("无响应时 Header 应为空对象: %v", details["response_headers"])
+		}
+	})
+
+	t.Run("streaming response", func(t *testing.T) {
+		buf := captureLogs(t)
+		client := httpcall.New("inventory",
+			httpcall.OptLogDetails(true),
+			httpcall.OptResty(func(r *resty.Client) {
+				r.SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					resp := response(req, http.StatusOK)
+					resp.Body = io.NopCloser(strings.NewReader("streamed response"))
+					resp.ContentLength = int64(len("streamed response"))
+					return resp, nil
+				}))
+			}),
+		)
+		resp, err := client.Request(context.Background()).
+			SetDoNotParseResponse(true).
+			Get("https://example.test/items")
+		if err != nil {
+			t.Fatal(err)
+		}
+		details := downstreamDetails(t, records(t, buf)[0])
+		if details["response_body"] != "" ||
+			details["response_content_length"] != float64(len("streamed response")) {
+			t.Fatalf("流式响应应保留给业务读取: %v", details)
+		}
+		body, err := io.ReadAll(resp.RawBody())
+		if err != nil || string(body) != "streamed response" {
+			t.Fatalf("业务响应流被日志消费: %q, %v", body, err)
+		}
+		_ = resp.RawBody().Close()
+	})
+}
+
+func TestLogDetailsFinalURLAfterRedirect(t *testing.T) {
+	buf := captureLogs(t)
+	client := httpcall.New("inventory",
+		httpcall.OptLogDetails(true),
+		httpcall.OptResty(func(r *resty.Client) {
+			r.SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Path == "/start" {
+					resp := response(req, http.StatusFound)
+					resp.Header.Set("Location", "/final")
+					return resp, nil
+				}
+				return response(req, http.StatusOK), nil
+			}))
+		}),
+	)
+	if _, err := client.Request(context.Background()).Get("https://example.test/start"); err != nil {
+		t.Fatal(err)
+	}
+	details := downstreamDetails(t, records(t, buf)[0])
+	if details["url"] != "https://example.test/start" ||
+		details["final_url"] != "https://example.test/final" {
+		t.Fatalf("初始和最终 URL: %v", details)
+	}
+}
+
 func TestRequestUsesContextLoggerName(t *testing.T) {
 	var defaultBuf bytes.Buffer
 	old := logit.Default()

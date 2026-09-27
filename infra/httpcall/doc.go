@@ -6,6 +6,7 @@
 // github.com/bpcoder16/pixiu/infra/httpcall：
 //
 //	client := httpcall.New("inventory",
+//	    httpcall.OptLogDetails(true), // 按需记录请求和响应的详细信息
 //	    httpcall.OptResty(func(r *resty.Client) {
 //	        r.SetTimeout(90 * time.Second)
 //	        r.SetBaseURL("https://inventory.example.com")
@@ -56,8 +57,11 @@
 // 每次调用通过 logit 记录统一的 downstream_type、downstream_duration_ms、
 // downstream_id 和 downstream_details；details 固定包含 method、attempt、url、status、err，
 // 缺值时字符串为 ""、数字为 0；URL 使用完整地址，attempt 为实际尝试次数。
-// 不单独记录请求头、请求体或响应体。完整 URL 和错误文本可能包含凭据，
-// 应保护日志存储与收集链路。已有的 logit context 字段会随日志输出。
+// OptLogDetails 默认关闭；开启后还会记录双方 Header、可读取的 Body、最终 URL、
+// 响应状态文本、HTTP 协议和 Content-Length。不会读取业务接管的响应流；缺值用
+// 空对象、空字符串或 0，未知的 Content-Length 保留 -1。详细内容不脱敏或截断，
+// 可能包含凭据和大量数据，应保护日志存储与收集链路。
+// 已有的 logit context 字段会随日志输出。
 // 需要按请求分流结果日志时，可先用 logit.WithLoggerName(ctx, name) 设置请求 context；
 // 非空名字使用已注册的命名 Logger，未注册或没有名字时使用默认 Logger。
 // Resty 自身的 Warnf/Errorf 另写入 stderr，带 httpcall、name 和级别，供进程日志收集器捕获；
