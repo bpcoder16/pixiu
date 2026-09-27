@@ -22,6 +22,10 @@
 // Get 命中会更新 LRU 顺序，默认不延长条目 TTL；配置 RefreshTTLOnGet: true 后会续期。
 // 配置 Loader 后，未命中时会同步调用它；返回找到的值会按实例默认 TTL 写入。
 // Loader 不传递 context 或错误，同键并发未命中可能重复加载。
+// GetOrSet 和 GetOrSetFunc 提供原子检查及写入，返回的 bool 表示写入前是否存在；
+// 两者均不触发 Loader。GetOrSetFunc 的函数在缓存锁内执行，应快速完成且不可重入缓存。
+// Has 和 GetAndDelete 不触发 Loader；Keys、Items 和 Range 系列仅访问未过期条目。
+// Range 系列按 LRU 方向遍历，并发修改时不保证得到完整快照。
 // SetWithTTL 的 0 表示该条目不过期。
 // 不启动后台清理；写入前会清理过期条目，纯读期间可按需调用 DeleteExpired。
 // 容量按条目数计算；可变引用类型的并发安全和拷贝由调用方负责。

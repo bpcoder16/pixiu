@@ -81,6 +81,22 @@ func (c *Cache[K, V]) SetWithTTL(key K, value V, ttl time.Duration) error {
 	return nil
 }
 
+// GetOrSet 返回已有值，或按实例默认 TTL 写入给定值；bool 表示写入前是否存在。
+// 此方法不会触发 Loader。
+func (c *Cache[K, V]) GetOrSet(key K, value V) (V, bool) {
+	c.cache.DeleteExpired()
+	item, existed := c.cache.GetOrSet(key, value)
+	return item.Value(), existed
+}
+
+// GetOrSetFunc 返回已有值，或在未命中时调用 fn 生成并写入值；bool 表示写入前是否存在。
+// fn 在缓存锁内执行，须快速完成且不可调用同一缓存的方法；此方法不会触发 Loader。
+func (c *Cache[K, V]) GetOrSetFunc(key K, fn func() V) (V, bool) {
+	c.cache.DeleteExpired()
+	item, existed := c.cache.GetOrSetFunc(key, fn)
+	return item.Value(), existed
+}
+
 // Get 读取未过期条目。命中会更新 LRU 顺序；是否续期由 RefreshTTLOnGet 决定。
 // 未命中时若配置 Loader，则同步加载；加载成功按实例默认 TTL 写入并返回。
 func (c *Cache[K, V]) Get(key K) (V, bool) {
@@ -92,9 +108,29 @@ func (c *Cache[K, V]) Get(key K) (V, bool) {
 	return item.Value(), true
 }
 
+// Has 判断键是否对应未过期条目，不更新 LRU 顺序或 TTL，也不触发 Loader。
+func (c *Cache[K, V]) Has(key K) bool {
+	return c.cache.Has(key)
+}
+
 // Delete 删除指定键；键不存在时不执行操作。
 func (c *Cache[K, V]) Delete(key K) {
 	c.cache.Delete(key)
+}
+
+// GetAndDelete 原子地读取并删除未过期条目；未命中时不触发 Loader。
+func (c *Cache[K, V]) GetAndDelete(key K) (V, bool) {
+	item, found := c.cache.GetAndDelete(key, ttlcache.WithLoader[K, V](nil))
+	if !found {
+		var zero V
+		return zero, false
+	}
+	return item.Value(), true
+}
+
+// DeleteAll 删除此实例的全部条目，包括已过期但尚未清理的条目。
+func (c *Cache[K, V]) DeleteAll() {
+	c.cache.DeleteAll()
 }
 
 // DeleteExpired 立即删除此实例中已经过期的条目。
@@ -105,6 +141,37 @@ func (c *Cache[K, V]) DeleteExpired() {
 // Len 返回当前未过期的条目数。
 func (c *Cache[K, V]) Len() int {
 	return c.cache.Len()
+}
+
+// Keys 返回未过期键的切片，顺序不作保证。
+func (c *Cache[K, V]) Keys() []K {
+	return c.cache.Keys()
+}
+
+// Items 返回未过期条目的键值映射；映射独立，值为浅拷贝。
+func (c *Cache[K, V]) Items() map[K]V {
+	items := c.cache.Items()
+	values := make(map[K]V, len(items))
+	for key, item := range items {
+		values[key] = item.Value()
+	}
+	return values
+}
+
+// Range 按最近使用到最久未使用的方向遍历未过期条目；fn 返回 false 时停止。
+// 并发修改缓存时遍历为弱一致语义，可能跳过条目；fn 不应依赖完整快照。
+func (c *Cache[K, V]) Range(fn func(K, V) bool) {
+	c.cache.Range(func(item *ttlcache.Item[K, V]) bool {
+		return fn(item.Key(), item.Value())
+	})
+}
+
+// RangeBackwards 按最久未使用到最近使用的方向遍历未过期条目；fn 返回 false 时停止。
+// 并发修改缓存时遍历为弱一致语义，可能跳过条目；fn 不应依赖完整快照。
+func (c *Cache[K, V]) RangeBackwards(fn func(K, V) bool) {
+	c.cache.RangeBackwards(func(item *ttlcache.Item[K, V]) bool {
+		return fn(item.Key(), item.Value())
+	})
 }
 
 // Stats 返回此实例的累计统计快照。

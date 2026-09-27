@@ -1,6 +1,7 @@
 package lrucache
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -99,6 +100,211 @@ func TestConcurrentLoaderMisses(t *testing.T) {
 	wg.Wait()
 	if loads.Load() == 0 {
 		t.Fatal("loader was not called")
+	}
+}
+
+func TestHasAndDeleteAllDoNotLoad(t *testing.T) {
+	loads := 0
+	cache, err := New[string, int](Config[string, int]{
+		Capacity: 2,
+		Loader: func(string) (int, bool) {
+			loads++
+			return 99, true
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.Set("a", 1)
+	if !cache.Has("a") || cache.Has("missing") {
+		t.Fatal("Has returned the wrong cache presence")
+	}
+	if loads != 0 {
+		t.Fatal("Has triggered Loader")
+	}
+	cache.DeleteAll()
+	if cache.Len() != 0 || cache.Has("a") {
+		t.Fatal("DeleteAll left a cached item")
+	}
+	if loads != 0 {
+		t.Fatal("DeleteAll triggered Loader")
+	}
+}
+
+func TestGetOrSetAndGetOrSetFunc(t *testing.T) {
+	cache, err := New[string, int](Config[string, int]{Capacity: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.SetWithTTL("live", 100, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.SetWithTTL("expired", 200, 10*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if value, existed := cache.GetOrSet("new", 1); existed || value != 1 {
+		t.Fatalf("first GetOrSet = %d, %v", value, existed)
+	}
+	if !cache.Has("live") {
+		t.Fatal("GetOrSet evicted a live item while an expired item occupied capacity")
+	}
+	if value, existed := cache.GetOrSet("new", 2); !existed || value != 1 {
+		t.Fatalf("repeat GetOrSet = %d, %v", value, existed)
+	}
+	calls := 0
+	if value, existed := cache.GetOrSetFunc("new", func() int {
+		calls++
+		return 3
+	}); !existed || value != 1 {
+		t.Fatalf("existing GetOrSetFunc = %d, %v", value, existed)
+	}
+	if calls != 0 {
+		t.Fatal("GetOrSetFunc ran for an existing item")
+	}
+	if value, existed := cache.GetOrSetFunc("new-func", func() int {
+		calls++
+		return 4
+	}); existed || value != 4 || calls != 1 {
+		t.Fatalf("new GetOrSetFunc = %d, %v, calls=%d", value, existed, calls)
+	}
+}
+
+func TestGetOrSetMethodsSkipLoader(t *testing.T) {
+	loads := 0
+	cache, err := New[string, int](Config[string, int]{
+		Capacity: 2,
+		Loader: func(string) (int, bool) {
+			loads++
+			return 99, true
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, existed := cache.GetOrSet("a", 1); existed || value != 1 {
+		t.Fatalf("GetOrSet with Loader = %d, %v", value, existed)
+	}
+	if value, existed := cache.GetOrSetFunc("b", func() int { return 2 }); existed || value != 2 {
+		t.Fatalf("GetOrSetFunc with Loader = %d, %v", value, existed)
+	}
+	if loads != 0 {
+		t.Fatalf("GetOrSet methods triggered Loader %d times", loads)
+	}
+}
+
+func TestConcurrentGetOrSetFuncRunsOnce(t *testing.T) {
+	var calls atomic.Int32
+	cache, err := New[int, int](Config[int, int]{Capacity: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			value, _ := cache.GetOrSetFunc(21, func() int {
+				calls.Add(1)
+				time.Sleep(time.Millisecond)
+				return 42
+			})
+			if value != 42 {
+				t.Errorf("GetOrSetFunc value = %d, want 42", value)
+			}
+		}()
+	}
+	wg.Wait()
+	if calls.Load() != 1 {
+		t.Fatalf("GetOrSetFunc calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestGetAndDeleteDoesNotLoad(t *testing.T) {
+	loads := 0
+	cache, err := New[string, int](Config[string, int]{
+		Capacity: 1,
+		Loader: func(string) (int, bool) {
+			loads++
+			return 99, true
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.Set("present", 7)
+	if value, found := cache.GetAndDelete("present"); !found || value != 7 {
+		t.Fatalf("GetAndDelete present = %d, %v", value, found)
+	}
+	if cache.Has("present") {
+		t.Fatal("GetAndDelete left its item in the cache")
+	}
+	if value, found := cache.GetAndDelete("missing"); found || value != 0 {
+		t.Fatalf("GetAndDelete missing = %d, %v", value, found)
+	}
+	if loads != 0 {
+		t.Fatal("GetAndDelete triggered Loader")
+	}
+}
+
+func TestKeysItemsAndRangeOrder(t *testing.T) {
+	cache, err := New[string, int](Config[string, int]{Capacity: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.Set("a", 1)
+	cache.Set("b", 2)
+	cache.Set("c", 3)
+	cache.Get("a")
+	if err := cache.SetWithTTL("expired", 4, 10*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if cache.Has("expired") {
+		t.Fatal("Has reported an expired item")
+	}
+	keys := cache.Keys()
+	if len(keys) != 3 {
+		t.Fatalf("Keys = %v, want three unexpired keys", keys)
+	}
+	keySet := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		keySet[key] = true
+	}
+	if !keySet["a"] || !keySet["b"] || !keySet["c"] || keySet["expired"] {
+		t.Fatalf("Keys = %v", keys)
+	}
+	items := cache.Items()
+	if len(items) != 3 || items["a"] != 1 || items["b"] != 2 || items["c"] != 3 {
+		t.Fatalf("Items = %v", items)
+	}
+	items["a"] = 100
+	if value, found := cache.Get("a"); !found || value != 1 {
+		t.Fatalf("Items map mutation changed cache: %d, %v", value, found)
+	}
+	var forward []string
+	cache.Range(func(key string, value int) bool {
+		forward = append(forward, key)
+		return true
+	})
+	if !slices.Equal(forward, []string{"a", "c", "b"}) {
+		t.Fatalf("Range order = %v", forward)
+	}
+	var backward []string
+	cache.RangeBackwards(func(key string, value int) bool {
+		backward = append(backward, key)
+		return true
+	})
+	if !slices.Equal(backward, []string{"b", "c", "a"}) {
+		t.Fatalf("RangeBackwards order = %v", backward)
+	}
+	visited := 0
+	cache.Range(func(string, int) bool {
+		visited++
+		return false
+	})
+	if visited != 1 {
+		t.Fatalf("Range visited %d items after callback stopped", visited)
 	}
 }
 
