@@ -49,6 +49,14 @@ func Info(ctx context.Context, msg string, fields ...Field) {
 	LoggerFromContext(ctx).Output(ctx, InfoLevel, 1, msg, fields...)
 }
 
+// InfoDuration 与 Info 相同；ctx 含 WithStart 起点时追加下游、自身和总耗时。
+func InfoDuration(ctx context.Context, msg string, fields ...Field) {
+	if state := durationFromContext(ctx); state != nil {
+		fields = durationFields(fields, state)
+	}
+	LoggerFromContext(ctx).Output(ctx, InfoLevel, 1, msg, fields...)
+}
+
 func Warn(ctx context.Context, msg string, fields ...Field) {
 	LoggerFromContext(ctx).Output(ctx, WarnLevel, 1, msg, fields...)
 }

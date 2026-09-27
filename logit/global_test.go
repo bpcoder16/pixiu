@@ -3,6 +3,7 @@ package logit_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/bpcoder16/pixiu/logit"
 )
@@ -75,6 +78,148 @@ func TestFacadeBasic(t *testing.T) {
 	}
 	if !strings.Contains(out, "ERROR") {
 		t.Errorf("error line missing: %q", out)
+	}
+}
+
+func TestInfoDurationOnlyAddsFieldWithStart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		buf := capture(t)
+		ctx := logit.WithStart(context.Background())
+		logit.Info(ctx, "ordinary")
+		time.Sleep(12 * time.Millisecond)
+		if same := logit.WithStart(ctx); same != ctx {
+			t.Fatal("重复 WithStart 应保留首次起点和原 context")
+		}
+		logit.AddDownstreamDuration(ctx, "redis_2", 2*time.Millisecond)
+		logit.AddDownstreamDuration(context.WithValue(ctx, routeTestKey{}, true), "redis_1", 3*time.Millisecond)
+		logit.AddDownstreamDuration(ctx, "redis_3", 2*time.Millisecond)
+		fields := make([]logit.Field, 1, 2)
+		fields[0] = logit.Str("total_duration_ms", "manual")
+		fields[:2][1] = logit.Str("sentinel", "keep")
+		logit.InfoDuration(ctx, "measured", fields...)
+		if fields[:2][1].Key != "sentinel" {
+			t.Fatal("InfoDuration 不应改写调用方字段切片")
+		}
+		logit.InfoDuration(context.Background(), "without start")
+
+		lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+		if len(lines) != 3 {
+			t.Fatalf("日志行数 = %d, want 3: %q", len(lines), buf.String())
+		}
+		if strings.Contains(lines[0], "total_duration_ms=") || strings.Contains(lines[2], "total_duration_ms=") || strings.Contains(lines[2], "self_duration_ms=") {
+			t.Fatalf("普通 Info 或无起点 InfoDuration 不应自动追加耗时: %q", buf.String())
+		}
+		want := "total_duration_ms=[manual] redis_2_duration_ms=[2.000] redis_3_duration_ms=[2.000] redis_1_duration_ms=[3.000] self_duration_ms=[5.000] total_duration_ms=[12.000]"
+		if !strings.Contains(lines[1], want) {
+			t.Fatalf("调用方字段与自动耗时应依次输出: %q, want %q", lines[1], want)
+		}
+	})
+}
+
+func TestInfoDurationUsesNamedJSONLoggerAndBusinessCaller(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var buf bytes.Buffer
+		name := t.Name()
+		logit.SetNamed(name, logit.MustNew(
+			logit.OptWriter(logit.NewWriter(&buf)),
+			logit.OptEncoder(logit.DefaultJSONEncoder),
+			logit.OptCaller(true),
+		))
+		ctx := logit.WithLoggerName(logit.WithStart(context.Background()), name)
+		logit.AddDownstreamDuration(ctx, "mysql_1", time.Millisecond)
+		logit.AddDownstreamDuration(ctx, "mysql_2", time.Millisecond)
+		time.Sleep(1500 * time.Microsecond)
+		logit.InfoDuration(ctx, "measured")
+
+		var record map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
+			t.Fatal(err)
+		}
+		if got := record["total_duration_ms"]; got != 1.5 {
+			t.Errorf("JSON 耗时 = %v, want 1.5", got)
+		}
+		for _, key := range []string{"mysql_1_duration_ms", "mysql_2_duration_ms"} {
+			if got := record[key]; got != 1.0 {
+				t.Errorf("JSON %s = %v, want 1.0", key, got)
+			}
+		}
+		if got := record["self_duration_ms"]; got != -0.5 {
+			t.Errorf("并行下游时 JSON 自身耗时 = %v, want -0.5", got)
+		}
+		caller, _ := record["caller"].(string)
+		if !strings.Contains(caller, "logit/global_test.go:") {
+			t.Errorf("caller 应指向业务调用点: %q", caller)
+		}
+	})
+}
+
+func TestInfoDurationWithoutDownstream(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		buf := capture(t)
+		ctx := logit.WithStart(context.Background())
+		time.Sleep(3 * time.Millisecond)
+		logit.InfoDuration(ctx, "without downstream")
+		if got := buf.String(); !strings.Contains(got, "self_duration_ms=[3.000] total_duration_ms=[3.000]") {
+			t.Fatalf("没有下游时自身耗时应等于总耗时: %q", got)
+		}
+	})
+}
+
+func TestAddDownstreamDurationRejectsInvalidNames(t *testing.T) {
+	ctx := logit.WithStart(context.Background())
+	logit.AddDownstreamDuration(ctx, "redis_1", time.Millisecond)
+
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		key  string
+	}{
+		{name: "duplicate", ctx: ctx, key: "redis_1"},
+		{name: "empty", ctx: ctx, key: ""},
+		{name: "self", ctx: ctx, key: "self"},
+		{name: "total", ctx: ctx, key: "total"},
+		{name: "without start", ctx: context.Background(), key: "redis_2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("无效下游名称或缺少起点应 panic")
+				}
+			}()
+			logit.AddDownstreamDuration(tc.ctx, tc.key, 2*time.Millisecond)
+		})
+	}
+
+	buf := capture(t)
+	logit.InfoDuration(ctx, "after rejected additions")
+	if got := buf.String(); strings.Count(got, "redis_1_duration_ms=") != 1 || !strings.Contains(got, "redis_1_duration_ms=[1.000]") {
+		t.Fatalf("无效写入不应覆盖原有耗时: %q", got)
+	}
+}
+
+func TestAddDownstreamDurationConcurrent(t *testing.T) {
+	buf := capture(t)
+	ctx := logit.WithStart(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 32; i++ {
+			logit.InfoDuration(ctx, "during concurrent calls")
+		}
+	}()
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			logit.AddDownstreamDuration(ctx, fmt.Sprintf("call_%02d", i), time.Microsecond)
+		}(i)
+	}
+	wg.Wait()
+	logit.InfoDuration(ctx, "after concurrent calls")
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if got := strings.Count(lines[len(lines)-1], "_duration_ms="); got != 34 {
+		t.Fatalf("最后一行应输出 32 个下游、self 和 total，实际 %d: %q", got, lines[len(lines)-1])
 	}
 }
 

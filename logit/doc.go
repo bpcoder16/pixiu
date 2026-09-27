@@ -4,9 +4,12 @@
 // 日常使用(不需要轮转时只需 import logit 一个包):
 //
 //	ctx = logit.WithContext(ctx)                    // 入口初始化日志字段
+//	ctx = logit.WithStart(ctx)                      // 记录请求起点
 //	logit.AddMeta(ctx, logit.Str("logId", logit.NewLogID())) // 按需添加链路 ID
 //	logit.AddField(ctx, logit.Str("uid", "42"))    // 请求级字段
 //	logit.Info(ctx, "user login", logit.Int("uid", 42))
+//	logit.AddDownstreamDuration(ctx, "mysql_1", 12*time.Millisecond) // 每次下游调用使用唯一名称
+//	logit.InfoDuration(ctx, "request done")       // 自动追加 mysql_1、self 和 total 耗时
 //	svc := logit.With(logit.Str("mod", "Order")) // 模块级子 Logger
 //	svc.Error(ctx, "create failed", logit.Err(err))
 //
