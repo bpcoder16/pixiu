@@ -26,7 +26,7 @@ type Logger interface {
 	// 0 表示 Output 的直接调用者。
 	Output(ctx context.Context, level Level, callDepth int, msg string, fields ...Field)
 	// Enabled 报告该级别日志是否会被输出,供热路径手动守卫:
-	// if logit.DebugEnabled() { ... } 可彻底省掉字段求值与变参分配。
+	// if l.Enabled(DebugLevel) { ... } 可彻底省掉字段求值与变参分配。
 	Enabled(level Level) bool
 	// With 返回预埋了固定字段的子 Logger(如模块级 mod 字段),不改变其余行为。
 	// 传入保留字段名会 panic。

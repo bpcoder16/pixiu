@@ -3,8 +3,10 @@ package logit_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -49,12 +51,13 @@ func TestDefaultUsesStdoutAndStandardStreamsStayOpen(t *testing.T) {
 	}
 }
 
-// capture 用 Swap 捕获默认 logger 的输出,并在测试结束后恢复。
+// capture 临时替换默认 logger,并在测试结束后恢复。
 func capture(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	old := logit.Swap(logit.MustNew(logit.OptWriter(logit.NewWriter(buf))))
-	t.Cleanup(func() { logit.Swap(old) })
+	old := logit.Default()
+	logit.SetDefault(logit.MustNew(logit.OptWriter(logit.NewWriter(buf))))
+	t.Cleanup(func() { logit.SetDefault(old) })
 	return buf
 }
 
@@ -77,11 +80,12 @@ func TestFacadeBasic(t *testing.T) {
 
 func TestFacadeCallerPointsToBusinessCall(t *testing.T) {
 	buf := &bytes.Buffer{}
-	old := logit.Swap(logit.MustNew(
+	old := logit.Default()
+	logit.SetDefault(logit.MustNew(
 		logit.OptWriter(logit.NewWriter(buf)),
 		logit.OptCaller(true),
 	))
-	t.Cleanup(func() { logit.Swap(old) })
+	t.Cleanup(func() { logit.SetDefault(old) })
 
 	logit.Info(context.Background(), "caller")
 	out := buf.String()
@@ -90,6 +94,96 @@ func TestFacadeCallerPointsToBusinessCall(t *testing.T) {
 	}
 	if strings.Contains(out, "logit/global.go") {
 		t.Fatalf("facade caller leaked implementation frame: %q", out)
+	}
+}
+
+func TestFacadeRoutesByContextName(t *testing.T) {
+	defaultBuf := capture(t)
+	var namedBuf bytes.Buffer
+	name := t.Name()
+	named := logit.MustNew(logit.OptWriter(logit.NewWriter(&namedBuf)))
+	logit.SetNamed(name, named)
+
+	ctx := logit.WithLoggerName(context.Background(), name)
+	if got := logit.LoggerFromContext(ctx); got != named {
+		t.Fatalf("context 选中的 Logger = %v, want %v", got, named)
+	}
+	logit.Info(ctx, "named info")
+	logit.Warn(context.WithValue(ctx, routeTestKey{}, true), "inherited name")
+	logit.Output(ctx, logit.InfoLevel, 0, "named output")
+
+	logit.Info(context.Background(), "default info")
+	logit.Info(logit.WithLoggerName(ctx, ""), "empty name")
+	logit.Info(logit.WithLoggerName(ctx, name+"-missing"), "unregistered name")
+	if got := logit.LoggerFromContext(nil); got != logit.Default() {
+		t.Fatalf("nil context 应返回默认 Logger: %v", got)
+	}
+	if got := namedBuf.String(); !strings.Contains(got, "named info") || !strings.Contains(got, "inherited name") || !strings.Contains(got, "named output") || strings.Contains(got, "default info") {
+		t.Fatalf("命名 Logger 输出: %q", got)
+	}
+	if got := defaultBuf.String(); !strings.Contains(got, "default info") || !strings.Contains(got, "empty name") || !strings.Contains(got, "unregistered name") || strings.Contains(got, "named info") {
+		t.Fatalf("默认 Logger 输出: %q", got)
+	}
+}
+
+type routeTestKey struct{}
+
+func TestFacadeOutputCallerDepth(t *testing.T) {
+	var buf bytes.Buffer
+	name := t.Name()
+	logit.SetNamed(name, logit.MustNew(logit.OptWriter(logit.NewWriter(&buf)), logit.OptCaller(true)))
+	ctx := logit.WithLoggerName(context.Background(), name)
+	_, _, directLine, _ := runtime.Caller(0)
+	logit.Output(ctx, logit.InfoLevel, 0, "direct output")
+	wrap := func() { logit.Output(ctx, logit.InfoLevel, 1, "wrapped output") }
+	_, _, wrappedLine, _ := runtime.Caller(0)
+	wrap()
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("Output 应写两条日志，实际 %d 条: %q", len(lines), buf.String())
+	}
+	for i, want := range []string{fmt.Sprintf("global_test.go:%d", directLine+1), fmt.Sprintf("global_test.go:%d", wrappedLine+1)} {
+		line := lines[i]
+		if !strings.Contains(line, want) {
+			t.Errorf("第 %d 条 caller = %q, want %q", i, line, want)
+		}
+	}
+}
+
+func TestFacadeContextAwareEnabled(t *testing.T) {
+	old := logit.Default()
+	logit.SetDefault(logit.MustNew(logit.OptWriter(logit.NewWriter(&bytes.Buffer{})), logit.OptMinLevel(logit.ErrorLevel)))
+	t.Cleanup(func() { logit.SetDefault(old) })
+	name := t.Name()
+	logit.SetNamed(name, logit.MustNew(logit.OptWriter(logit.NewWriter(&bytes.Buffer{}))))
+	ctx := logit.WithLoggerName(context.Background(), name)
+	checks := []struct {
+		name        string
+		enabled     func(context.Context) bool
+		defaultWant bool
+	}{
+		{name: "Debug", enabled: logit.DebugEnabled},
+		{name: "Info", enabled: logit.InfoEnabled},
+		{name: "Warn", enabled: logit.WarnEnabled},
+		{name: "Error", enabled: logit.ErrorEnabled, defaultWant: true},
+	}
+	for _, check := range checks {
+		if got := check.enabled(context.Background()); got != check.defaultWant {
+			t.Errorf("默认 Logger 的 %sEnabled = %v, want %v", check.name, got, check.defaultWant)
+		}
+		if got := check.enabled(ctx); !got {
+			t.Errorf("命名 Logger 的 %sEnabled = false, want true", check.name)
+		}
+		if got := check.enabled(logit.WithLoggerName(ctx, name+"-missing")); got != check.defaultWant {
+			t.Errorf("未注册命名 Logger 的 %sEnabled = %v, want %v", check.name, got, check.defaultWant)
+		}
+	}
+	logit.SetNamed(name, logit.MustNew(logit.OptWriter(logit.NewWriter(&bytes.Buffer{})), logit.OptMinLevel(logit.FatalLevel)))
+	if logit.ErrorEnabled(ctx) || !logit.LoggerFromContext(ctx).Enabled(logit.FatalLevel) {
+		t.Fatal("命名 Logger 应关闭 Error,保留 Fatal")
+	}
+	if logit.With(logit.Str("mod", "default")).Enabled(logit.InfoLevel) {
+		t.Fatal("包级 With 应基于默认 Logger")
 	}
 }
 
@@ -134,69 +228,43 @@ func TestFacadeWithModule(t *testing.T) {
 
 func TestFacadeEnabledGuard(t *testing.T) {
 	capture(t)
-	if !logit.InfoEnabled() || !logit.DebugEnabled() {
+	ctx := context.Background()
+	if !logit.InfoEnabled(ctx) || !logit.DebugEnabled(ctx) {
 		t.Error("default logger should enable all levels")
 	}
 	logit.SetDefault(logit.MustNew(logit.OptWriter(logit.Stderr()), logit.OptMinLevel(logit.WarnLevel)))
-	t.Cleanup(func() {
-		logit.SetDefault(logit.MustNew(logit.OptWriter(logit.Stderr())))
-	})
-	if logit.InfoEnabled() {
+	if logit.InfoEnabled(ctx) {
 		t.Error("info should be disabled under warn min level")
 	}
 }
 
-func TestFacadeConcurrentSwap(t *testing.T) {
-	base := capture(t)
+func TestFacadeConcurrentSetDefault(t *testing.T) {
+	old := logit.Default()
+	t.Cleanup(func() { logit.SetDefault(old) })
 	ctx := logit.WithContext(context.Background())
+	const workers = 4
+	buffers := make([]*lockedBuffer, workers)
+	loggers := make([]logit.Logger, workers)
+	for i := range loggers {
+		buffers[i] = &lockedBuffer{}
+		loggers[i] = logit.MustNew(logit.OptWriter(logit.NewWriter(buffers[i])))
+	}
 	var wg sync.WaitGroup
-	for i := 0; i < 4; i++ {
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			// Writer 契约要求并发安全:用锁保护的 buffer,bytes.Buffer 本身不是。
-			buf := &lockedBuffer{}
-			logit.Swap(logit.MustNew(logit.OptWriter(logit.NewWriter(buf))))
-			logit.Info(ctx, "swapped", logit.Int("g", n))
-			logit.Swap(logit.MustNew(logit.OptWriter(logit.Stderr())))
+			logit.SetDefault(loggers[n])
+			logit.Info(ctx, "concurrent default", logit.Int("g", n))
 		}(i)
 	}
 	wg.Wait()
-	_ = base
-}
-
-func TestSwapIsAtomicExchange(t *testing.T) {
-	original := logit.Default()
-	t.Cleanup(func() { logit.SetDefault(original) })
-
-	const swaps = 512
-	for round := 0; round < 5; round++ {
-		loggers := make([]logit.Logger, swaps)
-		for i := range loggers {
-			loggers[i] = logit.MustNew(logit.OptWriter(logit.NewWriter(&bytes.Buffer{})))
-		}
-		start := make(chan struct{})
-		olds := make(chan logit.Logger, swaps)
-		var wg sync.WaitGroup
-		for _, logger := range loggers {
-			wg.Add(1)
-			go func(logger logit.Logger) {
-				defer wg.Done()
-				<-start
-				olds <- logit.Swap(logger)
-			}(logger)
-		}
-		close(start)
-		wg.Wait()
-		close(olds)
-
-		seen := make(map[logit.Logger]struct{}, swaps)
-		for old := range olds {
-			if _, duplicate := seen[old]; duplicate {
-				t.Fatalf("round %d returned the same old Logger more than once", round)
-			}
-			seen[old] = struct{}{}
-		}
+	var logged int
+	for _, buf := range buffers {
+		logged += strings.Count(buf.String(), "concurrent default")
+	}
+	if logged != workers {
+		t.Fatalf("并发替换期间写入 %d 条日志, want %d", logged, workers)
 	}
 }
 
@@ -212,27 +280,19 @@ func TestGlobalLoggerRegistrationRejectsNil(t *testing.T) {
 		{name: "nil"},
 		{name: "typed nil", logger: (*typedNilLogger)(nil)},
 	} {
-		for _, register := range []struct {
-			name string
-			fn   func(logit.Logger)
-		}{
-			{name: "SetDefault", fn: logit.SetDefault},
-			{name: "Swap", fn: func(l logit.Logger) { logit.Swap(l) }},
-		} {
-			t.Run(register.name+"/"+input.name, func(t *testing.T) {
-				func() {
-					defer func() {
-						if recover() == nil {
-							t.Error("nil Logger 未在注册时 panic")
-						}
-					}()
-					register.fn(input.logger)
+		t.Run(input.name, func(t *testing.T) {
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Error("nil Logger 未在注册时 panic")
+					}
 				}()
-				if got := logit.Default(); got != original {
-					t.Errorf("无效注册改变了默认 Logger: %T", got)
-				}
-			})
-		}
+				logit.SetDefault(input.logger)
+			}()
+			if got := logit.Default(); got != original {
+				t.Errorf("无效注册改变了默认 Logger: %T", got)
+			}
+		})
 	}
 }
 

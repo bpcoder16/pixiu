@@ -10,6 +10,18 @@
 //	svc := logit.With(logit.Str("mod", "Order")) // 模块级子 Logger
 //	svc.Error(ctx, "create failed", logit.Err(err))
 //
+// 按 context 选择命名 Logger(未注册时回退默认 Logger)：
+//
+//	logit.SetNamed("http", logit.MustNew(logit.OptWriter(logit.Stderr())))
+//	httpCtx := logit.WithLoggerName(ctx, "http")
+//	if logit.InfoEnabled(httpCtx) {
+//	    logit.Output(httpCtx, logit.InfoLevel, 0, "request done")
+//	}
+//
+// DebugEnabled/InfoEnabled/WarnEnabled/ErrorEnabled 按 ctx 选择 Logger；
+// 任意级别可通过 LoggerFromContext(ctx).Enabled(level) 判断。
+// 无 ctx 的 logit.With 始终基于默认 Logger。上例 Output 的 callDepth=0 指向其直接调用者。
+//
 // 构造专属实例(依赖注入 / 测试):
 //
 //	buf := &bytes.Buffer{}
@@ -41,5 +53,6 @@
 //	return stack.Close() // 先关闭 client，最后关闭 logger
 //
 // 全局默认 Logger 输出到 stdout,启动期用 SetDefault 替换;
-// 测试捕获输出用 Swap(替换并返回旧值);panic 处理见 ReportPanic/RecoverAndReport。
+// 测试可先用 Default 保存旧值,再用 SetDefault 替换并在结束时恢复。
+// panic 处理见 ReportPanic/RecoverAndReport。
 package logit
