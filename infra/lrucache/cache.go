@@ -17,8 +17,8 @@ type Config[K comparable, V any] struct {
 
 // Stats 是单个缓存实例创建以来的累计统计。删除和过期清理也计入 Evictions。
 type Stats struct {
-	Hits       uint64 // Get 命中次数。
-	Misses     uint64 // 缓存未命中次数，包括 Loader 成功回源的读取。
+	Hits       uint64 // Get、GetOrSet、GetOrSetFunc 和 GetAndDelete 的缓存命中次数。
+	Misses     uint64 // 上述读取的缓存未命中次数，包括 Loader 成功回源的读取。
 	Insertions uint64 // 新键写入次数。
 	Updates    uint64 // 已有键的值被覆盖次数。
 	Evictions  uint64 // 条目移除次数，包括容量淘汰、删除和过期清理。
@@ -81,7 +81,8 @@ func (c *Cache[K, V]) SetWithTTL(key K, value V, ttl time.Duration) error {
 	return nil
 }
 
-// GetOrSet 返回已有值，或按实例默认 TTL 写入给定值；bool 表示写入前是否存在。
+// GetOrSet 返回已有值，或按实例默认 TTL 写入给定值；bool 表示检查时是否存在。
+// 检查与写入原子执行，但返回值在解锁后读取，并发 Set 时可能读到后续写入的值。
 // 此方法不会触发 Loader。
 func (c *Cache[K, V]) GetOrSet(key K, value V) (V, bool) {
 	c.cache.DeleteExpired()
@@ -89,7 +90,8 @@ func (c *Cache[K, V]) GetOrSet(key K, value V) (V, bool) {
 	return item.Value(), existed
 }
 
-// GetOrSetFunc 返回已有值，或在未命中时调用 fn 生成并写入值；bool 表示写入前是否存在。
+// GetOrSetFunc 返回已有值，或在未命中时调用 fn 生成并写入值；bool 表示检查时是否存在。
+// 检查与写入原子执行，但返回值在解锁后读取，并发 Set 时可能读到后续写入的值。
 // fn 在缓存锁内执行，须快速完成且不可调用同一缓存的方法；此方法不会触发 Loader。
 func (c *Cache[K, V]) GetOrSetFunc(key K, fn func() V) (V, bool) {
 	c.cache.DeleteExpired()
