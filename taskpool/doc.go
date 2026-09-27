@@ -1,4 +1,4 @@
-// Package taskpool 提供按实例创建的本地异步任务池，零第三方依赖。
+// Package taskpool 提供本地异步任务池，支持按实例使用或注册为进程级默认池，零第三方依赖。
 // 设计与边界见 docs/taskpool-design.md。
 //
 // 初始化时设置等待队列容量、消费者区间和失败重试次数；
@@ -7,7 +7,7 @@
 // SubmitTimeout 为 0 时默认 1 秒，IdleTimeout 为 0 时默认 5 分钟，
 // DrainTimeout 为 0 时默认 15 秒。
 //
-// 主协程可把系统信号转为停机 context，再创建任务池：
+// 主协程可把系统信号转为停机 context，再创建独立的任务池：
 //
 //	stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 //	defer stop()
@@ -22,7 +22,7 @@
 //	    return err
 //	}
 //
-// 业务入口直接提交任务。队列满时，SubmitTimeout 限制等待时间；
+// 业务入口直接向该实例提交任务。队列满时，SubmitTimeout 限制等待时间；
 // requestCtx 可以更早取消等待。stopCtx 取消时停止接收并开始排空；
 // 成功接收的任务使用任务池提供的 taskCtx 执行，不会因请求结束或
 // stopCtx 取消而立刻中断。
@@ -41,6 +41,27 @@
 //	if err := pool.Wait(); err != nil {
 //	    return err
 //	}
+//
+// 程序需要全局默认池时，可将上面的 New 调用改为 NewDefault；
+// 它创建并注册默认池，业务代码可直接调用包级 Submit，退出时可调用
+// 包级 Wait 或 Shutdown。New 仍可同时创建其他独立任务池，分别通过
+// 各自的 Submit、Wait、Shutdown 管理；全局入口只作用于默认池。
+//
+//	if _, err := taskpool.NewDefault(stopCtx, taskpool.Config{
+//	    MinWorkers: 2, MaxWorkers: 8, QueueSize: 256, MaxRetries: 3,
+//	}); err != nil {
+//	    return err
+//	}
+//	if err := taskpool.Submit(requestCtx, "send-notice", sendNotice); err != nil {
+//	    return err
+//	}
+//	<-stopCtx.Done()
+//	return taskpool.Wait()
+//
+// 未注册默认池时，全局 Submit、Wait、Shutdown 返回 ErrNoDefault。
+// Default 返回当前池或 nil；Swap 可替换并返回旧池，传入 nil 可清除注册。
+// SetDefault 和 Swap 均不会关闭旧池，调用方仍负责旧池的退出。
+// 对同一池，全局 Wait/Shutdown 与实例方法共用只能调用一次的约束。
 //
 // 使用 lifecycle.Stack 同时回收任务池和任务依赖的 client 时，
 // client 指应用创建、供任务使用且具有 Close() error 方法的资源，
