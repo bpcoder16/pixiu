@@ -1,6 +1,6 @@
 package logit
 
-// 内置日志字段统一在此声明，业务字段不得使用这些键。
+// 内置日志字段由编码器生成，调用方不得使用这些键。
 const (
 	levelKey  = "level"
 	tsKey     = "ts"

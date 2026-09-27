@@ -22,6 +22,14 @@
 // 任意级别可通过 LoggerFromContext(ctx).Enabled(level) 判断。
 // 无 ctx 的 logit.With 始终基于默认 Logger。上例 Output 的 callDepth=0 指向其直接调用者。
 //
+// 统一记录下游调用时，可用 DownstreamFields 生成四个标准字段：
+//
+//	fields := logit.DownstreamFields("httpcall", "wechat", 12*time.Millisecond,
+//	    map[string]any{"method": "POST", "status": 200})
+//	logit.Info(ctx, "downstream call", fields...)
+//
+// 四个标准字段名也可通过普通字段构造器直接写入。
+//
 // 构造专属实例(依赖注入 / 测试):
 //
 //	buf := &bytes.Buffer{}
