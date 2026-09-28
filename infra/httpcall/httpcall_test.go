@@ -210,6 +210,57 @@ func TestRequestDurationWithMutedResultLogs(t *testing.T) {
 	}
 }
 
+func TestOptLogRequestsKeepsDurationAndRestyDiagnostics(t *testing.T) {
+	buf := captureLogs(t)
+	client := httpcall.New("inventory",
+		httpcall.OptLogRequests(false),
+		httpcall.OptLogDetails(true),
+		httpcall.OptResty(func(r *resty.Client) {
+			r.SetRetryCount(1).SetRetryWaitTime(time.Millisecond).SetRetryMaxWaitTime(time.Millisecond)
+			r.SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				switch req.URL.Path {
+				case "/bad":
+					return response(req, http.StatusServiceUnavailable), nil
+				case "/fail":
+					return nil, errors.New("dial failed")
+				default:
+					return response(req, http.StatusOK), nil
+				}
+			}))
+		}),
+	)
+	ctx := logit.WithStart(context.Background())
+	if _, err := client.Request(ctx).Get("https://example.test/ok"); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Request(ctx).Get("https://example.test/bad")
+	if err != nil || resp.StatusCode() != http.StatusServiceUnavailable {
+		t.Fatalf("HTTP 错误状态应原样返回: %v, %v", resp, err)
+	}
+	stderr := captureStderr(t, func() {
+		_, err = client.Request(ctx).Get("https://example.test/fail")
+	})
+	if err == nil {
+		t.Fatal("传输失败应返回给调用方")
+	}
+	if !strings.Contains(stderr, `httpcall: name="inventory" level=WARN`) {
+		t.Fatalf("关闭请求日志不应关闭 Resty 诊断: %q", stderr)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("关闭请求日志后不应输出 HttpCall 结果: %q", buf.String())
+	}
+	logit.InfoDuration(ctx, "request done")
+	logs := records(t, buf)
+	if len(logs) != 1 || logs[0]["msg"] != "request done" {
+		t.Fatalf("请求结束应只输出耗时汇总: %v", logs)
+	}
+	for _, key := range []string{"httpcall_1_duration_ms", "httpcall_2_duration_ms", "httpcall_3_duration_ms"} {
+		if _, ok := logs[0][key].(float64); !ok {
+			t.Errorf("缺少下游耗时 %q: %v", key, logs[0])
+		}
+	}
+}
+
 func TestLogDetailsCapturesRequestAndResponse(t *testing.T) {
 	buf := captureLogs(t)
 	requestBody := `{"secret":"request"}`
@@ -409,7 +460,7 @@ func TestRequestUsesContextLoggerName(t *testing.T) {
 		t.Fatalf("命名 Logger 的请求记录: %v", namedLogs)
 	}
 	caller, _ := namedLogs[0]["caller"].(string)
-	if !strings.Contains(caller, "httpcall.go") || strings.Contains(caller, "logit/global.go") {
+	if !strings.Contains(caller, "log.go") || strings.Contains(caller, "logit/global.go") {
 		t.Fatalf("HTTP 日志 caller = %q", caller)
 	}
 	if defaultBuf.Len() != 0 {
