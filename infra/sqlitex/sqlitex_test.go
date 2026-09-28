@@ -86,6 +86,96 @@ func TestNewRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestNewRejectsDuplicateMemoryDSNParameters(t *testing.T) {
+	for _, dsn := range []string{
+		"file:sqlitex-duplicate-mode?mode=rwc&mode=memory&cache=shared",
+		"file:sqlitex-duplicate-cache?mode=memory&cache=shared&cache=private",
+		"file:sqlitex-duplicate-same?mode=memory&mode=memory&cache=shared",
+		"file:sqlitex-duplicate-vfs?vfs=unix&vfs=memdb",
+	} {
+		client, err := New(context.Background(), Config{
+			Name: "local",
+			DSN:  dsn,
+			Pool: Pool{
+				MaxOpenConns:    2,
+				ConnMaxLifetime: time.Millisecond,
+			},
+		})
+		if client != nil {
+			_ = client.Close()
+		}
+		if err == nil || !strings.Contains(err.Error(), "duplicate DSN parameter") {
+			t.Fatalf("重复内存库参数未被拒绝: dsn=%q err=%v", dsn, err)
+		}
+	}
+}
+
+func TestNewProtectsMemDB(t *testing.T) {
+	for _, tc := range []struct {
+		cfg  Config
+		want string
+	}{
+		{
+			cfg: Config{
+				Name: "shared",
+				DSN:  "file:/sqlitex-test-memdb-shared?vfs=memdb",
+				Pool: Pool{ConnMaxLifetime: time.Millisecond},
+			},
+			want: "in-memory database cannot recycle connections",
+		},
+		{
+			cfg: Config{
+				Name: "private",
+				DSN:  "file:sqlitex-test-memdb-private?vfs=memdb",
+				Pool: Pool{MaxOpenConns: 2},
+			},
+			want: "private in-memory database requires one open connection",
+		},
+	} {
+		client, err := New(context.Background(), tc.cfg)
+		if client != nil {
+			_ = client.Close()
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("memdb 危险池配置未被拒绝: dsn=%q err=%v", tc.cfg.DSN, err)
+		}
+	}
+}
+
+func TestSharedMemDBUsesSameDatabase(t *testing.T) {
+	ctx := context.Background()
+	client, err := New(ctx, Config{
+		Name: "shared",
+		DSN:  "file:/sqlitex-test-memdb-allow?vfs=memdb",
+		Pool: Pool{MaxOpenConns: 2, MaxIdleConns: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	pool, err := client.DB(ctx).DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := pool.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := pool.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if _, err := first.ExecContext(ctx, "CREATE TABLE shared_t(v INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := second.QueryRowContext(ctx, "SELECT COUNT(*) FROM shared_t").Scan(&count); err != nil {
+		t.Fatalf("具名 memdb 连接未共享数据: %v", err)
+	}
+}
+
 func TestFilePoolLifetime(t *testing.T) {
 	client, err := New(context.Background(), Config{
 		Name: "local",

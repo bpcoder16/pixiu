@@ -46,7 +46,7 @@ type Pool = gormcore.PoolConfig
 type Config struct {
 	// Name 是必填的逻辑库名，用作日志中的下游标识。
 	Name string
-	// DSN 是必填的 SQLite 文件路径或驱动连接字符串；显式配置项优先于同名 DSN 参数。
+	// DSN 是必填的 SQLite 文件路径或驱动连接字符串；显式配置项优先于同名 DSN 参数，重复的 mode、cache、vfs 参数无效。
 	DSN string
 	// JournalMode 设置 SQLite 日志模式；空值沿用 DSN 或驱动默认值。
 	JournalMode JournalMode
@@ -95,7 +95,10 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	isMemory, isPrivate := classifyMemoryDSN(cfg.DSN)
+	isMemory, isPrivate, err := classifyMemoryDSN(cfg.DSN)
+	if err != nil {
+		return nil, err
+	}
 	if isMemory && (poolCfg.ConnMaxLifetime > 0 || poolCfg.ConnMaxIdleTime > 0) {
 		return nil, errors.New("sqlitex: in-memory database cannot recycle connections")
 	}
@@ -183,22 +186,32 @@ func normalizePool(pool Pool) (Pool, error) {
 }
 
 // 私有内存库的每条物理连接各自持有一份数据；所有内存库都会在最后一条连接关闭后消失。
-func classifyMemoryDSN(dsn string) (memory, private bool) {
+func classifyMemoryDSN(dsn string) (memory, private bool, err error) {
 	name, rawQuery, _ := strings.Cut(dsn, "?")
-	if name == ":memory:" {
-		return true, true
-	}
-	if name != "file::memory:" && !strings.HasPrefix(name, "file:") {
-		return false, false
-	}
 	query, err := url.ParseQuery(rawQuery)
 	if err != nil {
-		return false, false
+		return false, false, fmt.Errorf("sqlitex: invalid DSN parameters: %w", err)
+	}
+	// Go 和 SQLite 对重复 URI 参数的取值顺序不同，必须在内存库校验前拒绝。
+	for _, key := range []string{"mode", "cache", "vfs"} {
+		if len(query[key]) > 1 {
+			return false, false, fmt.Errorf("sqlitex: duplicate DSN parameter %q", key)
+		}
+	}
+	if name == ":memory:" {
+		return true, true, nil
+	}
+	if name != "file::memory:" && !strings.HasPrefix(name, "file:") {
+		return false, false, nil
+	}
+	if query.Get("vfs") == "memdb" {
+		// memdb VFS 的名称以 / 开头时，物理连接共享同一内存库。
+		return true, !strings.HasPrefix(strings.TrimPrefix(name, "file:"), "/"), nil
 	}
 	if name == "file::memory:" || query.Get("mode") == "memory" {
-		return true, query.Get("cache") != "shared"
+		return true, query.Get("cache") != "shared", nil
 	}
-	return false, false
+	return false, false, nil
 }
 
 // DB 返回绑定 ctx 的 GORM 会话。
