@@ -90,8 +90,10 @@ func TestNamedRegistryAndLifecycleClose(t *testing.T) {
 }
 
 func TestNewNamedFailureDoesNotReserveName(t *testing.T) {
-	if _, err := NewNamed(context.Background(), Config{}); err == nil {
-		t.Fatal("空名称被接受")
+	for _, name := range []string{"", " \t"} {
+		if client, err := NewNamed(context.Background(), Config{Name: name}); client != nil || err == nil || err.Error() != "mysqlx: empty database name" {
+			t.Fatalf("空名称 %q: client=%v err=%v", name, client, err)
+		}
 	}
 	name := t.Name()
 	if _, err := NewNamed(context.Background(), Config{Name: name}); err == nil {

@@ -79,7 +79,7 @@ func TestGORMDiagnostics(t *testing.T) {
 	}
 }
 
-func TestGORMDiagnosticCaller(t *testing.T) {
+func TestGORMCaller(t *testing.T) {
 	buf := &bytes.Buffer{}
 	l := logit.MustNew(logit.OptEncoder(logit.DefaultJSONEncoder), logit.OptWriter(logit.NewWriter(buf)), logit.OptCaller(true))
 	old := logit.Default()
@@ -89,21 +89,28 @@ func TestGORMDiagnosticCaller(t *testing.T) {
 		_ = logit.Close(l)
 	})
 
-	diagnostic := newTraceLogger(Config{Name: "orders"}, "master", "master")
+	diagnostic := newTraceLogger(Config{
+		Name:          "orders",
+		SlowThreshold: time.Hour,
+		LogSQL:        true,
+	}, "master", "master")
 	ctx := context.Background()
 	diagnostic.Info(ctx, "info")
 	diagnostic.Warn(ctx, "warn")
 	diagnostic.Error(ctx, "error")
+	diagnostic.Trace(ctx, time.Now(), func() (string, int64) {
+		return "SELECT 1", 1
+	}, nil)
 
 	records := parseRecords(t, buf)
-	if len(records) != 3 {
-		t.Fatalf("GORM 诊断日志数=%d, want 3", len(records))
+	if len(records) != 4 {
+		t.Fatalf("GORM 日志数=%d, want 4", len(records))
 	}
 	seen := make(map[string]bool, len(records))
 	for _, record := range records {
 		caller, ok := record["caller"].(string)
 		if !ok || !strings.HasPrefix(caller, "infra/mysqlx/log.go:") || seen[caller] {
-			t.Fatalf("诊断日志 caller 未区分 Info/Warn/Error: %v", records)
+			t.Fatalf("GORM 日志 caller 未指向各级别及 Trace 入口: %v", records)
 		}
 		seen[caller] = true
 	}
@@ -251,6 +258,15 @@ func TestNewRejectsInvalidConfiguration(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), "secret") {
 			t.Fatalf("配置错误泄露密码: %v", err)
+		}
+	}
+}
+
+func TestNewRejectsWhitespaceName(t *testing.T) {
+	for _, name := range []string{"", " \t"} {
+		client, err := New(context.Background(), Config{Name: name})
+		if client != nil || err == nil || err.Error() != "mysqlx: empty database name" {
+			t.Fatalf("空名称 %q: client=%v err=%v", name, client, err)
 		}
 	}
 }
@@ -426,21 +442,21 @@ func TestSlaveFallbackAndConcurrentSelection(t *testing.T) {
 
 	client.slaves = []*gorm.DB{slaveA, slaveB}
 	const count = 100
-	names := make(chan string, count)
+	loggers := make(chan logger.Interface, count)
 	var workers sync.WaitGroup
 	for range count {
 		workers.Go(func() {
 			db := client.SlaveDB(ctx)
-			names <- db.Config.Logger.(*traceLogger).endpoint
+			loggers <- db.Config.Logger
 		})
 	}
 	workers.Wait()
-	close(names)
-	seen := map[string]int{}
-	for name := range names {
-		seen[name]++
+	close(loggers)
+	seen := map[logger.Interface]int{}
+	for selected := range loggers {
+		seen[selected]++
 	}
-	if seen["slave-1"] != count/2 || seen["slave-2"] != count/2 {
+	if seen[slaveA.Config.Logger] != count/2 || seen[slaveB.Config.Logger] != count/2 {
 		t.Fatalf("并发轮询分布错误: %v", seen)
 	}
 }

@@ -1,4 +1,4 @@
-package mysqlx
+package sqlitex
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// traceLogger 为 MySQL 提供 GORM Logger 入口和主从端点标识。
+// traceLogger 为 SQLite 提供 GORM Logger 入口，不附加端点标识。
 type traceLogger struct {
 	*gormcore.Logger
 }
@@ -18,15 +18,11 @@ type traceLogger struct {
 var _ logger.Interface = (*traceLogger)(nil)
 var _ gorm.ParamsFilter = (*traceLogger)(nil)
 
-func newTraceLogger(cfg Config, endpointType, endpoint string) *traceLogger {
+func newTraceLogger(cfg Config) *traceLogger {
 	return &traceLogger{Logger: gormcore.New(gormcore.Config{
-		Message:        "MySQL",
+		Message:        "SQLite",
 		Name:           cfg.Name,
-		DurationPrefix: "mysql",
-		Endpoint: &gormcore.Endpoint{
-			Type: endpointType,
-			Name: endpoint,
-		},
+		DurationPrefix: "sqlite",
 		SlowThreshold:  cfg.SlowThreshold,
 		LogSQL:         cfg.LogSQL,
 		InterpolateSQL: cfg.InterpolateSQL,

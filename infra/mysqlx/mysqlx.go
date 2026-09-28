@@ -7,28 +7,20 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	gormcore "github.com/bpcoder16/pixiu/infra/internal/gorm"
 	mysqldriver "github.com/go-sql-driver/mysql"
 	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
-// Pool 配置单个端点的连接池。零值采用模块默认值，负值无效。
-type Pool struct {
-	// MaxOpenConns 限制单个端点同时打开的连接数，零值默认 100；连接全部占用时，
-	// 后续操作等待连接归还或请求 context 结束。
-	MaxOpenConns int
-	// MaxIdleConns 限制单个端点保留的空闲连接数，零值取 10 与生效后的
-	// MaxOpenConns 的较小值；显式配置不能超过 MaxOpenConns。
-	MaxIdleConns int
-	// ConnMaxLifetime 限制连接可被复用的最长时间，零值默认 3 分钟。
-	ConnMaxLifetime time.Duration
-	// ConnMaxIdleTime 限制连接的空闲时间，零值默认 1 分钟。
-	ConnMaxIdleTime time.Duration
-}
+// Pool 配置单个端点的连接池。零值分别采用 100、min(10, MaxOpenConns)、
+// 3 分钟和 1 分钟；负值无效，空闲数不能超过打开数。
+type Pool = gormcore.PoolConfig
 
 // Endpoint 表示一个主库或从库的连接配置。
 type Endpoint struct {
@@ -97,7 +89,7 @@ func New(ctx context.Context, cfg Config) (client *Client, err error) {
 	if ctx == nil {
 		return nil, errors.New("mysqlx: nil context")
 	}
-	if cfg.Name == "" {
+	if strings.TrimSpace(cfg.Name) == "" {
 		return nil, errors.New("mysqlx: empty database name")
 	}
 	if cfg.SlowThreshold < 0 {
@@ -207,25 +199,16 @@ func sessionTimeZoneSQLValue(zone string) (string, error) {
 }
 
 func normalizePool(pool Pool) (Pool, error) {
-	if pool.MaxOpenConns < 0 || pool.MaxIdleConns < 0 || pool.ConnMaxLifetime < 0 || pool.ConnMaxIdleTime < 0 {
-		return Pool{}, errors.New("negative pool setting")
+	normalized, err := gormcore.NormalizePool(pool, gormcore.PoolConfig{
+		MaxOpenConns:    100,
+		MaxIdleConns:    10,
+		ConnMaxLifetime: 3 * time.Minute,
+		ConnMaxIdleTime: time.Minute,
+	})
+	if err != nil {
+		return Pool{}, err
 	}
-	if pool.MaxOpenConns == 0 {
-		pool.MaxOpenConns = 100
-	}
-	if pool.MaxIdleConns == 0 {
-		pool.MaxIdleConns = min(10, pool.MaxOpenConns)
-	}
-	if pool.MaxIdleConns > pool.MaxOpenConns {
-		return Pool{}, errors.New("max idle connections exceed max open connections")
-	}
-	if pool.ConnMaxLifetime == 0 {
-		pool.ConnMaxLifetime = 3 * time.Minute
-	}
-	if pool.ConnMaxIdleTime == 0 {
-		pool.ConnMaxIdleTime = time.Minute
-	}
-	return pool, nil
+	return normalized, nil
 }
 
 func (c *Client) open(ctx context.Context, cfg Config, prepared preparedEndpoint, endpointType string) (*gorm.DB, error) {
@@ -234,26 +217,17 @@ func (c *Client) open(ctx context.Context, cfg Config, prepared preparedEndpoint
 		return nil, fmt.Errorf("mysqlx: endpoint %q has invalid driver settings", prepared.name)
 	}
 	sqlDB := sql.OpenDB(connector)
-	sqlDB.SetMaxOpenConns(prepared.pool.MaxOpenConns)
-	sqlDB.SetMaxIdleConns(prepared.pool.MaxIdleConns)
-	sqlDB.SetConnMaxLifetime(prepared.pool.ConnMaxLifetime)
-	sqlDB.SetConnMaxIdleTime(prepared.pool.ConnMaxIdleTime)
-	if err := sqlDB.PingContext(ctx); err != nil {
-		_ = sqlDB.Close()
+	if err := gormcore.ConfigureAndPing(ctx, sqlDB, prepared.pool); err != nil {
 		return nil, fmt.Errorf("mysqlx: ping endpoint %q: %w", prepared.name, err)
 	}
 
 	// GORM 的版本探测使用 Background，不受 New 的 ctx 截止时间约束。
-	db, err := gorm.Open(gormmysql.New(gormmysql.Config{
+	db, err := gormcore.Open(sqlDB, gormmysql.New(gormmysql.Config{
 		Conn:                      sqlDB,
 		DSNConfig:                 prepared.driver,
 		SkipInitializeWithVersion: false,
-	}), &gorm.Config{
-		DisableAutomaticPing: true,
-		Logger:               newTraceLogger(cfg, endpointType, prepared.name),
-	})
+	}), newTraceLogger(cfg, endpointType, prepared.name))
 	if err != nil {
-		_ = sqlDB.Close()
 		return nil, fmt.Errorf("mysqlx: initialize endpoint %q: %w", prepared.name, err)
 	}
 	c.pools = append(c.pools, sqlDB)
