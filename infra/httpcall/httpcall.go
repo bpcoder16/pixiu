@@ -71,7 +71,8 @@ func New(name string, opts ...Option) *Client {
 	return c
 }
 
-// Resty 返回底层客户端；新代码可通过 OptResty 在 New 内完成配置。
+// Resty 返回底层客户端；自定义事件回调应通过 OptResty 在 New 内注册。
+// New 后追加事件回调不保证每次调用只记录一条结果日志。
 func (c *Client) Resty() *resty.Client { return c.resty }
 
 // Request 创建带调用方 context 的 Resty 请求。业务使用返回值的 Get/Post/Put 等方法。

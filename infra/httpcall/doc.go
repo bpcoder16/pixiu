@@ -49,7 +49,8 @@
 // SetRetryMaxWaitTime 和 AddRetryCondition 配置重试次数、退避和条件。
 // OptResty 中的 SetTimeout(0) 可关闭客户端级上限，此时应通过请求 context 设置截止时间。
 // 超时参数遵循 Resty 自身语义。OptResty 可在 New 时配置认证、重试和传输器等底层参数；
-// nil 回调会 panic。
+// nil 回调会 panic。自定义 Resty 事件回调也应在 OptResty 中注册；New 后通过
+// Resty() 追加回调，若回调 panic，可能使同一次调用产生两条结果日志。
 // 公共认证和请求头可在 OptResty 中通过 SetAuthToken、SetHeader 设置；
 // 仅针对单次调用的值应设置在 Request(ctx) 返回的请求上。
 // 请求 context 可设置更短的截止时间，但不能放宽单次尝试的上限。

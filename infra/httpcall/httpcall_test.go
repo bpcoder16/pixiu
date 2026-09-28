@@ -543,6 +543,46 @@ func TestInvalidRequestAndPanicAreLogged(t *testing.T) {
 	}
 }
 
+func TestOptRestySuccessHookPanicLogsOnce(t *testing.T) {
+	buf := captureLogs(t)
+	client := httpcall.New("inventory", httpcall.OptResty(func(r *resty.Client) {
+		r.SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return response(req, http.StatusOK), nil
+		}))
+		r.OnSuccess(func(*resty.Client, *resty.Response) {
+			panic("callback failed")
+		})
+	}))
+	ctx := logit.WithStart(context.Background())
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_, _ = client.Request(ctx).Get("https://example.test/items")
+	}()
+	if recovered != "callback failed" {
+		t.Fatalf("回调 panic 未传给调用方: %v", recovered)
+	}
+
+	logs := records(t, buf)
+	if len(logs) != 1 || logs[0]["level"] != "ERROR" {
+		t.Fatalf("回调 panic 应只记录一条 Error: %v", logs)
+	}
+	if errText, _ := downstreamDetails(t, logs[0])["err"].(string); !strings.Contains(errText, "callback failed") {
+		t.Fatalf("Error 未包含回调 panic: %v", logs[0])
+	}
+	logit.InfoDuration(ctx, "request done")
+	logs = records(t, buf)
+	if len(logs) != 2 {
+		t.Fatalf("应仅增加一条耗时汇总日志: %v", logs)
+	}
+	if _, ok := logs[1]["httpcall_1_duration_ms"]; !ok {
+		t.Fatalf("缺少唯一的 HTTP 下游耗时: %v", logs[1])
+	}
+	if _, ok := logs[1]["httpcall_2_duration_ms"]; ok {
+		t.Fatalf("回调 panic 导致同一次调用重复计时: %v", logs[1])
+	}
+}
+
 func TestRequestContextControlsTimeoutWithinClientMax(t *testing.T) {
 	_ = captureLogs(t)
 	client := httpcall.New("inventory")
