@@ -2,10 +2,12 @@ package mysqlx
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	gormcore "github.com/bpcoder16/pixiu/infra/internal/gorm"
 	"github.com/bpcoder16/pixiu/logit"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -30,7 +32,17 @@ func newTraceLogger(cfg Config, endpointType, endpoint string) *traceLogger {
 		SlowThreshold:  cfg.SlowThreshold,
 		LogSQL:         cfg.LogSQL,
 		InterpolateSQL: cfg.InterpolateSQL,
+		ErrorDetails:   addMySQLErrorDetails,
 	})}
+}
+
+func addMySQLErrorDetails(err error, details map[string]any) {
+	if mysqlErr, ok := errors.AsType[*mysqldriver.MySQLError](err); ok {
+		details["mysql_errno"] = mysqlErr.Number
+		if mysqlErr.SQLState != [5]byte{} {
+			details["sqlstate"] = string(mysqlErr.SQLState[:])
+		}
+	}
 }
 
 func (l *traceLogger) LogMode(level logger.LogLevel) logger.Interface {

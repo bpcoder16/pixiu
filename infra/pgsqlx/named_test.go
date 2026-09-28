@@ -1,4 +1,4 @@
-package mysqlx
+package pgsqlx
 
 import (
 	"context"
@@ -9,16 +9,17 @@ import (
 
 	"github.com/bpcoder16/pixiu/infra/internal/named"
 	"github.com/bpcoder16/pixiu/lifecycle"
-	mysqldriver "github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 func testNamedClient(t *testing.T) (*Client, *sql.DB) {
 	t.Helper()
-	connector, err := mysqldriver.NewConnector(mysqldriver.NewConfig())
+	config, err := pgx.ParseConfig("postgres://reader@localhost/orders?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool := sql.OpenDB(connector)
+	pool := stdlib.OpenDB(*config)
 	t.Cleanup(func() { _ = pool.Close() })
 	return testClusterClient(t, nil, pool), pool
 }
@@ -34,7 +35,7 @@ func assertNamedPanic(t *testing.T, want string, lookup func()) {
 }
 
 func TestNamedRegistryAndLifecycleClose(t *testing.T) {
-	registry := named.New[*Client]("mysqlx")
+	registry := named.New[*Client]("pgsqlx")
 	orders, ordersPool := testNamedClient(t)
 	users, usersPool := testNamedClient(t)
 	for name, client := range map[string]*Client{"orders": orders, "users": users} {
@@ -55,7 +56,7 @@ func TestNamedRegistryAndLifecycleClose(t *testing.T) {
 	if got := registry.MustGet("orders"); got != orders {
 		t.Fatalf("重复名称改变已有客户端: got=%p", got)
 	}
-	assertNamedPanic(t, `mysqlx: client "missing" is not registered`, func() {
+	assertNamedPanic(t, `pgsqlx: client "missing" is not registered`, func() {
 		registry.MustGet("missing")
 	})
 
@@ -79,7 +80,7 @@ func TestNamedRegistryAndLifecycleClose(t *testing.T) {
 	if err := registry.CloseAll(); err != nil {
 		t.Fatalf("重复关闭: %v", err)
 	}
-	assertNamedPanic(t, "mysqlx: named clients closed", func() {
+	assertNamedPanic(t, "pgsqlx: named clients closed", func() {
 		registry.MustGet("orders")
 	})
 	if _, err := registry.Create("new", func() (*Client, error) {
@@ -90,14 +91,17 @@ func TestNamedRegistryAndLifecycleClose(t *testing.T) {
 }
 
 func TestNewNamedFailureDoesNotReserveName(t *testing.T) {
-	for _, name := range []string{"", " \t"} {
-		if client, err := NewNamed(context.Background(), Config{Name: name}); client != nil || err == nil || err.Error() != "mysqlx: empty database name" {
-			t.Fatalf("空名称 %q: client=%v err=%v", name, client, err)
-		}
+	if _, err := NewNamed(context.Background(), Config{}); err == nil {
+		t.Fatal("空名称被接受")
+	}
+	if _, err := NewNamed(context.Background(), Config{Name: " \t "}); err == nil || !strings.Contains(err.Error(), "empty database name") {
+		t.Fatalf("全空白名称被接受: %v", err)
 	}
 	name := t.Name()
 	if _, err := NewNamed(context.Background(), Config{Name: name}); err == nil {
 		t.Fatal("无效端点配置被接受")
 	}
-	assertNamedPanic(t, fmt.Sprintf("mysqlx: client %q is not registered", name), func() { Named(name) })
+	assertNamedPanic(t, fmt.Sprintf("pgsqlx: client %q is not registered", name), func() {
+		Named(name)
+	})
 }

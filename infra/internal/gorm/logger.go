@@ -24,6 +24,8 @@ type Config struct {
 	SlowThreshold  time.Duration
 	LogSQL         bool
 	InterpolateSQL bool
+	// ErrorDetails 在查询错误日志写入前补充驱动特有字段。
+	ErrorDetails func(error, map[string]any)
 }
 
 // Logger 处理 GORM 查询与诊断日志；数据库模块实现 GORM Logger 入口。
@@ -35,6 +37,7 @@ type Logger struct {
 	slowThreshold  time.Duration
 	logSQL         bool
 	interpolateSQL bool
+	errorDetails   func(error, map[string]any)
 	level          logger.LogLevel
 }
 
@@ -47,6 +50,7 @@ func New(cfg Config) *Logger {
 		slowThreshold:  cfg.SlowThreshold,
 		logSQL:         cfg.LogSQL,
 		interpolateSQL: cfg.InterpolateSQL,
+		errorDetails:   cfg.ErrorDetails,
 		level:          logger.Info,
 	}
 	if cfg.Endpoint != nil {
@@ -113,6 +117,9 @@ func (l *Logger) LogTrace(ctx context.Context, begin time.Time, fc func() (strin
 	l.addEndpoint(details)
 	if err != nil {
 		details["err"] = err.Error()
+		if l.errorDetails != nil {
+			l.errorDetails(err, details)
+		}
 	}
 	fields := logit.DownstreamFields(l.message, l.name, elapsed, details)
 	logit.Output(ctx, level, 1, l.message, fields...)

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/logit"
+	"github.com/mattn/go-sqlite3"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -550,6 +552,35 @@ func TestTracePolicyDurationAndContext(t *testing.T) {
 	}
 }
 
+func TestTraceSQLiteErrorDetails(t *testing.T) {
+	buf, ctx := captureRecords(t)
+	l := newTraceLogger(Config{Name: "local"})
+	query := func() (string, int64) {
+		return "INSERT INTO records VALUES (?)", 0
+	}
+	l.Trace(ctx, time.Now(), query, fmt.Errorf("insert: %w", sqlite3.Error{
+		Code:         sqlite3.ErrConstraint,
+		ExtendedCode: sqlite3.ErrConstraintUnique,
+	}))
+	l.Trace(ctx, time.Now(), query, gorm.ErrRecordNotFound)
+	records := parseRecords(t, buf)
+	if len(records) != 2 {
+		t.Fatalf("错误日志数=%d, want 2: %v", len(records), records)
+	}
+	first := records[0][logit.DownstreamDetailsKey].(map[string]any)
+	if first["sqlite_code"] != float64(sqlite3.ErrConstraint) ||
+		first["sqlite_extended_code"] != float64(sqlite3.ErrConstraintUnique) {
+		t.Fatalf("SQLite 错误码日志错误: %v", first)
+	}
+	second := records[1][logit.DownstreamDetailsKey].(map[string]any)
+	if _, ok := second["sqlite_code"]; ok {
+		t.Fatalf("非驱动错误不应包含 SQLite 错误码: %v", second)
+	}
+	if _, ok := second["sqlite_extended_code"]; ok {
+		t.Fatalf("非驱动错误不应包含 SQLite 扩展错误码: %v", second)
+	}
+}
+
 func TestGORMDiagnosticsAndLogMode(t *testing.T) {
 	buf, ctx := captureRecords(t)
 	l := newTraceLogger(Config{Name: "local"})
@@ -602,6 +633,22 @@ func TestRealGORMQueryLoggingAndInterpolation(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "hidden-secret") {
 		t.Fatalf("默认插值泄露参数: %s", buf.String())
+	}
+	if err := client.DB(ctx).Create(&testRecord{ID: 1, Token: "first"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	buf.Reset()
+	if err := client.DB(ctx).Create(&testRecord{ID: 1, Token: "duplicate"}).Error; err == nil {
+		t.Fatal("重复主键写入未返回错误")
+	}
+	records = parseRecords(t, buf)
+	if len(records) != 1 || records[0]["level"] != "ERROR" {
+		t.Fatalf("重复主键错误日志不正确: %v", records)
+	}
+	details = records[0][logit.DownstreamDetailsKey].(map[string]any)
+	if details["sqlite_code"] != float64(sqlite3.ErrConstraint) ||
+		details["sqlite_extended_code"] != float64(sqlite3.ErrConstraintPrimaryKey) {
+		t.Fatalf("真实 SQLite 查询缺少错误码: %v", details)
 	}
 	buf.Reset()
 	interpolated, err := New(ctx, Config{

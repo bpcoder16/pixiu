@@ -6,17 +6,34 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	gormcore "github.com/bpcoder16/pixiu/infra/internal/gorm"
 	"github.com/bpcoder16/pixiu/logit"
 	mysqldriver "github.com/go-sql-driver/mysql"
 	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func testClusterClient(t *testing.T, master *gorm.DB, masterPool *sql.DB, slaves ...*gorm.DB) *Client {
+	t.Helper()
+	client := &Client{}
+	err := gormcore.BuildCluster(context.Background(), &client.cluster, master, slaves, func(_ context.Context, db *gorm.DB, role string) (*gorm.DB, *sql.DB, error) {
+		if role == "master" {
+			return db, masterPool, nil
+		}
+		return db, nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
 
 func captureRecords(t *testing.T) (*bytes.Buffer, context.Context) {
 	t.Helper()
@@ -185,6 +202,44 @@ func TestTracePolicyAndContext(t *testing.T) {
 	}
 	if details := records[2][logit.DownstreamDetailsKey].(map[string]any); details["err"] != gorm.ErrRecordNotFound.Error() {
 		t.Fatalf("记录不存在未按错误输出: %v", details)
+	}
+}
+
+func TestTraceMySQLErrorDetails(t *testing.T) {
+	buf, ctx := captureRecords(t)
+	l := newTraceLogger(Config{Name: "orders"}, "master", "master")
+	query := func() (string, int64) {
+		return "INSERT INTO orders VALUES (?)", 0
+	}
+	l.Trace(ctx, time.Now(), query, fmt.Errorf("insert: %w", &mysqldriver.MySQLError{
+		Number:   1062,
+		SQLState: [5]byte{'2', '3', '0', '0', '0'},
+		Message:  "duplicate key",
+	}))
+	l.Trace(ctx, time.Now(), query, &mysqldriver.MySQLError{Number: 1045, Message: "access denied"})
+	l.Trace(ctx, time.Now(), query, gorm.ErrRecordNotFound)
+	records := parseRecords(t, buf)
+	if len(records) != 3 {
+		t.Fatalf("错误日志数=%d, want 3: %v", len(records), records)
+	}
+	first := records[0][logit.DownstreamDetailsKey].(map[string]any)
+	if first["mysql_errno"] != float64(1062) || first["sqlstate"] != "23000" ||
+		!strings.Contains(first["err"].(string), "duplicate key") {
+		t.Fatalf("MySQL 错误码日志错误: %v", first)
+	}
+	second := records[1][logit.DownstreamDetailsKey].(map[string]any)
+	if second["mysql_errno"] != float64(1045) {
+		t.Fatalf("MySQL 错误编号缺失: %v", second)
+	}
+	if _, ok := second["sqlstate"]; ok {
+		t.Fatalf("空 SQLSTATE 不应输出: %v", second)
+	}
+	third := records[2][logit.DownstreamDetailsKey].(map[string]any)
+	if _, ok := third["mysql_errno"]; ok {
+		t.Fatalf("非驱动错误不应包含 MySQL 错误编号: %v", third)
+	}
+	if _, ok := third["sqlstate"]; ok {
+		t.Fatalf("非驱动错误不应包含 SQLSTATE: %v", third)
 	}
 }
 
@@ -379,7 +434,7 @@ func TestGORMTraceAndSlaveRouting(t *testing.T) {
 	master := newDryRunDB(t, newTraceLogger(Config{Name: "orders", SlowThreshold: time.Second, LogSQL: true}, "master", "master"))
 	slaveA := newDryRunDB(t, newTraceLogger(Config{Name: "orders", SlowThreshold: time.Second, LogSQL: true}, "slave", "slave-1"))
 	slaveB := newDryRunDB(t, newTraceLogger(Config{Name: "orders", SlowThreshold: time.Second, LogSQL: true}, "slave", "slave-2"))
-	client := &Client{master: master, slaves: []*gorm.DB{slaveA, slaveB}}
+	client := testClusterClient(t, master, nil, slaveA, slaveB)
 	for _, db := range []*gorm.DB{client.MasterDB(ctx), client.SlaveDB(ctx), client.SlaveDB(ctx), client.SlaveDB(ctx)} {
 		if err := db.Session(&gorm.Session{DryRun: true}).Where("token = ?", "hidden-secret").Find(&[]testRow{}).Error; err != nil {
 			t.Fatal(err)
@@ -435,12 +490,12 @@ func TestSlaveFallbackAndConcurrentSelection(t *testing.T) {
 	slaveA := newDryRunDB(t, newTraceLogger(Config{Name: "orders"}, "slave", "slave-1"))
 	slaveB := newDryRunDB(t, newTraceLogger(Config{Name: "orders"}, "slave", "slave-2"))
 	ctx := context.WithValue(context.Background(), testContextKey{}, "request")
-	client := &Client{master: master}
+	client := testClusterClient(t, master, nil)
 	if got := client.SlaveDB(ctx); got.Config.Logger != master.Config.Logger || got.Statement.Context != ctx {
 		t.Fatalf("无从库时没有使用主库或传递 context: %v", got)
 	}
 
-	client.slaves = []*gorm.DB{slaveA, slaveB}
+	client = testClusterClient(t, master, nil, slaveA, slaveB)
 	const count = 100
 	loggers := make(chan logger.Interface, count)
 	var workers sync.WaitGroup
@@ -469,7 +524,7 @@ func TestCloseIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	pool := sql.OpenDB(connector)
-	client := &Client{pools: []*sql.DB{pool}}
+	client := testClusterClient(t, nil, pool)
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}

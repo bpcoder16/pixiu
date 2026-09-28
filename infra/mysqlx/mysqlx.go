@@ -8,8 +8,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	gormcore "github.com/bpcoder16/pixiu/infra/internal/gorm"
@@ -70,12 +68,7 @@ type Config struct {
 
 // Client 持有一个主库及零个或多个从库的 GORM 连接池。
 type Client struct {
-	master    *gorm.DB
-	slaves    []*gorm.DB
-	pools     []*sql.DB
-	nextSlave atomic.Uint64
-	close     sync.Once
-	closeErr  error
+	cluster gormcore.Cluster
 }
 
 type preparedEndpoint struct {
@@ -111,22 +104,11 @@ func New(ctx context.Context, cfg Config) (client *Client, err error) {
 		}
 	}
 
-	c := &Client{slaves: make([]*gorm.DB, 0, len(slaves))}
-	defer func() {
-		if err != nil {
-			_ = c.Close()
-		}
-	}()
-	c.master, err = c.open(ctx, cfg, master, "master")
-	if err != nil {
+	c := &Client{}
+	if err := gormcore.BuildCluster(ctx, &c.cluster, master, slaves, func(ctx context.Context, endpoint preparedEndpoint, role string) (*gorm.DB, *sql.DB, error) {
+		return open(ctx, cfg, endpoint, role)
+	}); err != nil {
 		return nil, err
-	}
-	for _, slave := range slaves {
-		db, openErr := c.open(ctx, cfg, slave, "slave")
-		if openErr != nil {
-			return nil, openErr
-		}
-		c.slaves = append(c.slaves, db)
 	}
 	return c, nil
 }
@@ -211,14 +193,14 @@ func normalizePool(pool Pool) (Pool, error) {
 	return normalized, nil
 }
 
-func (c *Client) open(ctx context.Context, cfg Config, prepared preparedEndpoint, endpointType string) (*gorm.DB, error) {
+func open(ctx context.Context, cfg Config, prepared preparedEndpoint, endpointType string) (*gorm.DB, *sql.DB, error) {
 	connector, err := mysqldriver.NewConnector(prepared.driver)
 	if err != nil {
-		return nil, fmt.Errorf("mysqlx: endpoint %q has invalid driver settings", prepared.name)
+		return nil, nil, fmt.Errorf("mysqlx: endpoint %q has invalid driver settings", prepared.name)
 	}
 	sqlDB := sql.OpenDB(connector)
 	if err := gormcore.ConfigureAndPing(ctx, sqlDB, prepared.pool); err != nil {
-		return nil, fmt.Errorf("mysqlx: ping endpoint %q: %w", prepared.name, err)
+		return nil, nil, fmt.Errorf("mysqlx: ping endpoint %q: %w", prepared.name, err)
 	}
 
 	// GORM 的版本探测使用 Background，不受 New 的 ctx 截止时间约束。
@@ -228,10 +210,9 @@ func (c *Client) open(ctx context.Context, cfg Config, prepared preparedEndpoint
 		SkipInitializeWithVersion: false,
 	}), newTraceLogger(cfg, endpointType, prepared.name))
 	if err != nil {
-		return nil, fmt.Errorf("mysqlx: initialize endpoint %q: %w", prepared.name, err)
+		return nil, nil, fmt.Errorf("mysqlx: initialize endpoint %q: %w", prepared.name, err)
 	}
-	c.pools = append(c.pools, sqlDB)
-	return db, nil
+	return db, sqlDB, nil
 }
 
 // MasterDB 返回带 ctx 的主库会话。
@@ -239,7 +220,7 @@ func (c *Client) MasterDB(ctx context.Context) *gorm.DB {
 	if ctx == nil {
 		panic("mysqlx: nil context")
 	}
-	return c.master.WithContext(ctx)
+	return c.cluster.Master(ctx)
 }
 
 // SlaveDB 返回带 ctx 的从库会话；未配置从库时使用主库。
@@ -247,23 +228,10 @@ func (c *Client) SlaveDB(ctx context.Context) *gorm.DB {
 	if ctx == nil {
 		panic("mysqlx: nil context")
 	}
-	if len(c.slaves) == 0 {
-		return c.master.WithContext(ctx)
-	}
-	index := (c.nextSlave.Add(1) - 1) % uint64(len(c.slaves))
-	return c.slaves[index].WithContext(ctx)
+	return c.cluster.Slave(ctx)
 }
 
 // Close 关闭所有连接池；重复调用返回首次关闭结果。
 func (c *Client) Close() error {
-	c.close.Do(func() {
-		var errs []error
-		for _, pool := range c.pools {
-			if err := pool.Close(); err != nil {
-				errs = append(errs, err)
-			}
-		}
-		c.closeErr = errors.Join(errs...)
-	})
-	return c.closeErr
+	return c.cluster.Close()
 }

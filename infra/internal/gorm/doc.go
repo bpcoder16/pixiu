@@ -1,5 +1,5 @@
-// Package gorm 提供 infra 内部共用的 GORM 日志与连接池初始化能力。
-// 数据库模块负责提供 GORM Logger 入口、下游名称和可选端点信息。
+// Package gorm 提供 infra 内部共用的 GORM 日志、连接池初始化和主从路由能力。
+// 数据库模块负责提供 GORM Logger 入口、下游名称、端点信息及方言连接。
 // 例如模块内部可以创建不带端点的日志核心：
 //
 //	core := gorm.New(gorm.Config{
@@ -9,6 +9,16 @@
 //	    SlowThreshold:  200 * time.Millisecond,
 //	})
 //	_, _ = core.ParamsFilter(ctx, "SELECT ?", 1)
+//
+// 模块通过 BuildCluster 创建主从连接；应用停止查询后关闭：
+//
+//	var cluster gorm.Cluster
+//	if err := gorm.BuildCluster(ctx, &cluster, master, slaves, open); err != nil {
+//	    return err
+//	}
+//	defer cluster.Close()
+//	readDB := cluster.Slave(ctx)
+//	_ = readDB
 //
 // 上例需导入 time 和 github.com/bpcoder16/pixiu/infra/internal/gorm。
 package gorm
