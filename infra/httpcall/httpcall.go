@@ -13,6 +13,8 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
+const downstreamHTTPMessage = "HttpCall"
+
 type startKey struct{}
 
 // restyStderrLogger 保留 Resty 内部警告和错误，不输出调试日志。
@@ -107,6 +109,7 @@ func (*Client) markStart(req *resty.Request) {
 }
 
 func (c *Client) logSuccess(resp *resty.Response) {
+	duration := recordDuration(resp.Request)
 	ctx := resp.Request.Context()
 	level := logit.InfoLevel
 	if resp.StatusCode() >= 400 {
@@ -117,10 +120,11 @@ func (c *Client) logSuccess(resp *resty.Response) {
 	} else if !logit.InfoEnabled(ctx) {
 		return
 	}
-	c.log(resp.Request, level, resp, nil)
+	c.log(resp.Request, level, resp, nil, duration)
 }
 
 func (c *Client) logError(req *resty.Request, err error) {
+	duration := recordDuration(req)
 	if !logit.ErrorEnabled(req.Context()) {
 		return
 	}
@@ -128,15 +132,22 @@ func (c *Client) logError(req *resty.Request, err error) {
 	if responseError, ok := errors.AsType[*resty.ResponseError](err); ok {
 		resp = responseError.Response
 	}
-	c.log(req, logit.ErrorLevel, resp, err)
+	c.log(req, logit.ErrorLevel, resp, err, duration)
 }
 
-func (c *Client) log(req *resty.Request, level logit.Level, resp *resty.Response, err error) {
+// 结果日志被过滤时仍记录请求级耗时，供业务在结束时调用 InfoDuration 汇总。
+func recordDuration(req *resty.Request) time.Duration {
 	ctx := req.Context()
 	duration := time.Duration(0)
 	if started, ok := ctx.Value(startKey{}).(time.Time); ok {
 		duration = time.Since(started)
 	}
+	logit.AddDownstreamDurationAuto(ctx, "httpcall", duration)
+	return duration
+}
+
+func (c *Client) log(req *resty.Request, level logit.Level, resp *resty.Response, err error, duration time.Duration) {
+	ctx := req.Context()
 	status := 0
 	if resp != nil {
 		status = resp.StatusCode()
@@ -155,9 +166,9 @@ func (c *Client) log(req *resty.Request, level logit.Level, resp *resty.Response
 	if c.logDetails {
 		appendHTTPDetails(details, req, resp)
 	}
-	fields := logit.DownstreamFields("httpcall", c.name, duration, details)
+	fields := logit.DownstreamFields(downstreamHTTPMessage, c.name, duration, details)
 	// 跳过本方法和包级 Output 的栈帧，让 caller 指向 logSuccess/logError。
-	logit.Output(ctx, level, 1, "downstream http", fields...)
+	logit.Output(ctx, level, 1, downstreamHTTPMessage, fields...)
 }
 
 func appendHTTPDetails(details map[string]any, req *resty.Request, resp *resty.Response) {

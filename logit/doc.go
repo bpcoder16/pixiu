@@ -8,10 +8,13 @@
 //	logit.AddMeta(ctx, logit.Str("logId", logit.NewLogID())) // 按需添加链路 ID
 //	logit.AddField(ctx, logit.Str("uid", "42"))    // 请求级字段
 //	logit.Info(ctx, "user login", logit.Int("uid", 42))
-//	logit.AddDownstreamDuration(ctx, "mysql_1", 12*time.Millisecond) // 每次下游调用使用唯一名称
+//	logit.AddDownstreamDurationAuto(ctx, "mysql", 12*time.Millisecond) // 自动生成 mysql_1
 //	logit.InfoDuration(ctx, "request done")       // 自动追加 mysql_1、self 和 total 耗时
 //	svc := logit.With(logit.Str("mod", "Order")) // 模块级子 Logger
 //	svc.Error(ctx, "create failed", logit.Err(err))
+//
+// 基础功能模块可用 AddDownstreamDurationAuto 自动编号并记录下游耗时；ctx 没有
+// WithStart 时跳过，不要求未启用耗时统计的调用方额外初始化 context。
 //
 // 按 context 选择命名 Logger(未注册时回退默认 Logger)：
 //

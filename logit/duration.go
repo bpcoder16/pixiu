@@ -3,6 +3,7 @@ package logit
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ type durationState struct {
 	started    time.Time
 	mu         sync.RWMutex
 	downstream map[string]time.Duration
+	next       uint64
 }
 
 // WithStart 在 ctx 中记录首次调用的时间点；已有起点时原样返回。
@@ -36,21 +38,21 @@ func durationFromContext(ctx context.Context) *durationState {
 	return state
 }
 
-// AddDownstreamDuration 记录一次下游调用的耗时。name 在请求内须唯一；
-// 同一下游多次调用时由调用方提供不同名称。ctx 须先调用 WithStart。
-func AddDownstreamDuration(ctx context.Context, name string, duration time.Duration) {
+// AddDownstreamDurationAuto 自动为一次下游调用生成请求内唯一的 prefix_序号；
+// 空 prefix、self、total 会 panic；有效 prefix 在 ctx 没有 WithStart 时跳过。
+// 适合基础功能模块在不要求业务启用耗时统计时调用。
+func AddDownstreamDurationAuto(ctx context.Context, prefix string, duration time.Duration) {
+	if prefix == "" || prefix == "self" || prefix == "total" {
+		panic("logit: invalid downstream duration prefix " + prefix)
+	}
 	state := durationFromContext(ctx)
 	if state == nil {
-		panic("logit: context not initialized, call logit.WithStart first")
-	}
-	if name == "" || name == "self" || name == "total" {
-		panic("logit: invalid downstream duration name " + name)
+		return
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if _, exists := state.downstream[name]; exists {
-		panic("logit: duplicate downstream duration name " + name)
-	}
+	state.next++
+	name := prefix + "_" + strconv.FormatUint(state.next, 10)
 	state.downstream[name] = duration
 }
 

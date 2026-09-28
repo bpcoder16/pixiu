@@ -146,7 +146,10 @@ func TestRequestMethodsAndUnifiedLog(t *testing.T) {
 		if methods[i] != req.method || details["method"] != req.method {
 			t.Errorf("第 %d 次方法: HTTP=%q 日志=%v", i, methods[i], details["method"])
 		}
-		if log["level"] != "INFO" || log[logit.DownstreamTypeKey] != "httpcall" || log[logit.DownstreamIDKey] != "inventory" || details["status"] != float64(200) || log["trace"] != "trace-1" {
+		if log["msg"] != "HttpCall" {
+			t.Errorf("第 %d 条日志消息: %v", i, log["msg"])
+		}
+		if log["level"] != "INFO" || log[logit.DownstreamTypeKey] != "HttpCall" || log[logit.DownstreamIDKey] != "inventory" || details["status"] != float64(200) || log["trace"] != "trace-1" {
 			t.Errorf("第 %d 条日志: %v", i, log)
 		}
 		if _, ok := log[logit.DownstreamDurationMSKey].(float64); !ok {
@@ -167,6 +170,43 @@ func TestRequestMethodsAndUnifiedLog(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "private-body") {
 		t.Fatalf("日志意外包含请求体: %s", buf.String())
+	}
+}
+
+func TestRequestDurationWithMutedResultLogs(t *testing.T) {
+	buf := captureLogs(t)
+	muted := logit.MustNew(logit.OptMinLevel(logit.FatalLevel), logit.OptWriter(logit.NewWriter(io.Discard)))
+	logit.SetNamed(t.Name(), muted)
+	t.Cleanup(func() { _ = logit.Close(muted) })
+	client := httpcall.New("inventory", httpcall.OptResty(func(r *resty.Client) {
+		r.SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path == "/fail" {
+				return nil, errors.New("network failed")
+			}
+			return response(req, http.StatusOK), nil
+		}))
+	}))
+	ctx := logit.WithStart(context.Background())
+	for i := 0; i < 2; i++ {
+		if _, err := client.Request(logit.WithLoggerName(ctx, t.Name())).Get("https://example.test/items"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := client.Request(logit.WithLoggerName(ctx, t.Name())).Get("https://example.test/fail"); err == nil {
+		t.Fatal("预期传输错误")
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("禁用结果日志时不应写入默认 Logger: %q", buf.String())
+	}
+	logit.InfoDuration(ctx, "request done")
+	got := records(t, buf)
+	if len(got) != 1 {
+		t.Fatalf("耗时汇总日志数=%d, want 1: %v", len(got), got)
+	}
+	for _, key := range []string{"httpcall_1_duration_ms", "httpcall_2_duration_ms", "httpcall_3_duration_ms"} {
+		if _, ok := got[0][key].(float64); !ok {
+			t.Errorf("缺少下游耗时 %q: %v", key, got[0])
+		}
 	}
 }
 

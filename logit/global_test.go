@@ -90,9 +90,9 @@ func TestInfoDurationOnlyAddsFieldWithStart(t *testing.T) {
 		if same := logit.WithStart(ctx); same != ctx {
 			t.Fatal("重复 WithStart 应保留首次起点和原 context")
 		}
-		logit.AddDownstreamDuration(ctx, "redis_2", 2*time.Millisecond)
-		logit.AddDownstreamDuration(context.WithValue(ctx, routeTestKey{}, true), "redis_1", 3*time.Millisecond)
-		logit.AddDownstreamDuration(ctx, "redis_3", 2*time.Millisecond)
+		logit.AddDownstreamDurationAuto(ctx, "redis", 2*time.Millisecond)
+		logit.AddDownstreamDurationAuto(context.WithValue(ctx, routeTestKey{}, true), "redis", 3*time.Millisecond)
+		logit.AddDownstreamDurationAuto(ctx, "redis", 2*time.Millisecond)
 		fields := make([]logit.Field, 1, 2)
 		fields[0] = logit.Str("total_duration_ms", "manual")
 		fields[:2][1] = logit.Str("sentinel", "keep")
@@ -109,7 +109,7 @@ func TestInfoDurationOnlyAddsFieldWithStart(t *testing.T) {
 		if strings.Contains(lines[0], "total_duration_ms=") || strings.Contains(lines[2], "total_duration_ms=") || strings.Contains(lines[2], "self_duration_ms=") {
 			t.Fatalf("普通 Info 或无起点 InfoDuration 不应自动追加耗时: %q", buf.String())
 		}
-		want := "total_duration_ms=[manual] redis_2_duration_ms=[2.000] redis_3_duration_ms=[2.000] redis_1_duration_ms=[3.000] self_duration_ms=[5.000] total_duration_ms=[12.000]"
+		want := "total_duration_ms=[manual] redis_1_duration_ms=[2.000] redis_3_duration_ms=[2.000] redis_2_duration_ms=[3.000] self_duration_ms=[5.000] total_duration_ms=[12.000]"
 		if !strings.Contains(lines[1], want) {
 			t.Fatalf("调用方字段与自动耗时应依次输出: %q, want %q", lines[1], want)
 		}
@@ -126,8 +126,8 @@ func TestInfoDurationUsesNamedJSONLoggerAndBusinessCaller(t *testing.T) {
 			logit.OptCaller(true),
 		))
 		ctx := logit.WithLoggerName(logit.WithStart(context.Background()), name)
-		logit.AddDownstreamDuration(ctx, "mysql_1", time.Millisecond)
-		logit.AddDownstreamDuration(ctx, "mysql_2", time.Millisecond)
+		logit.AddDownstreamDurationAuto(ctx, "mysql", time.Millisecond)
+		logit.AddDownstreamDurationAuto(ctx, "mysql", time.Millisecond)
 		time.Sleep(1500 * time.Microsecond)
 		logit.InfoDuration(ctx, "measured")
 
@@ -165,39 +165,72 @@ func TestInfoDurationWithoutDownstream(t *testing.T) {
 	})
 }
 
-func TestAddDownstreamDurationRejectsInvalidNames(t *testing.T) {
+func TestAddDownstreamDurationAutoRejectsInvalidPrefixes(t *testing.T) {
 	ctx := logit.WithStart(context.Background())
-	logit.AddDownstreamDuration(ctx, "redis_1", time.Millisecond)
-
-	for _, tc := range []struct {
+	for _, scope := range []struct {
 		name string
 		ctx  context.Context
-		key  string
-	}{
-		{name: "duplicate", ctx: ctx, key: "redis_1"},
-		{name: "empty", ctx: ctx, key: ""},
-		{name: "self", ctx: ctx, key: "self"},
-		{name: "total", ctx: ctx, key: "total"},
-		{name: "without start", ctx: context.Background(), key: "redis_2"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			defer func() {
-				if recover() == nil {
-					t.Fatal("无效下游名称或缺少起点应 panic")
-				}
-			}()
-			logit.AddDownstreamDuration(tc.ctx, tc.key, 2*time.Millisecond)
-		})
+	}{{"with start", ctx}, {"without start", context.Background()}} {
+		for _, prefix := range []string{"", "self", "total"} {
+			t.Run(scope.name+"/"+prefix, func(t *testing.T) {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("无效 prefix 应 panic")
+					}
+				}()
+				logit.AddDownstreamDurationAuto(scope.ctx, prefix, time.Millisecond)
+			})
+		}
 	}
-
 	buf := capture(t)
+	logit.AddDownstreamDurationAuto(ctx, "redis", time.Millisecond)
 	logit.InfoDuration(ctx, "after rejected additions")
 	if got := buf.String(); strings.Count(got, "redis_1_duration_ms=") != 1 || !strings.Contains(got, "redis_1_duration_ms=[1.000]") {
-		t.Fatalf("无效写入不应覆盖原有耗时: %q", got)
+		t.Fatalf("无效 prefix 不应占用自动编号: %q", got)
 	}
 }
 
-func TestAddDownstreamDurationConcurrent(t *testing.T) {
+func TestAddDownstreamDurationAuto(t *testing.T) {
+	buf := capture(t)
+	ctx := logit.WithStart(context.Background())
+	logit.AddDownstreamDurationAuto(ctx, "mysql", 2*time.Millisecond)
+	logit.AddDownstreamDurationAuto(ctx, "httpcall", 3*time.Millisecond)
+	logit.AddDownstreamDurationAuto(ctx, "mysql", 4*time.Millisecond)
+	logit.AddDownstreamDurationAuto(context.Background(), "mysql", 5*time.Millisecond)
+	logit.InfoDuration(ctx, "recorded")
+	for _, want := range []string{
+		"mysql_1_duration_ms=[2.000]",
+		"httpcall_2_duration_ms=[3.000]",
+		"mysql_3_duration_ms=[4.000]",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("自动编号缺少 %q: %q", want, buf.String())
+		}
+	}
+}
+
+func TestAddDownstreamDurationAutoConcurrent(t *testing.T) {
+	buf := capture(t)
+	ctx := logit.WithStart(context.Background())
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			logit.AddDownstreamDurationAuto(ctx, "mysql", time.Microsecond)
+		}()
+	}
+	wg.Wait()
+	logit.InfoDuration(ctx, "recorded")
+	for i := 1; i <= 16; i++ {
+		want := fmt.Sprintf("mysql_%d_duration_ms=[0.001]", i)
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("并发自动编号缺少 %q: %q", want, buf.String())
+		}
+	}
+}
+
+func TestAddDownstreamDurationAutoConcurrentSnapshot(t *testing.T) {
 	buf := capture(t)
 	ctx := logit.WithStart(context.Background())
 	var wg sync.WaitGroup
@@ -210,10 +243,10 @@ func TestAddDownstreamDurationConcurrent(t *testing.T) {
 	}()
 	for i := 0; i < 32; i++ {
 		wg.Add(1)
-		go func(i int) {
+		go func() {
 			defer wg.Done()
-			logit.AddDownstreamDuration(ctx, fmt.Sprintf("call_%02d", i), time.Microsecond)
-		}(i)
+			logit.AddDownstreamDurationAuto(ctx, "call", time.Microsecond)
+		}()
 	}
 	wg.Wait()
 	logit.InfoDuration(ctx, "after concurrent calls")
