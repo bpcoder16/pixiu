@@ -83,6 +83,13 @@ func TestNewRejectsInvalidConfiguration(t *testing.T) {
 			t.Fatalf("无效配置被接受: cfg=%+v client=%v err=%v", cfg, client, err)
 		}
 	}
+	if _, err := New(context.Background(), Config{
+		Name: "local",
+		DSN:  ":memory:",
+		Pool: Pool{MaxOpenConns: -1},
+	}); err == nil || err.Error() != "sqlitex: negative pool setting" {
+		t.Fatalf("连接池错误缺少模块前缀: %v", err)
+	}
 	if client, err := New(nil, Config{Name: "local", DSN: ":memory:"}); client != nil || err == nil {
 		t.Fatalf("nil context 被接受: client=%v err=%v", client, err)
 	}

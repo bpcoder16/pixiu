@@ -93,7 +93,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	poolCfg, err := normalizePool(cfg.Pool)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sqlitex: %w", err)
 	}
 	isMemory, isPrivate, err := classifyMemoryDSN(cfg.DSN)
 	if err != nil {
@@ -175,14 +175,10 @@ func configureDSN(cfg Config, isMemory bool) (string, error) {
 }
 
 func normalizePool(pool Pool) (Pool, error) {
-	normalized, err := gormcore.NormalizePool(pool, gormcore.PoolConfig{
+	return gormcore.NormalizePool(pool, Pool{
 		MaxOpenConns: 1,
 		MaxIdleConns: 1,
 	})
-	if err != nil {
-		return Pool{}, fmt.Errorf("sqlitex: %w", err)
-	}
-	return normalized, nil
 }
 
 // 私有内存库的每条物理连接各自持有一份数据；所有内存库都会在最后一条连接关闭后消失。

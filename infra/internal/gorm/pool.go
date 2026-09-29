@@ -58,12 +58,16 @@ func ConfigureAndPing(ctx context.Context, pool *sql.DB, cfg PoolConfig) error {
 	return nil
 }
 
-// Open 用已验活的连接池初始化 GORM；方言初始化失败时关闭连接池。
-func Open(pool *sql.DB, dialector gormlib.Dialector, diagnostic logger.Interface) (*gormlib.DB, error) {
-	db, err := gormlib.Open(dialector, &gormlib.Config{
-		DisableAutomaticPing: true,
-		Logger:               diagnostic,
-	})
+// Open 用已验活的连接池初始化 GORM；可选配置不能覆盖共享的 Logger 和禁用自动 Ping 约定。
+// 方言初始化失败时关闭连接池。
+func Open(pool *sql.DB, dialector gormlib.Dialector, diagnostic logger.Interface, configure ...func(*gormlib.Config)) (*gormlib.DB, error) {
+	config := &gormlib.Config{}
+	for _, apply := range configure {
+		apply(config)
+	}
+	config.DisableAutomaticPing = true
+	config.Logger = diagnostic
+	db, err := gormlib.Open(dialector, config)
 	if err != nil {
 		_ = pool.Close()
 	}

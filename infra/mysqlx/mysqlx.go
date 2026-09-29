@@ -181,16 +181,12 @@ func sessionTimeZoneSQLValue(zone string) (string, error) {
 }
 
 func normalizePool(pool Pool) (Pool, error) {
-	normalized, err := gormcore.NormalizePool(pool, gormcore.PoolConfig{
+	return gormcore.NormalizePool(pool, Pool{
 		MaxOpenConns:    100,
 		MaxIdleConns:    10,
 		ConnMaxLifetime: 3 * time.Minute,
 		ConnMaxIdleTime: time.Minute,
 	})
-	if err != nil {
-		return Pool{}, err
-	}
-	return normalized, nil
 }
 
 func open(ctx context.Context, cfg Config, prepared preparedEndpoint, endpointType string) (*gorm.DB, *sql.DB, error) {

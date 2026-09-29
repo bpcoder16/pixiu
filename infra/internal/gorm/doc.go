@@ -20,5 +20,8 @@
 //	readDB := cluster.Slave(ctx)
 //	_ = readDB
 //
+// Open 接收可选的 GORM 配置函数；模块可设置方言所需选项，同时沿用共享的
+// Logger、禁用自动 Ping 和初始化失败时关闭连接池的约定。
+//
 // 上例需导入 time 和 github.com/bpcoder16/pixiu/infra/internal/gorm。
 package gorm
