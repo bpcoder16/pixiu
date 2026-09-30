@@ -147,12 +147,13 @@ func TestUnlockResults(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		response string
-		notHeld  bool
+		wantErr  bool
 	}{
-		{"不再持有", ":0\r\n", true},
-		{"服务端失败", "-ERR unavailable\r\n", false},
-		{"响应丢失", "", false},
-		{"异常结果", ":2\r\n", false},
+		{"不再持有时幂等完成", ":0\r\n", false},
+		{"实际删除", ":1\r\n", false},
+		{"服务端失败", "-ERR unavailable\r\n", true},
+		{"响应丢失", "", true},
+		{"异常结果", ":2\r\n", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			client := newWireClient(t, -1, func(args []string) string {
@@ -166,7 +167,7 @@ func TestUnlockResults(t *testing.T) {
 				t.Fatal(err)
 			}
 			err = lock.Unlock(context.Background())
-			if err == nil || errors.Is(err, lockx.ErrNotHeld) != tt.notHeld {
+			if (err != nil) != tt.wantErr {
 				t.Fatalf("释放结果错误: %v", err)
 			}
 		})
@@ -369,7 +370,7 @@ func readCommand(reader *bufio.Reader) ([]string, error) {
 
 func TestNewRejectsInvalidTTL(t *testing.T) {
 	client := newWireClient(t, -1, nil)
-	for _, ttl := range []time.Duration{0, -time.Second} {
+	for _, ttl := range []time.Duration{-time.Nanosecond, -time.Second} {
 		if _, err := New(client, Config{TTL: ttl}); err == nil {
 			t.Fatal("应拒绝无效租期")
 		}

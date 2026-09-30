@@ -30,12 +30,15 @@ type Lock interface {
 	// Deadline 返回保守的本地工作期限，不包含获取前的竞争等待。
 	// 会话锁没有固定租期，返回零值、false；有限租期包含成功尝试的耗时。
 	Deadline() (time.Time, bool)
-	// Unlock 原子校验本次身份；过期或不再持有返回 ErrNotHeld。
-	// 允许并发调用，正常下游情况下重复释放返回 ErrNotHeld。
+	// Unlock 原子校验本次身份，允许并发调用，不得删除其他持有者的锁。
+	// Redis 将已过期、不再持有或重复释放作为幂等完成，返回 nil；
+	// MySQL 当前对不再持有返回 ErrNotHeld。真实下游错误仍须返回。
+	// 幂等释放成功不代表业务仍在有效租期内。
 	Unlock(ctx context.Context) error
 }
 
-// ErrNotHeld 表示本次锁已过期、已释放或已由其他执行者持有。
+// ErrNotHeld 表示实现确认本次锁已过期、已释放或已由其他执行者持有。
+// MySQL 当前使用此错误；Redis Unlock 将这些状态作为幂等完成并返回 nil。
 var ErrNotHeld = errors.New("lockx: lock not held")
 
 // Do 等待获取锁，同步执行 fn 并释放；获取失败不执行 fn。
@@ -95,6 +98,8 @@ func run(
 	defer func() {
 		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 		defer cancel()
+		// Redis 的已过期或重复释放由后端幂等完成；这里保留实现实际返回的错误，
+		// 避免掩盖连接失败等问题，也不改变业务自身的取消或租期超时。
 		if unlockErr := lock.Unlock(unlockCtx); unlockErr != nil {
 			err = errors.Join(err, fmt.Errorf("lockx: unlock: %w", unlockErr))
 		}

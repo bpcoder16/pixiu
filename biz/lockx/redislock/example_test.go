@@ -29,7 +29,19 @@ func ExampleNew() {
 	}
 	// 退出时先结束业务并释放锁，再关闭 Redis，最后关闭日志。
 	defer client.Close()
-	locker, err := redislock.New(client, redislock.Config{TTL: 10 * time.Second})
+	locker, err := redislock.New(client, redislock.Config{
+		WaitTimeout: 5 * time.Second,
+		TTL:         time.Minute,
+	})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	// 同一个实现同时支持阻塞等待与非阻塞尝试；key 与协议完全一致。
+	err = lockx.Do(ctx, locker, "orders:lock:confirm:123", func(ctx context.Context) error {
+		// 在此执行遵守 ctx 期限的业务逻辑。
+		return nil
+	})
 	if err != nil {
 		fmt.Println(err)
 		return
