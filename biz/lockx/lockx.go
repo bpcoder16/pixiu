@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/bpcoder16/pixiu/biz/lockx/internal/lockctx"
 )
 
 // Locker 定义分布式阻塞锁接口。
@@ -76,7 +78,7 @@ func run(
 	if strings.TrimSpace(key) == "" {
 		return false, errors.New("lockx: empty key")
 	}
-	if err := contextError(ctx); err != nil {
+	if err := lockctx.Err(ctx); err != nil {
 		return false, err
 	}
 	lock, acquired, err := acquire()
@@ -84,7 +86,7 @@ func run(
 		return false, fmt.Errorf("lockx: acquire: %w", err)
 	}
 	if !acquired {
-		return false, contextError(ctx)
+		return false, lockctx.Err(ctx)
 	}
 	if lock == nil {
 		return false, errors.New("lockx: acquired without handle")
@@ -103,22 +105,11 @@ func run(
 		workCtx, cancel = context.WithDeadline(ctx, deadline)
 		defer cancel()
 	}
-	if err := contextError(workCtx); err != nil {
+	if err := lockctx.Err(workCtx); err != nil {
 		return false, err
 	}
 	executed = true
 	err = fn(workCtx)
 	// 在释放前检查期限，避免将释放耗时误算成业务超时。
-	return executed, errors.Join(err, contextError(workCtx))
-}
-
-func contextError(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	// 取消计时器可能尚未调度，期限本身仍必须有效。
-	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
-		return context.DeadlineExceeded
-	}
-	return nil
+	return executed, errors.Join(err, lockctx.Err(workCtx))
 }
