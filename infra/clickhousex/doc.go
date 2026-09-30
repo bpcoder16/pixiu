@@ -58,4 +58,17 @@
 // GORM 的 Info、Warn、Error 诊断消息按对应级别记录；慢查询和错误总会记录 SQL，
 // InterpolateSQL 默认关闭，以保留占位符。ctx 已调用 logit.WithStart 时，每次
 // GORM Trace 以 ClickHouse 为前缀自动编号登记下游耗时，供 logit.InfoDuration 汇总。
+//
+// 单个逻辑下游可显式初始化默认客户端，省去每次按名称查询。cfg 已由应用构造：
+//
+//	if _, err := clickhousex.NewDefault(ctx, cfg); err != nil {
+//	    return err
+//	}
+//	return clickhousex.Default().SlaveDB(ctx).Find(&events).Error
+//
+// 启动阶段由调用方串行调用 NewNamed 和 NewDefault，不并发初始化。
+// Name 仍必填；Default() 与 Named(cfg.Name) 返回同一实例，New 和 NewNamed
+// 不自动设置默认实例。重复默认初始化报错；失败可重试。未初始化或 CloseAll
+// 开始后调用 Default 会 panic。应用停止查询后调用 CloseAll，默认与命名实例
+// 统一关闭一次，日志最后关闭；默认实例不要单独登记 Close。
 package clickhousex

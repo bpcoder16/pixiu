@@ -11,7 +11,7 @@ import (
 var namedClients = named.New[*Client]("sqlitex")
 
 // NewNamed 创建并按 Config.Name 登记客户端。名称重复时不替换已有实例。
-// 启动阶段可并发创建；同名构造只登记一个，未登记的新客户端会关闭。
+// 启动阶段由调用方串行创建；初始化完成后可并发查询。
 // 初始化完成后不得再调用，所有创建返回后才开始查询，关闭须在初始化之后执行。
 func NewNamed(ctx context.Context, cfg Config) (*Client, error) {
 	if strings.TrimSpace(cfg.Name) == "" {
@@ -27,7 +27,25 @@ func Named(name string) *Client {
 	return namedClients.MustGet(name)
 }
 
-// CloseAll 关闭全部已登记客户端；重复调用返回同一次关闭结果。
+// NewDefault 创建默认客户端，同时按 Config.Name 登记；已有默认实例时返回错误。
+// Name 仍必填；创建失败可重试，初始化与关闭约束与 NewNamed 相同。
+func NewDefault(ctx context.Context, cfg Config) (*Client, error) {
+	if strings.TrimSpace(cfg.Name) == "" {
+		return nil, errors.New("sqlitex: empty database name")
+	}
+	return namedClients.CreateDefault(cfg.Name, func() (*Client, error) {
+		return New(ctx, cfg)
+	})
+}
+
+// Default 返回显式初始化的默认客户端，与 Named(cfg.Name) 是同一实例。
+// 未初始化或 CloseAll 开始后调用会 panic；New 和 NewNamed 不设置默认实例。
+func Default() *Client {
+	return namedClients.MustDefault()
+}
+
+// CloseAll 关闭全部已登记的命名及默认客户端，每个实例只关闭一次。
+// 重复调用返回同一次关闭结果。
 // 应用应先停止使用客户端的任务，再调用 CloseAll。
 func CloseAll() error {
 	return namedClients.CloseAll()

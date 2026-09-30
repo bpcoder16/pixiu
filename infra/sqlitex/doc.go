@@ -56,4 +56,17 @@
 // 需要输出展开参数后的 SQL 时可显式开启。已调用 logit.WithStart 的请求会
 // 以 SQLite 为前缀自动编号记录下游耗时，供 logit.InfoDuration 汇总。命名客户端由
 // CloseAll 关闭；独立 New 创建的客户端仍由调用方单独关闭。
+//
+// 单个逻辑下游可显式初始化默认客户端，省去每次按名称查询。cfg 已由应用构造：
+//
+//	if _, err := sqlitex.NewDefault(ctx, cfg); err != nil {
+//	    return err
+//	}
+//	return sqlitex.Default().DB(ctx).Create(&record).Error
+//
+// 启动阶段由调用方串行调用 NewNamed 和 NewDefault，不并发初始化。
+// Name 仍必填；Default() 与 Named(cfg.Name) 返回同一实例，New 和 NewNamed
+// 不自动设置默认实例。重复默认初始化报错；失败可重试。未初始化或 CloseAll
+// 开始后调用 Default 会 panic。应用停止查询后调用 CloseAll，默认与命名实例
+// 统一关闭一次，日志最后关闭；默认实例不要单独登记 Close。
 package sqlitex
