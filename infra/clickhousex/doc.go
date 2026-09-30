@@ -57,5 +57,5 @@
 // 从库可接受延迟的查询使用 SlaveDB；写入及要求最新数据的查询使用 MasterDB。
 // GORM 的 Info、Warn、Error 诊断消息按对应级别记录；慢查询和错误总会记录 SQL，
 // InterpolateSQL 默认关闭，以保留占位符。ctx 已调用 logit.WithStart 时，每次
-// GORM Trace 自动编号登记 clickhouse 下游耗时，供 logit.InfoDuration 汇总。
+// GORM Trace 以 ClickHouse 为前缀自动编号登记下游耗时，供 logit.InfoDuration 汇总。
 package clickhousex

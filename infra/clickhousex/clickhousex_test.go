@@ -299,10 +299,10 @@ func TestTracePolicyDiagnosticsAndDuration(t *testing.T) {
 		t.Fatalf("耗时汇总缺失: %v", records)
 	}
 	for _, key := range []string{
-		"clickhouse_1_duration_ms",
-		"clickhouse_2_duration_ms",
-		"clickhouse_3_duration_ms",
-		"clickhouse_4_duration_ms",
+		"ClickHouse_1_duration_ms",
+		"ClickHouse_2_duration_ms",
+		"ClickHouse_3_duration_ms",
+		"ClickHouse_4_duration_ms",
 	} {
 		if _, ok := records[4][key].(float64); !ok {
 			t.Fatalf("缺少 %s: %v", key, records[4])

@@ -12,6 +12,8 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+const downstreamSQLiteMessage = "SQLite"
+
 // traceLogger 为 SQLite 提供 GORM Logger 入口，不附加端点标识。
 type traceLogger struct {
 	*gormcore.Logger
@@ -22,9 +24,9 @@ var _ gorm.ParamsFilter = (*traceLogger)(nil)
 
 func newTraceLogger(cfg Config) *traceLogger {
 	return &traceLogger{Logger: gormcore.New(gormcore.Config{
-		Message:        "SQLite",
+		Message:        downstreamSQLiteMessage,
 		Name:           cfg.Name,
-		DurationPrefix: "sqlite",
+		DurationPrefix: downstreamSQLiteMessage,
 		SlowThreshold:  cfg.SlowThreshold,
 		LogSQL:         cfg.LogSQL,
 		InterpolateSQL: cfg.InterpolateSQL,

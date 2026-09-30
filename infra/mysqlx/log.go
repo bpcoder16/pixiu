@@ -12,6 +12,8 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+const downstreamMySQLMessage = "MySQL"
+
 // traceLogger 为 MySQL 提供 GORM Logger 入口和主从端点标识。
 type traceLogger struct {
 	*gormcore.Logger
@@ -22,9 +24,9 @@ var _ gorm.ParamsFilter = (*traceLogger)(nil)
 
 func newTraceLogger(cfg Config, endpointType, endpoint string) *traceLogger {
 	return &traceLogger{Logger: gormcore.New(gormcore.Config{
-		Message:        "MySQL",
+		Message:        downstreamMySQLMessage,
 		Name:           cfg.Name,
-		DurationPrefix: "mysql",
+		DurationPrefix: downstreamMySQLMessage,
 		Endpoint: &gormcore.Endpoint{
 			Type: endpointType,
 			Name: endpoint,

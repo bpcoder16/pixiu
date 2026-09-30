@@ -517,7 +517,7 @@ func TestTracePolicyDurationAndContext(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("耗时汇总日志数=%d, want 1", len(records))
 	}
-	if _, ok := records[0]["sqlite_1_duration_ms"].(float64); !ok {
+	if _, ok := records[0]["SQLite_1_duration_ms"].(float64); !ok {
 		t.Fatalf("缺少 SQLite 请求耗时: %v", records[0])
 	}
 	buf.Reset()

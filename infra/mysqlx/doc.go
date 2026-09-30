@@ -53,7 +53,7 @@
 // 业务仓库决定是否执行自动迁移，模型只传给主库。事务和要求读己之写的查询使用
 // MasterDB；其他可接受从库延迟的读取可使用 SlaveDB。GORM 的 Info、Warn、Error
 // 诊断消息按对应级别记录，不要求包含 SQL；LogSQL 只控制正常查询的 SQL 日志。
-// ctx 已调用 logit.WithStart 时，每次 GORM Trace 还会自动编号记录 mysql 下游耗时，
+// ctx 已调用 logit.WithStart 时，每次 GORM Trace 还会以 MySQL 为前缀自动编号记录下游耗时，
 // 供业务调用 logit.InfoDuration 汇总；未调用 WithStart 时跳过。
 // New 的 Ping 遵循 ctx，GORM 的版本探测使用 Background，不受 ctx 截止时间约束。
 package mysqlx

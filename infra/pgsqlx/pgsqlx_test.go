@@ -323,7 +323,7 @@ func TestDiagnosticsAndDuration(t *testing.T) {
 			t.Fatalf("诊断详情错误: %v", records[i])
 		}
 	}
-	for _, key := range []string{"pgsql_1_duration_ms", "pgsql_2_duration_ms"} {
+	for _, key := range []string{"PostgreSQL_1_duration_ms", "PostgreSQL_2_duration_ms"} {
 		if _, ok := records[3][key].(float64); !ok {
 			t.Fatalf("缺少请求级耗时 %q: %v", key, records[3])
 		}

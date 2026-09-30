@@ -54,6 +54,6 @@
 // 一条连接，事务回调内应继续使用传入的 tx 进行查询。LogSQL 控制正常
 // 查询的 Info 日志；错误和慢查询始终记录 SQL。InterpolateSQL 默认关闭，
 // 需要输出展开参数后的 SQL 时可显式开启。已调用 logit.WithStart 的请求会
-// 自动记录 SQLite 下游耗时，供 logit.InfoDuration 汇总。命名客户端由
+// 以 SQLite 为前缀自动编号记录下游耗时，供 logit.InfoDuration 汇总。命名客户端由
 // CloseAll 关闭；独立 New 创建的客户端仍由调用方单独关闭。
 package sqlitex

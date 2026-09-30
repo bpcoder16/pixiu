@@ -36,7 +36,7 @@ func (h *loggerHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 		begin := time.Now()
 		err := next(ctx, cmd)
 		elapsed := time.Since(begin)
-		logit.AddDownstreamDurationAuto(ctx, "redis", elapsed)
+		logit.AddDownstreamDurationAuto(ctx, downstreamRedisMessage, elapsed)
 		h.logResult(ctx, elapsed, name, cmd, err)
 		return err
 	}
@@ -50,7 +50,7 @@ func (h *loggerHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.P
 		begin := time.Now()
 		err := next(ctx, cmds)
 		elapsed := time.Since(begin)
-		logit.AddDownstreamDurationAuto(ctx, "redis", elapsed)
+		logit.AddDownstreamDurationAuto(ctx, downstreamRedisMessage, elapsed)
 		h.logBatch(ctx, elapsed, cmds, err)
 		return err
 	}

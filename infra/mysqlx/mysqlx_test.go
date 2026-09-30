@@ -262,7 +262,7 @@ func TestTraceDurationWithoutSQLLog(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("耗时汇总日志数=%d, want 1: %v", len(records), records)
 	}
-	for _, key := range []string{"mysql_1_duration_ms", "mysql_2_duration_ms"} {
+	for _, key := range []string{"MySQL_1_duration_ms", "MySQL_2_duration_ms"} {
 		if _, ok := records[0][key].(float64); !ok {
 			t.Errorf("缺少下游耗时 %q: %v", key, records[0])
 		}

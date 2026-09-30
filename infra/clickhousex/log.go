@@ -12,6 +12,8 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+const downstreamClickHouseMessage = "ClickHouse"
+
 // traceLogger 为 ClickHouse 提供 GORM Logger 入口、主从端点标识和服务端错误码。
 type traceLogger struct {
 	*gormcore.Logger
@@ -22,9 +24,9 @@ var _ gorm.ParamsFilter = (*traceLogger)(nil)
 
 func newTraceLogger(cfg Config, endpointType, endpoint string) *traceLogger {
 	return &traceLogger{Logger: gormcore.New(gormcore.Config{
-		Message:        "ClickHouse",
+		Message:        downstreamClickHouseMessage,
 		Name:           cfg.Name,
-		DurationPrefix: "clickhouse",
+		DurationPrefix: downstreamClickHouseMessage,
 		Endpoint: &gormcore.Endpoint{
 			Type: endpointType,
 			Name: endpoint,

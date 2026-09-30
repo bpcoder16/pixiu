@@ -8,6 +8,14 @@
 //	client := httpcall.New("inventory",
 //	    httpcall.OptLogDetails(true), // 按需记录请求和响应的详细信息
 //	    httpcall.OptResty(func(r *resty.Client) {
+//	        // 克隆默认 Transport，保留 Resty 的其他传输配置。
+//	        transport := r.GetClient().Transport.(*http.Transport).Clone()
+//	        transport.MaxIdleConns = 100 // 所有目标合计的空闲连接上限
+//	        transport.MaxIdleConnsPerHost = 10 // 每目标空闲连接上限
+//	        transport.MaxConnsPerHost = 50 // 每目标总连接上限，含拨号中、使用中和空闲连接
+//	        transport.IdleConnTimeout = 90 * time.Second // 每条连接连续空闲多久后关闭
+//	        r.SetTransport(transport)
+//
 //	        r.SetTimeout(90 * time.Second)
 //	        r.SetBaseURL("https://inventory.example.com")
 //	        r.SetRetryCount(2) // 最多重试 2 次，加上首次请求最多尝试 3 次
@@ -21,6 +29,9 @@
 //	)
 //
 // 省略 SetTimeout 时，每次 HTTP 尝试最长 60 秒。
+// 连接池示例数值应按下游负载调整，所有上限按该客户端的 Transport 分别计算。
+// 空闲连接上限不限制使用中的连接；达到每目标总连接上限时，新请求等待可用连接，
+// 等待受请求 context 和客户端超时约束。空闲超时按每条连接单独计时。
 // 示例只对 GET 的执行错误或 HTTP 429 重试，下面创建资源的 POST 不会自动重试；
 // 需要重试 POST 时，应先确认下游具备幂等保障。
 //

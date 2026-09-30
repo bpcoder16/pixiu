@@ -2,10 +2,11 @@
 // 数据库模块负责提供 GORM Logger 入口、下游名称、端点信息及方言连接。
 // 例如模块内部可以创建不带端点的日志核心：
 //
+//	const downstreamSQLiteMessage = "SQLite"
 //	core := gorm.New(gorm.Config{
-//	    Message:        "SQLite",
+//	    Message:        downstreamSQLiteMessage,
 //	    Name:           "local",
-//	    DurationPrefix: "sqlite",
+//	    DurationPrefix: downstreamSQLiteMessage,
 //	    SlowThreshold:  200 * time.Millisecond,
 //	})
 //	_, _ = core.ParamsFilter(ctx, "SELECT ?", 1)

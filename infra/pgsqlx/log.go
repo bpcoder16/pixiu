@@ -12,6 +12,8 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+const downstreamPostgreSQLMessage = "PostgreSQL"
+
 // traceLogger 为 PostgreSQL 提供 GORM Logger 入口和 SQLSTATE 字段。
 type traceLogger struct {
 	*gormcore.Logger
@@ -22,9 +24,9 @@ var _ gorm.ParamsFilter = (*traceLogger)(nil)
 
 func newTraceLogger(cfg Config, endpointType, endpoint string) *traceLogger {
 	return &traceLogger{Logger: gormcore.New(gormcore.Config{
-		Message:        "PostgreSQL",
+		Message:        downstreamPostgreSQLMessage,
 		Name:           cfg.Name,
-		DurationPrefix: "pgsql",
+		DurationPrefix: downstreamPostgreSQLMessage,
 		Endpoint: &gormcore.Endpoint{
 			Type: endpointType,
 			Name: endpoint,
