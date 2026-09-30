@@ -269,13 +269,13 @@ func TestDoWaitBudgetDoesNotLimitWork(t *testing.T) {
 		})
 		err := Do(context.Background(), locker, "key", func(ctx context.Context) error {
 			if _, ok := ctx.Deadline(); ok {
-				t.Fatal("会话锁不应设置虚构租期")
+				t.Fatal("没有固定期限的句柄不应设置虚构租期")
 			}
 			time.Sleep(10 * time.Second)
 			return nil
 		})
 		if err != nil || !released || time.Since(start) != 15*time.Second {
-			t.Fatalf("会话工作异常: %v", err)
+			t.Fatalf("无固定期限的工作异常: %v", err)
 		}
 	})
 }
