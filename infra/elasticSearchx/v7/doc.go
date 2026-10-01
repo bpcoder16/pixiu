@@ -17,6 +17,8 @@
 //
 // 请求结果日志默认开启，OptLogRequests(false) 可关闭；Name 用于区分下游实例。
 // 详情字段、Body 读取与请求级耗时统计约定见 elasticSearchx 的包文档。
+// 禁用 SDK 自动重试，并包装 EOF 以规避 v7.17.10 的 DisableRetry 缺陷；
+// 调用方可用 errors.Is(err, io.EOF) 判断此类错误。
 //
 // 共享实例使用 v7.NewNamed(ctx, cfg, opts...) 或 v7.NewDefault(ctx, cfg, opts...)。
 // 通过 elasticSearchx.Named(cfg.Name) 或 elasticSearchx.Default() 获取实例，

@@ -2,6 +2,9 @@ package v7
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
 
 	"github.com/bpcoder16/pixiu/infra/elasticSearchx"
 	"github.com/elastic/go-elasticsearch/v7"
@@ -18,7 +21,7 @@ func New(ctx context.Context, cfg elasticSearchx.Config, opts ...elasticSearchx.
 		Username:     cfg.Username,
 		Password:     cfg.Password,
 		APIKey:       cfg.APIKey,
-		Transport:    transport,
+		Transport:    noRetryTransport{transport: transport},
 		DisableRetry: true,
 	})
 	if err != nil {
@@ -42,4 +45,18 @@ func NewDefault(ctx context.Context, cfg elasticSearchx.Config, opts ...elasticS
 	return elasticSearchx.RegisterDefault(cfg.Name, func() (*elasticSearchx.Client, error) {
 		return New(ctx, cfg, opts...)
 	})
+}
+
+type noRetryTransport struct {
+	transport *http.Transport
+}
+
+func (t noRetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	res, err := t.transport.RoundTrip(req)
+	// v7.17.10 SDK 的 EOF 分支未检查 DisableRetry；包装后避开直接相等判断，
+	// 同时保留 errors.Is(err, io.EOF)，其他传输错误保持原样。
+	if err == io.EOF {
+		err = fmt.Errorf("elasticSearchx/v7: transport: %w", err)
+	}
+	return res, err
 }

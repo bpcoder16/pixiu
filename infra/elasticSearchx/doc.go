@@ -6,6 +6,10 @@
 // Password 非空时必须设置 Username。CACert 在需要信任额外 CA 时提供。
 // 未设置的 DialTimeout 默认 5 秒，SlowThreshold 默认 200 毫秒；
 // 连接池零值保留默认设置，其中每节点最多保留 10 条空闲连接，其余继承默认 Transport。
+// 地址必须包含非空主机名；Transport 清除继承的 TLS 专用拨号器，统一执行拨号与证书验证。
+// TLS 最低版本为 1.2，默认 Transport 已设置更严格的版本下限时保留它。
+// 不启用 SDK 自动重试；Go HTTP Transport 自身仍遵循标准库的安全重发规则。
+// v7 适配层包装 EOF 以规避 SDK 重试缺陷，调用方可用 errors.Is(err, io.EOF) 判断。
 // OptLogRequests 默认开启请求结果日志，OptLogDetails 默认关闭详情日志。
 //
 // 下例还需导入 context、time、github.com/bpcoder16/pixiu/infra/elasticSearchx/v8：

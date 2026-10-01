@@ -22,7 +22,7 @@ import (
 type Config struct {
 	// Name 必填，是下游日志和耗时前缀中的实例名称，不能是空字符串或纯空白。
 	Name string
-	// Addresses 必填，至少提供一个 HTTP(S) 节点地址。
+	// Addresses 必填，至少提供一个主机名非空的 HTTP(S) 节点地址。
 	Addresses []string
 	// Username 可选，用于基本认证；不能与 APIKey 同时设置。
 	Username string
@@ -95,7 +95,7 @@ func NewTransport(cfg Config) (*http.Transport, error) {
 	}
 	for _, address := range cfg.Addresses {
 		u, err := url.Parse(address)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
 			return nil, errors.New("elasticSearchx: invalid address")
 		}
 	}
@@ -120,7 +120,13 @@ func NewTransport(cfg Config) (*http.Transport, error) {
 		return nil, errors.New("elasticSearchx: unsupported default HTTP transport")
 	}
 	transport := base.Clone()
-	transport.DialContext = (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext
+	// HTTPS 也须经过本模块的拨号与 TLS 校验，不能继承绕过这些配置的专用拨号器。
+	transport.DialTLS = nil
+	transport.DialTLSContext = nil
+	transport.DialContext = (&net.Dialer{
+		Timeout:   timeout,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
 	transport.MaxIdleConnsPerHost = 10
 	// 零值保留原有连接池设置，正值只覆盖对应参数。
 	if cfg.MaxIdleConns > 0 {
@@ -138,6 +144,9 @@ func NewTransport(cfg Config) (*http.Transport, error) {
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
 	if transport.TLSClientConfig != nil {
 		tlsConfig = transport.TLSClientConfig.Clone()
+	}
+	// 只抬高版本下限，避免放宽应用已有的 TLS 策略。
+	if tlsConfig.MinVersion < tls.VersionTLS12 {
 		tlsConfig.MinVersion = tls.VersionTLS12
 	}
 	tlsConfig.InsecureSkipVerify = false
