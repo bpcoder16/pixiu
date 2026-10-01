@@ -1,5 +1,7 @@
 // Package elasticSearchx 提供 Elasticsearch 7、8、9 共用的结果日志和基础操作。
 // 版本适配包负责连接创建；配置、日志与结果约定见 docs/elasticSearchx-design.md。
+// v8/v9 使用官方 NewBase 和共用的 transport v8；启动验活只核对服务端主版本，
+// 不保证所有旧次版本均兼容，真实集群验收版本见设计文档。
 //
 // Config 中只有 Name 和 Addresses 必填，其余字段均可省略。
 // 认证参数按服务端要求选择：APIKey 与 Username/Password 不能同时设置，
@@ -10,6 +12,7 @@
 // TLS 最低版本为 1.2，默认 Transport 已设置更严格的版本下限时保留它。
 // 不启用 SDK 自动重试；Go HTTP Transport 自身仍遵循标准库的安全重发规则。
 // v7 适配层包装 EOF 以规避 SDK 重试缺陷，调用方可用 errors.Is(err, io.EOF) 判断。
+// 不启用节点发现；节点失败后 SDK 仍可能安排后台恢复任务，由 Close 收尾。
 // 请求结果日志默认关闭，OptLogRequests(true) 显式开启；OptLogDetails 默认关闭详情日志。
 //
 // 下例还需导入 context、time、github.com/bpcoder16/pixiu/infra/elasticSearchx/v8：
