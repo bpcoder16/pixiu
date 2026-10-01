@@ -60,9 +60,28 @@ func TestPerformLogOptionsAndDetails(t *testing.T) {
 		log     bool
 		details bool
 	}{
-		{name: "默认输出结果", log: true},
-		{name: "启用详情", opts: []Option{OptLogDetails(true)}, log: true, details: true},
-		{name: "关闭结果也关闭详情", opts: []Option{OptLogRequests(false), OptLogDetails(true)}},
+		{
+			name: "默认关闭结果",
+		},
+		{
+			name: "显式开启结果",
+			opts: []Option{OptLogRequests(true)},
+			log:  true,
+		},
+		{
+			name: "仅开启详情不输出结果",
+			opts: []Option{OptLogDetails(true)},
+		},
+		{
+			name:    "启用结果和详情",
+			opts:    []Option{OptLogRequests(true), OptLogDetails(true)},
+			log:     true,
+			details: true,
+		},
+		{
+			name: "关闭结果也关闭详情",
+			opts: []Option{OptLogRequests(false), OptLogDetails(true)},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := captureElasticSearchLogs(t)
@@ -83,13 +102,16 @@ func TestPerformLogOptionsAndDetails(t *testing.T) {
 					Request:    req,
 				}, nil
 			}, tt.opts...)
+			if !tt.log && buf.Len() != 0 {
+				t.Fatalf("日志关闭时启动验活仍输出日志: %s", buf.String())
+			}
 			buf.Reset()
 			req, err := http.NewRequest(http.MethodPost, "http://localhost/products/_search", strings.NewReader(requestBody))
 			if err != nil {
 				t.Fatal(err)
 			}
 			req.Header.Set("Authorization", "ApiKey auth-secret")
-			res, err := client.Perform(req)
+			res, err := client.perform(req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -188,7 +210,7 @@ func TestBulkDetailsAndDurationAreRecordedOnce(t *testing.T) {
 				res.Proto = "HTTP/1.1"
 				res.Status = http.StatusText(tt.status)
 				return res, nil
-			}, OptLogDetails(true))
+			}, OptLogRequests(true), OptLogDetails(true))
 			buf.Reset()
 			ctx := logit.WithStart(context.Background())
 			_, err := client.Bulk(ctx, "products", []BulkAction{{Kind: BulkIndex, ID: "1", Document: map[string]any{"name": "first"}}})
@@ -238,13 +260,13 @@ func TestDetailsPreserveBodyErrorsAndPartialRead(t *testing.T) {
 	body := &failingLogBody{readErr: errors.New("read failed"), closeErr: errors.New("close failed")}
 	client := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: body, Request: req}, nil
-	}, OptLogDetails(true))
+	}, OptLogRequests(true), OptLogDetails(true))
 	buf.Reset()
 	req, err := http.NewRequest(http.MethodGet, "http://localhost/products/_search", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := client.Perform(req)
+	res, err := client.perform(req)
 	if err != nil || body.read {
 		t.Fatalf("详情采集提前读取了响应: err=%v read=%v", err, body.read)
 	}
@@ -273,14 +295,14 @@ func TestPerformErrorLogWithDetailsIsImmediate(t *testing.T) {
 					return jsonResponse(req, 503, `{"error":"unavailable"}`), transportErr
 				}
 				return nil, transportErr
-			}, OptLogDetails(true))
+			}, OptLogRequests(true), OptLogDetails(true))
 			buf.Reset()
 			ctx := logit.WithStart(context.Background())
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://localhost/products/_search", strings.NewReader(`{"query":"all"}`))
 			if err != nil {
 				t.Fatal(err)
 			}
-			res, err := client.Perform(req)
+			res, err := client.perform(req)
 			if !errors.Is(err, transportErr) {
 				t.Fatalf("传输错误被改变: %v", err)
 			}
@@ -327,7 +349,7 @@ func TestFilteredOrDisabledDetailsDoNotReadBodyCopies(t *testing.T) {
 				t.Fatal("不可输出的日志读取了请求副本")
 				return nil, nil
 			}
-			res, err := client.Perform(req)
+			res, err := client.perform(req)
 			if err != nil || res.Body != body {
 				t.Fatalf("不可输出的日志包装了响应流: err=%v", err)
 			}

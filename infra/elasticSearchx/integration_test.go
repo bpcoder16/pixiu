@@ -20,7 +20,6 @@ import (
 	elasticSearchxv8 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v8"
 	elasticSearchxv9 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v9"
 	"github.com/bpcoder16/pixiu/logit"
-	"github.com/elastic/go-elasticsearch/v7/esapi"
 )
 
 func TestVersionFactoriesConnectAndRunCommonOperations(t *testing.T) {
@@ -79,13 +78,6 @@ func TestVersionFactoriesConnectAndRunCommonOperations(t *testing.T) {
 			if err != nil || count != 4 || requests < 2 {
 				t.Fatalf("Count: count=%d err=%v requests=%d", count, err, requests)
 			}
-			if factory.major == 7 {
-				response, err := (esapi.CountRequest{Index: []string{"products"}}).Do(context.Background(), client)
-				if err != nil {
-					t.Fatalf("esapi 经共用客户端调用: %v", err)
-				}
-				response.Body.Close()
-			}
 			if _, err := client.Search(context.Background(), "products", map[string]any{"query": map[string]any{"match_all": map[string]any{}}}); err == nil || searchCalls != 1 {
 				t.Fatalf("默认禁用重试: err=%v calls=%d", err, searchCalls)
 			}
@@ -129,10 +121,36 @@ func TestVersionFactoriesPassLogOptionsAndPreserveResponse(t *testing.T) {
 				Name:      "catalog",
 				Addresses: []string{server.URL},
 			}
-			for _, logRequests := range []bool{true, false} {
-				client, err := factory.open(context.Background(), cfg, elasticSearchx.OptLogRequests(logRequests), elasticSearchx.OptLogDetails(true))
+			for _, tt := range []struct {
+				name string
+				opts []elasticSearchx.Option
+				log  bool
+			}{
+				{
+					name: "默认关闭",
+				},
+				{
+					name: "仅开启详情",
+					opts: []elasticSearchx.Option{elasticSearchx.OptLogDetails(true)},
+				},
+				{
+					name: "显式开启",
+					opts: []elasticSearchx.Option{elasticSearchx.OptLogRequests(true), elasticSearchx.OptLogDetails(true)},
+					log:  true,
+				},
+				{
+					name: "显式关闭",
+					opts: []elasticSearchx.Option{elasticSearchx.OptLogRequests(false), elasticSearchx.OptLogDetails(true)},
+				},
+			} {
+				buf.Reset()
+				client, err := factory.open(context.Background(), cfg, tt.opts...)
 				if err != nil {
 					t.Fatal(err)
+				}
+				defer client.Close(context.Background())
+				if !tt.log && buf.Len() != 0 {
+					t.Fatalf("%s 时启动验活仍输出日志: %s", tt.name, buf.String())
 				}
 				buf.Reset()
 				ctx := logit.WithStart(context.Background())
@@ -140,7 +158,7 @@ func TestVersionFactoriesPassLogOptionsAndPreserveResponse(t *testing.T) {
 				if err != nil || count != 4 {
 					t.Fatalf("详情采集改变了响应解析: count=%d err=%v", count, err)
 				}
-				if logRequests {
+				if tt.log {
 					var record map[string]any
 					if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &record); err != nil {
 						t.Fatal(err)
@@ -157,7 +175,6 @@ func TestVersionFactoriesPassLogOptionsAndPreserveResponse(t *testing.T) {
 				if !strings.Contains(buf.String(), `"elasticSearch_catalog_1_duration_ms"`) || strings.Contains(buf.String(), `"elasticSearch_catalog_2_duration_ms"`) {
 					t.Fatalf("官方客户端耗时记录丢失或重复: %s", buf.String())
 				}
-				_ = client.Close(context.Background())
 			}
 		})
 	}

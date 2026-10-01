@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -39,7 +38,7 @@ func TestNewDoesNotRetryEOF(t *testing.T) {
 	}
 }
 
-func TestPerformDoesNotRetryEOF(t *testing.T) {
+func TestOperationsDoNotRetryEOF(t *testing.T) {
 	tests := []struct {
 		name   string
 		method string
@@ -48,10 +47,6 @@ func TestPerformDoesNotRetryEOF(t *testing.T) {
 		{
 			name:   "GET",
 			method: http.MethodGet,
-		},
-		{
-			name:   "POST",
-			method: http.MethodPost,
 		},
 		{
 			name:   "POST_with_body",
@@ -76,6 +71,9 @@ func TestPerformDoesNotRetryEOF(t *testing.T) {
 					return
 				}
 				calls.Add(1)
+				if req.Method != tt.method {
+					t.Errorf("请求方法不一致: got=%q want=%q", req.Method, tt.method)
+				}
 				body, err := io.ReadAll(req.Body)
 				if err != nil {
 					t.Errorf("读取请求体: %v", err)
@@ -96,21 +94,16 @@ func TestPerformDoesNotRetryEOF(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer client.Close(context.Background())
-			var body io.Reader
-			if tt.body != "" {
-				body = strings.NewReader(tt.body)
+			switch tt.method {
+			case http.MethodGet:
+				_, err = client.Get(ctx, "products", "1")
+			case http.MethodPost:
+				_, err = client.Count(ctx, "products", map[string]any{"value": 1})
+			case http.MethodPut:
+				err = client.Index(ctx, "products", "1", map[string]any{"value": 1})
 			}
-			req, err := http.NewRequestWithContext(ctx, tt.method, server.URL+"/products/_flush", body)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			res, err := client.Perform(req)
-			if res != nil {
-				_ = res.Body.Close()
-			}
-			if res != nil || !errors.Is(err, io.EOF) {
-				t.Fatalf("请求应返回 EOF: response=%v err=%v", res, err)
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("请求应返回 EOF: %v", err)
 			}
 			if got := calls.Load(); got != 1 {
 				t.Fatalf("请求发生重试: 请求次数=%d，期望 1", got)

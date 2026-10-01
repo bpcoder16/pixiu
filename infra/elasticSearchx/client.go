@@ -49,7 +49,7 @@ type Config struct {
 // Option 在客户端创建时配置日志行为。
 type Option func(*Client)
 
-// OptLogRequests 控制是否输出请求结果日志，默认开启；关闭时仍记录请求级耗时。
+// OptLogRequests 控制是否输出请求结果日志，默认关闭；设为 true 开启，关闭时仍记录请求级耗时。
 func OptLogRequests(enabled bool) Option {
 	return func(c *Client) { c.logRequests = enabled }
 }
@@ -61,14 +61,15 @@ func OptLogDetails(enabled bool) Option {
 }
 
 // Performer 是三个官方客户端共同实现的底层请求接口。
+// 错误为 nil 时必须返回非 nil 响应及 Body；无响应体时使用 http.NoBody。
 type Performer interface {
 	Perform(*http.Request) (*http.Response, error)
 }
 
-// Client 提供跨版本的基础操作，也实现版本专属 esapi 所需的 Performer。
+// Client 提供跨版本的基础操作，请求执行由内部方法统一处理。
 type Client struct {
 	name          string
-	perform       Performer
+	performer     Performer
 	transport     *http.Transport
 	closeClient   func(context.Context) error
 	slowThreshold time.Duration
@@ -176,11 +177,10 @@ func Attach(ctx context.Context, cfg Config, major int, performer Performer, clo
 	}
 	c := &Client{
 		name:          cfg.Name,
-		perform:       performer,
+		performer:     performer,
 		transport:     transport,
 		closeClient:   closeClient,
 		slowThreshold: threshold,
-		logRequests:   true,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -203,7 +203,7 @@ func (c *Client) verify(ctx context.Context, major int) error {
 	if err != nil {
 		return fmt.Errorf("elasticSearchx: build startup check: %w", err)
 	}
-	res, err := c.Perform(req)
+	res, err := c.perform(req)
 	if err != nil {
 		return fmt.Errorf("elasticSearchx: startup check: %w", err)
 	}
@@ -230,12 +230,18 @@ func versionError(expected int, actual string) error {
 	return fmt.Errorf("elasticSearchx: server major mismatch: expected %d, got %q", expected, actual)
 }
 
-// Perform 执行一次逻辑请求并记录最终结果；响应 Body 由调用方关闭。
-func (c *Client) Perform(req *http.Request) (*http.Response, error) {
+// perform 执行一次逻辑请求并记录最终结果；响应 Body 由内部调用方关闭。
+// 错误为 nil 时响应及 Body 均非 nil；底层返回的无效响应会转为错误。
+func (c *Client) perform(req *http.Request) (*http.Response, error) {
 	start := time.Now()
-	res, err := c.perform.Perform(req)
-	if err == nil && res == nil {
-		err = errors.New("elasticSearchx: empty HTTP response")
+	res, err := c.performer.Perform(req)
+	if err == nil {
+		switch {
+		case res == nil:
+			err = errors.New("elasticSearchx: empty HTTP response")
+		case res.Body == nil:
+			err = errors.New("elasticSearchx: nil HTTP response body")
+		}
 	}
 	duration := time.Since(start)
 	status := 0
@@ -271,9 +277,6 @@ func (c *Client) Perform(req *http.Request) (*http.Response, error) {
 
 // Close 关闭客户端持有的资源；重复调用返回首次结果。停止请求后再调用。
 func (c *Client) Close(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	c.close.Do(func() {
 		if c.closeClient != nil {
 			c.closeErr = c.closeClient(ctx)

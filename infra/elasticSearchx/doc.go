@@ -10,7 +10,7 @@
 // TLS 最低版本为 1.2，默认 Transport 已设置更严格的版本下限时保留它。
 // 不启用 SDK 自动重试；Go HTTP Transport 自身仍遵循标准库的安全重发规则。
 // v7 适配层包装 EOF 以规避 SDK 重试缺陷，调用方可用 errors.Is(err, io.EOF) 判断。
-// OptLogRequests 默认开启请求结果日志，OptLogDetails 默认关闭详情日志。
+// 请求结果日志默认关闭，OptLogRequests(true) 显式开启；OptLogDetails 默认关闭详情日志。
 //
 // 下例还需导入 context、time、github.com/bpcoder16/pixiu/infra/elasticSearchx/v8：
 //
@@ -24,6 +24,7 @@
 //	    MaxConnsPerHost:     50,                                           // 可选：每节点总连接上限
 //	    IdleConnTimeout:     90 * time.Second,                             // 可选：空闲连接保留时间
 //	},
+//	    elasticSearchx.OptLogRequests(true), // 可选：显式开启请求结果日志
 //	    elasticSearchx.OptLogDetails(true), // 可选：采集请求体和必要响应信息
 //	)
 //	if err != nil {
@@ -86,11 +87,12 @@
 // CloseAll 使用 context.Background()，汇总关闭错误，重复调用复用首次结果。
 // 独立 New 创建的实例不归 CloseAll 管理，仍需自行关闭 Client.Close(ctx)。
 //
-// OptLogRequests(false) 关闭所有请求结果日志，详情日志也随之关闭。
+// OptLogRequests(true) 开启请求结果日志，OptLogRequests(false) 关闭结果及详情日志。
+// 单独设置 OptLogDetails(true) 不会开启请求结果日志。
 // 详情仅增加 request_body、response_proto、response_body、response_status_text，
 // 不记录 Header；Body 不主动脱敏或截断。请求体从 GetBody 副本读取，
-// 响应体随业务读取采集，普通日志在响应 Body 关闭时输出；直接使用 Perform 或
-// esapi 时，调用方必须关闭 Body，提前关闭只记录已读取的部分。
+// 响应体随基础操作读取采集，普通日志在响应 Body 关闭时输出。
+// Client 仅公开封装好的基础操作，不直接接入官方 esapi；
 // 基础操作会自行读取并关闭 Body，Bulk 在逐项解析后统一输出结果。
 // ctx 已调用 logit.WithStart 时，每次实际请求还记录 elasticSearch_<Name>_<序号>
 // 下游耗时，独立于日志开关和级别过滤；业务可调用 logit.InfoDuration 汇总，
