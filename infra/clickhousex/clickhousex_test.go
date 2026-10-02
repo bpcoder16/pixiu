@@ -293,16 +293,24 @@ func TestTracePolicyDiagnosticsAndDuration(t *testing.T) {
 	if len(diagnostic) != 3 || diagnostic["msg"] != "callback ready" {
 		t.Fatalf("诊断详情错误: %v", diagnostic)
 	}
+	newTraceLogger(Config{
+		Name:          "reports",
+		SlowThreshold: time.Hour,
+	}, "master", "master").Trace(ctx, time.Now(), func() (string, int64) {
+		t.Fatal("禁用 SQL 日志时不应生成 SQL")
+		return "", 0
+	}, nil)
 	logit.InfoDuration(ctx, "request done")
 	records = parseRecords(t, buf)
 	if len(records) != 5 {
 		t.Fatalf("耗时汇总缺失: %v", records)
 	}
 	for _, key := range []string{
-		"ClickHouse_1_duration_ms",
-		"ClickHouse_2_duration_ms",
-		"ClickHouse_3_duration_ms",
-		"ClickHouse_4_duration_ms",
+		"ClickHouse_analytics_1_duration_ms",
+		"ClickHouse_analytics_2_duration_ms",
+		"ClickHouse_analytics_3_duration_ms",
+		"ClickHouse_analytics_4_duration_ms",
+		"ClickHouse_reports_5_duration_ms",
 	} {
 		if _, ok := records[4][key].(float64); !ok {
 			t.Fatalf("缺少 %s: %v", key, records[4])

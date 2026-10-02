@@ -60,7 +60,7 @@
 // MasterDB；其他可接受从库延迟的读取可使用 SlaveDB。GORM 的 Info、Warn、Error
 // 诊断消息按对应级别记录；LogSQL 只控制正常查询的 SQL 日志。
 // Charset 固定为 UTF8；Location 默认 Asia/Shanghai，只解释无时区 timestamp，不改变 timestamptz。
-// ctx 已调用 logit.WithStart 时，每次 GORM Trace 以 PostgreSQL 为前缀自动编号记录下游耗时，
+// ctx 已调用 logit.WithStart 时，每次 GORM Trace 以 PostgreSQL_<Name> 为前缀自动编号记录下游耗时，
 // 供业务调用 logit.InfoDuration 汇总；直接调用底层 *sql.DB 不经过 Trace。
 //
 // 单个逻辑下游可显式初始化默认客户端，省去每次按名称查询。cfg 已由应用构造：

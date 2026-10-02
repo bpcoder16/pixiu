@@ -26,7 +26,7 @@ func newTraceLogger(cfg Config) *traceLogger {
 	return &traceLogger{Logger: gormcore.New(gormcore.Config{
 		Message:        downstreamSQLiteMessage,
 		Name:           cfg.Name,
-		DurationPrefix: downstreamSQLiteMessage,
+		DurationPrefix: downstreamSQLiteMessage + "_" + cfg.Name,
 		SlowThreshold:  cfg.SlowThreshold,
 		LogSQL:         cfg.LogSQL,
 		InterpolateSQL: cfg.InterpolateSQL,

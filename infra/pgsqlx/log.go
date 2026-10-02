@@ -26,7 +26,7 @@ func newTraceLogger(cfg Config, endpointType, endpoint string) *traceLogger {
 	return &traceLogger{Logger: gormcore.New(gormcore.Config{
 		Message:        downstreamPostgreSQLMessage,
 		Name:           cfg.Name,
-		DurationPrefix: downstreamPostgreSQLMessage,
+		DurationPrefix: downstreamPostgreSQLMessage + "_" + cfg.Name,
 		Endpoint: &gormcore.Endpoint{
 			Type: endpointType,
 			Name: endpoint,

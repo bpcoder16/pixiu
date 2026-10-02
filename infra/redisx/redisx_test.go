@@ -371,8 +371,19 @@ func TestHookRecordsDurationWithoutCommandLog(t *testing.T) {
 	ctx := logit.WithStart(context.Background())
 	cmd := redis.NewStringCmd(ctx, "GET", "key")
 
-	for _, logCommands := range []bool{false, true} {
-		hook := newLoggerHook("cache", time.Hour, logCommands)
+	for _, cfg := range []struct {
+		name        string
+		logCommands bool
+	}{
+		{
+			name: "cache",
+		},
+		{
+			name:        "sessions",
+			logCommands: true,
+		},
+	} {
+		hook := newLoggerHook(cfg.name, time.Hour, cfg.logCommands)
 		if err := hook.ProcessHook(func(context.Context, redis.Cmder) error {
 			return nil
 		})(ctx, cmd); err != nil {
@@ -386,8 +397,8 @@ func TestHookRecordsDurationWithoutCommandLog(t *testing.T) {
 	logit.InfoDuration(ctx, "request done")
 	record := onlyRecord(t, &buf)
 	for _, key := range []string{
-		"Redis_1_duration_ms",
-		"Redis_2_duration_ms",
+		"Redis_cache_1_duration_ms",
+		"Redis_sessions_2_duration_ms",
 	} {
 		if _, ok := record[key].(float64); !ok {
 			t.Errorf("缺少下游耗时 %q: %v", key, record)
@@ -435,16 +446,16 @@ func TestHookRecordsDurationForMissErrorAndBatch(t *testing.T) {
 	logit.InfoDuration(ctx, "request done")
 	record := onlyRecord(t, &buf)
 	for _, key := range []string{
-		"Redis_1_duration_ms",
-		"Redis_2_duration_ms",
-		"Redis_3_duration_ms",
-		"Redis_4_duration_ms",
+		"Redis_cache_1_duration_ms",
+		"Redis_cache_2_duration_ms",
+		"Redis_cache_3_duration_ms",
+		"Redis_cache_4_duration_ms",
 	} {
 		if _, ok := record[key].(float64); !ok {
 			t.Errorf("缺少下游耗时 %q: %v", key, record)
 		}
 	}
-	if _, ok := record["Redis_5_duration_ms"]; ok {
+	if _, ok := record["Redis_cache_5_duration_ms"]; ok {
 		t.Fatalf("批量执行被重复计数: %v", record)
 	}
 }
@@ -478,7 +489,7 @@ func TestHookSkipsDurationForStartupAndInternalCommands(t *testing.T) {
 
 	logit.InfoDuration(ctx, "request done")
 	record := onlyRecord(t, &buf)
-	if _, ok := record["Redis_1_duration_ms"]; ok {
+	if _, ok := record["Redis_cache_1_duration_ms"]; ok {
 		t.Fatalf("跳过的命令被计入请求耗时: %v", record)
 	}
 }

@@ -178,16 +178,18 @@ func TestRequestDurationWithMutedResultLogs(t *testing.T) {
 	muted := logit.MustNew(logit.OptMinLevel(logit.FatalLevel), logit.OptWriter(logit.NewWriter(io.Discard)))
 	logit.SetNamed(t.Name(), muted)
 	t.Cleanup(func() { _ = logit.Close(muted) })
-	client := httpcall.New("inventory", httpcall.OptResty(func(r *resty.Client) {
+	configure := httpcall.OptResty(func(r *resty.Client) {
 		r.SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			if req.URL.Path == "/fail" {
 				return nil, errors.New("network failed")
 			}
 			return response(req, http.StatusOK), nil
 		}))
-	}))
+	})
+	client := httpcall.New("inventory", configure)
+	payments := httpcall.New("payments", configure)
 	ctx := logit.WithStart(context.Background())
-	for i := 0; i < 2; i++ {
+	for _, client := range []*httpcall.Client{client, payments} {
 		if _, err := client.Request(logit.WithLoggerName(ctx, t.Name())).Get("https://example.test/items"); err != nil {
 			t.Fatal(err)
 		}
@@ -203,7 +205,11 @@ func TestRequestDurationWithMutedResultLogs(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("耗时汇总日志数=%d, want 1: %v", len(got), got)
 	}
-	for _, key := range []string{"httpcall_1_duration_ms", "httpcall_2_duration_ms", "httpcall_3_duration_ms"} {
+	for _, key := range []string{
+		"HttpCall_inventory_1_duration_ms",
+		"HttpCall_payments_2_duration_ms",
+		"HttpCall_inventory_3_duration_ms",
+	} {
 		if _, ok := got[0][key].(float64); !ok {
 			t.Errorf("缺少下游耗时 %q: %v", key, got[0])
 		}
@@ -254,7 +260,11 @@ func TestOptLogRequestsKeepsDurationAndRestyDiagnostics(t *testing.T) {
 	if len(logs) != 1 || logs[0]["msg"] != "request done" {
 		t.Fatalf("请求结束应只输出耗时汇总: %v", logs)
 	}
-	for _, key := range []string{"httpcall_1_duration_ms", "httpcall_2_duration_ms", "httpcall_3_duration_ms"} {
+	for _, key := range []string{
+		"HttpCall_inventory_1_duration_ms",
+		"HttpCall_inventory_2_duration_ms",
+		"HttpCall_inventory_3_duration_ms",
+	} {
 		if _, ok := logs[0][key].(float64); !ok {
 			t.Errorf("缺少下游耗时 %q: %v", key, logs[0])
 		}
@@ -626,10 +636,10 @@ func TestOptRestySuccessHookPanicLogsOnce(t *testing.T) {
 	if len(logs) != 2 {
 		t.Fatalf("应仅增加一条耗时汇总日志: %v", logs)
 	}
-	if _, ok := logs[1]["httpcall_1_duration_ms"]; !ok {
+	if _, ok := logs[1]["HttpCall_inventory_1_duration_ms"]; !ok {
 		t.Fatalf("缺少唯一的 HTTP 下游耗时: %v", logs[1])
 	}
-	if _, ok := logs[1]["httpcall_2_duration_ms"]; ok {
+	if _, ok := logs[1]["HttpCall_inventory_2_duration_ms"]; ok {
 		t.Fatalf("回调 panic 导致同一次调用重复计时: %v", logs[1])
 	}
 }

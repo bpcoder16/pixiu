@@ -14,15 +14,22 @@ import (
 const downstreamRedisMessage = "Redis"
 
 type loggerHook struct {
-	name          string
-	slowThreshold time.Duration
-	logCommands   bool
+	name           string
+	durationPrefix string
+	slowThreshold  time.Duration
+	logCommands    bool
 }
 
 var _ redis.Hook = (*loggerHook)(nil)
 
 func newLoggerHook(name string, slowThreshold time.Duration, logCommands bool) *loggerHook {
-	return &loggerHook{name: name, slowThreshold: slowThreshold, logCommands: logCommands}
+	// 构造时固定耗时前缀，避免逐条命令重复拼接。
+	return &loggerHook{
+		name:           name,
+		durationPrefix: downstreamRedisMessage + "_" + name,
+		slowThreshold:  slowThreshold,
+		logCommands:    logCommands,
+	}
 }
 
 func (*loggerHook) DialHook(next redis.DialHook) redis.DialHook { return next }
@@ -36,7 +43,7 @@ func (h *loggerHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 		begin := time.Now()
 		err := next(ctx, cmd)
 		elapsed := time.Since(begin)
-		logit.AddDownstreamDurationAuto(ctx, downstreamRedisMessage, elapsed)
+		logit.AddDownstreamDurationAuto(ctx, h.durationPrefix, elapsed)
 		h.logResult(ctx, elapsed, name, cmd, err)
 		return err
 	}
@@ -50,7 +57,7 @@ func (h *loggerHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.P
 		begin := time.Now()
 		err := next(ctx, cmds)
 		elapsed := time.Since(begin)
-		logit.AddDownstreamDurationAuto(ctx, downstreamRedisMessage, elapsed)
+		logit.AddDownstreamDurationAuto(ctx, h.durationPrefix, elapsed)
 		h.logBatch(ctx, elapsed, cmds, err)
 		return err
 	}

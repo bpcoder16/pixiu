@@ -509,6 +509,10 @@ func TestTracePolicyDurationAndContext(t *testing.T) {
 		return "", 0
 	}
 	l.Trace(ctx, time.Now(), query, nil)
+	newTraceLogger(Config{
+		Name:          "archive",
+		SlowThreshold: time.Hour,
+	}).Trace(ctx, time.Now(), query, nil)
 	if buf.Len() != 0 {
 		t.Fatalf("普通查询产生了日志: %s", buf.String())
 	}
@@ -517,8 +521,10 @@ func TestTracePolicyDurationAndContext(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("耗时汇总日志数=%d, want 1", len(records))
 	}
-	if _, ok := records[0]["SQLite_1_duration_ms"].(float64); !ok {
-		t.Fatalf("缺少 SQLite 请求耗时: %v", records[0])
+	for _, key := range []string{"SQLite_local_1_duration_ms", "SQLite_archive_2_duration_ms"} {
+		if _, ok := records[0][key].(float64); !ok {
+			t.Fatalf("缺少 SQLite 请求耗时 %q: %v", key, records[0])
+		}
 	}
 	buf.Reset()
 	l = newTraceLogger(Config{Name: "local", SlowThreshold: time.Millisecond})

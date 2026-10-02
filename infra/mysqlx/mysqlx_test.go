@@ -246,12 +246,15 @@ func TestTraceMySQLErrorDetails(t *testing.T) {
 func TestTraceDurationWithoutSQLLog(t *testing.T) {
 	buf, baseCtx := captureRecords(t)
 	ctx := logit.WithStart(baseCtx)
-	l := newTraceLogger(Config{Name: "orders", SlowThreshold: time.Hour}, "master", "master")
 	query := func() (string, int64) {
 		t.Fatal("禁用 SQL 日志时不应生成 SQL")
 		return "", 0
 	}
-	for i := 0; i < 2; i++ {
+	for _, name := range []string{"orders", "accounts"} {
+		l := newTraceLogger(Config{
+			Name:          name,
+			SlowThreshold: time.Hour,
+		}, "master", "master")
 		l.Trace(ctx, time.Now().Add(-time.Millisecond), query, nil)
 	}
 	if buf.Len() != 0 {
@@ -262,7 +265,7 @@ func TestTraceDurationWithoutSQLLog(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("耗时汇总日志数=%d, want 1: %v", len(records), records)
 	}
-	for _, key := range []string{"MySQL_1_duration_ms", "MySQL_2_duration_ms"} {
+	for _, key := range []string{"MySQL_orders_1_duration_ms", "MySQL_accounts_2_duration_ms"} {
 		if _, ok := records[0][key].(float64); !ok {
 			t.Errorf("缺少下游耗时 %q: %v", key, records[0])
 		}

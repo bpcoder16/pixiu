@@ -71,7 +71,7 @@
 // 缺值时字符串为 ""、数字为 0；URL 使用完整地址，attempt 为实际尝试次数。
 // OptLogRequests 默认开启；设为 false 时不输出上述 HttpCall 结果日志，
 // OptLogDetails 此时也不输出详细内容，Resty 自身的 stderr 诊断仍会保留。
-// ctx 已调用 logit.WithStart 时，每次 Execute 还会自动编号记录 httpcall 下游耗时，
+// ctx 已调用 logit.WithStart 时，每次 Execute 以 HttpCall_<name> 为前缀自动编号记录下游耗时，
 // 即使关闭结果日志也不受影响，供业务调用 logit.InfoDuration 汇总；未调用 WithStart 时跳过。
 // OptLogDetails 默认关闭；开启后还会记录双方 Header、可读取的 Body、最终 URL、
 // 响应状态文本、HTTP 协议和 Content-Length。不会读取业务接管的响应流；缺值用

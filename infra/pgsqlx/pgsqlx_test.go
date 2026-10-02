@@ -304,8 +304,14 @@ func TestDiagnosticsAndDuration(t *testing.T) {
 	l.Warn(ctx, "warning %s", "slow")
 	l.Error(ctx, "failure %s", "closed")
 	l.LogMode(logger.Warn).Info(ctx, "hidden")
-	for range 2 {
-		l.Trace(ctx, time.Now().Add(-time.Millisecond), func() (string, int64) {
+	for _, trace := range []*traceLogger{
+		l,
+		newTraceLogger(Config{
+			Name:          "accounts",
+			SlowThreshold: time.Hour,
+		}, "master", "master"),
+	} {
+		trace.Trace(ctx, time.Now().Add(-time.Millisecond), func() (string, int64) {
 			t.Fatal("未启用 SQL 日志时不应格式化 SQL")
 			return "", 0
 		}, nil)
@@ -323,7 +329,7 @@ func TestDiagnosticsAndDuration(t *testing.T) {
 			t.Fatalf("诊断详情错误: %v", records[i])
 		}
 	}
-	for _, key := range []string{"PostgreSQL_1_duration_ms", "PostgreSQL_2_duration_ms"} {
+	for _, key := range []string{"PostgreSQL_orders_1_duration_ms", "PostgreSQL_accounts_2_duration_ms"} {
 		if _, ok := records[3][key].(float64); !ok {
 			t.Fatalf("缺少请求级耗时 %q: %v", key, records[3])
 		}

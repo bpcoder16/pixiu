@@ -76,7 +76,7 @@
 // 所有已输出的业务命令日志均附加完整请求参数，可能包含 key、值和凭据。
 // 日志不包含命令返回值或原始错误文本。底层客户端供业务使用全部命令、
 // Pipeline、Lua 和 Pub/Sub；调用方不能自行关闭它或在运行期修改配置与 Hook。
-// ctx 已调用 logit.WithStart 时，每次业务命令或批量执行会以 Redis 为前缀自动编号记录下游耗时，
+// ctx 已调用 logit.WithStart 时，每次业务命令或批量执行会以 Redis_<Name> 为前缀自动编号记录下游耗时，
 // 供业务调用 logit.InfoDuration 汇总；此登记不受 LogCommands 和日志级别限制。
 // 未调用 WithStart 时跳过；初始化 Ping 和连接握手命令不计入。
 //

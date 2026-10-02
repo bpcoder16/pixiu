@@ -61,7 +61,7 @@ func (*Client) markStart(req *resty.Request) {
 }
 
 func (c *Client) logSuccess(resp *resty.Response) {
-	duration := recordDuration(resp.Request)
+	duration := c.recordDuration(resp.Request)
 	if !c.logRequests {
 		return
 	}
@@ -79,7 +79,7 @@ func (c *Client) logSuccess(resp *resty.Response) {
 }
 
 func (c *Client) logError(req *resty.Request, err error) {
-	duration := recordDuration(req)
+	duration := c.recordDuration(req)
 	if !c.logRequests {
 		return
 	}
@@ -94,13 +94,13 @@ func (c *Client) logError(req *resty.Request, err error) {
 }
 
 // 结果日志被过滤时仍记录请求级耗时，供业务在结束时调用 InfoDuration 汇总。
-func recordDuration(req *resty.Request) time.Duration {
+func (c *Client) recordDuration(req *resty.Request) time.Duration {
 	ctx := req.Context()
 	duration := time.Duration(0)
 	if started, ok := ctx.Value(startKey{}).(time.Time); ok {
 		duration = time.Since(started)
 	}
-	logit.AddDownstreamDurationAuto(ctx, "httpcall", duration)
+	logit.AddDownstreamDurationAuto(ctx, c.durationPrefix, duration)
 	return duration
 }
 

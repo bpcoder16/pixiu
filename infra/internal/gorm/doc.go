@@ -3,10 +3,11 @@
 // 例如模块内部可以创建不带端点的日志核心：
 //
 //	const downstreamSQLiteMessage = "SQLite"
+//	name := "local"
 //	core := gorm.New(gorm.Config{
 //	    Message:        downstreamSQLiteMessage,
-//	    Name:           "local",
-//	    DurationPrefix: downstreamSQLiteMessage,
+//	    Name:           name,
+//	    DurationPrefix: downstreamSQLiteMessage + "_" + name,
 //	    SlowThreshold:  200 * time.Millisecond,
 //	})
 //	_, _ = core.ParamsFilter(ctx, "SELECT ?", 1)

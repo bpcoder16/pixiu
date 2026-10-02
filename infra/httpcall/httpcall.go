@@ -9,10 +9,11 @@ import (
 
 // Client 是可复用的 HTTP 下游客户端。运行期可以并发发请求，Resty 配置应在启动期完成。
 type Client struct {
-	name        string
-	resty       *resty.Client
-	logRequests bool
-	logDetails  bool
+	name           string
+	durationPrefix string
+	resty          *resty.Client
+	logRequests    bool
+	logDetails     bool
 }
 
 // Option 配置下游客户端，创建后不应在运行期并发修改配置。
@@ -41,9 +42,10 @@ func OptLogRequests(enabled bool) Option {
 // New 创建下游客户端。默认每次 HTTP 尝试最长 60 秒，不自动重试。
 func New(name string, opts ...Option) *Client {
 	c := &Client{
-		name:        name,
-		resty:       resty.New().SetTimeout(time.Minute).SetLogger(restyStderrLogger{name: name}),
-		logRequests: true,
+		name:           name,
+		durationPrefix: downstreamHTTPMessage + "_" + name,
+		resty:          resty.New().SetTimeout(time.Minute).SetLogger(restyStderrLogger{name: name}),
+		logRequests:    true,
 	}
 	for _, opt := range opts {
 		if opt != nil {

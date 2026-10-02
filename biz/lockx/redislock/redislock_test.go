@@ -253,7 +253,10 @@ func TestCommandsUseRedisxLoggingAndDuration(t *testing.T) {
 	if err := json.Unmarshal(lines[2], &summary); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"Redis_1_duration_ms", "Redis_2_duration_ms"} {
+	for _, key := range []string{
+		"Redis_" + t.Name() + "_1_duration_ms",
+		"Redis_" + t.Name() + "_2_duration_ms",
+	} {
 		if _, ok := summary[key].(float64); !ok {
 			t.Fatalf("丢失请求耗时 %s: %v", key, summary)
 		}
