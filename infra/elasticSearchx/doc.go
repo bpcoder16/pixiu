@@ -16,7 +16,16 @@
 // 请求结果日志默认关闭，OptLogRequests(true) 显式开启；OptLogDetails 默认关闭详情日志。
 // 启动验活不输出请求结果日志或登记下游耗时，失败时仍返回错误。
 //
-// 下例还需导入 context、time、github.com/bpcoder16/pixiu/infra/elasticSearchx/v8：
+// Search 返回扁平结果，Total 为 nil 表示未统计总数；非 nil 时 Relation 为 eq 表示
+// 准确数量，gte 表示下限。
+// 超时或分片失败时，Search 保留结果及状态，不额外返回错误；
+// 调用方应检查 TimedOut 和 Shards.Failed，决定是否接受部分结果。
+// Took（服务端耗时）和 TerminatedEarly（提前终止标记）暂以注释保留，
+// 需要时同步恢复解析、映射和测试；使用 terminate_after 时按需启用 TerminatedEarly。
+// Hits、Aggregations 和 Shards.Failures 保留原始 JSON，业务解析时应使用明确的字段类型
+// 或 json.Decoder.UseNumber 保持整数精度。
+//
+// 下例还需导入 context、errors、time、github.com/bpcoder16/pixiu/infra/elasticSearchx/v8：
 //
 //	client, err := v8.New(ctx, elasticSearchx.Config{
 //	    Name:                "catalog",                                    // 必填：实例名称
@@ -36,8 +45,20 @@
 //	}
 //	defer client.Close(context.Background()) // 应用停止请求后、日志关闭前调用
 //	result, err := client.Search(ctx, "products", queryDSL)
-//	_ = result
-//	return err
+//	if err != nil {
+//	    return err
+//	}
+//	// 本例拒绝超时或分片失败的结果，业务也可自行处理部分结果。
+//	if result.TimedOut || result.Shards.Failed > 0 {
+//	    return errors.New("搜索结果不完整")
+//	}
+//	if result.Total != nil {
+//	    _ = result.Total.Value
+//	    _ = result.Total.Relation
+//	}
+//	_ = result.Hits
+//	_ = result.Aggregations
+//	return nil
 //
 // 命名与默认实例由版本适配包创建，公共包负责查询和统一关闭：
 // v7/v8/v9.NewNamed 按 Config.Name 登记，NewDefault 同时设置默认引用。
@@ -101,4 +122,5 @@
 // ctx 已调用 logit.WithStart 时，每次实际业务请求还记录 elasticSearch_<Name>_<序号>
 // 下游耗时，独立于日志开关和级别过滤；业务可调用 logit.InfoDuration 汇总，
 // 例如 Name 为 catalog 时输出 elasticSearch_catalog_1_duration_ms。
+// 耗时前缀在客户端创建时计算，普通请求和 Bulk 共用。
 package elasticSearchx

@@ -68,15 +68,16 @@ type Performer interface {
 
 // Client 提供跨版本的基础操作，请求执行由内部方法统一处理。
 type Client struct {
-	name          string
-	performer     Performer
-	transport     *http.Transport
-	closeClient   func(context.Context) error
-	slowThreshold time.Duration
-	logRequests   bool
-	logDetails    bool
-	close         sync.Once
-	closeErr      error
+	name           string
+	durationPrefix string
+	performer      Performer
+	transport      *http.Transport
+	closeClient    func(context.Context) error
+	slowThreshold  time.Duration
+	logRequests    bool
+	logDetails     bool
+	close          sync.Once
+	closeErr       error
 }
 
 type operationKey struct{}
@@ -176,11 +177,12 @@ func Attach(ctx context.Context, cfg Config, major int, performer Performer, clo
 		threshold = 200 * time.Millisecond
 	}
 	c := &Client{
-		name:          cfg.Name,
-		performer:     performer,
-		transport:     transport,
-		closeClient:   closeClient,
-		slowThreshold: threshold,
+		name:           cfg.Name,
+		durationPrefix: downstreamElasticSearchMessage + "_" + cfg.Name,
+		performer:      performer,
+		transport:      transport,
+		closeClient:    closeClient,
+		slowThreshold:  threshold,
 	}
 	for _, opt := range opts {
 		if opt != nil {

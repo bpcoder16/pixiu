@@ -342,9 +342,15 @@ func TestNonBulkLogsStatusAndContextWithoutPayload(t *testing.T) {
 	buf := captureElasticSearchLogs(t)
 	ctx := logit.WithContext(context.Background())
 	logit.AddField(ctx, logit.Str("request_id", "req-1"))
-	c := &Client{name: "search", logRequests: true, slowThreshold: time.Second, performer: performerFunc(func(req *http.Request) (*http.Response, error) {
-		return jsonResponse(req, 503, `{"error":{"type":"unavailable","reason":"secret-body"}}`), nil
-	})}
+	c := &Client{
+		name:           "search",
+		durationPrefix: "elasticSearch_search",
+		logRequests:    true,
+		slowThreshold:  time.Second,
+		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(req, 503, `{"error":{"type":"unavailable","reason":"secret-body"}}`), nil
+		}),
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://localhost/private-index/_search?token=secret-query", strings.NewReader(`{"query":"secret-dsl"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -373,9 +379,15 @@ func TestNonBulkRoutesLogToNamedLogger(t *testing.T) {
 	name := t.Name()
 	logit.SetNamed(name, logger)
 	t.Cleanup(func() { logit.SetNamed(name, logit.Default()); _ = logit.Close(logger) })
-	c := &Client{name: "search", logRequests: true, slowThreshold: time.Second, performer: performerFunc(func(req *http.Request) (*http.Response, error) {
-		return jsonResponse(req, 503, `{"error":{"type":"unavailable"}}`), nil
-	})}
+	c := &Client{
+		name:           "search",
+		durationPrefix: "elasticSearch_search",
+		logRequests:    true,
+		slowThreshold:  time.Second,
+		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(req, 503, `{"error":{"type":"unavailable"}}`), nil
+		}),
+	}
 	ctx := logit.WithLoggerName(context.Background(), name)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/", nil)
 	if err != nil {
@@ -392,17 +404,22 @@ func TestNonBulkRoutesLogToNamedLogger(t *testing.T) {
 }
 
 func TestSearchAndCountPreserveResultShape(t *testing.T) {
-	c := &Client{name: "search", slowThreshold: time.Second, performer: performerFunc(func(req *http.Request) (*http.Response, error) {
-		switch req.URL.Path {
-		case "/products/_search":
-			return jsonResponse(req, 200, `{"hits":{"total":{"value":2,"relation":"eq"},"hits":[{"_source":{"id":9007199254740993}}]},"aggregations":{"k":{"value":1}}}`), nil
-		case "/products/_count":
-			return jsonResponse(req, 200, `{"count":3}`), nil
-		default:
-			t.Fatalf("意外请求: %s", req.URL.Path)
-			return nil, nil
-		}
-	})}
+	c := &Client{
+		name:           "search",
+		durationPrefix: "elasticSearch_search",
+		slowThreshold:  time.Second,
+		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Path {
+			case "/products/_search":
+				return jsonResponse(req, 200, `{"hits":{"total":{"value":2,"relation":"eq"},"hits":[{"_source":{"id":9007199254740993}}]},"aggregations":{"k":{"value":1}}}`), nil
+			case "/products/_count":
+				return jsonResponse(req, 200, `{"count":3}`), nil
+			default:
+				t.Fatalf("意外请求: %s", req.URL.Path)
+				return nil, nil
+			}
+		}),
+	}
 	result, err := c.Search(context.Background(), "products", map[string]any{"query": map[string]any{"match_all": map[string]any{}}})
 	if err != nil || result.Total.Value != 2 || result.Total.Relation != "eq" || !bytes.Contains(result.Hits, []byte("9007199254740993")) {
 		t.Fatalf("Search: result=%+v err=%v", result, err)
@@ -414,9 +431,14 @@ func TestSearchAndCountPreserveResultShape(t *testing.T) {
 }
 
 func TestSearchAndCountRejectMissingRequiredFields(t *testing.T) {
-	c := &Client{name: "search", slowThreshold: time.Second, performer: performerFunc(func(req *http.Request) (*http.Response, error) {
-		return jsonResponse(req, 200, `{}`), nil
-	})}
+	c := &Client{
+		name:           "search",
+		durationPrefix: "elasticSearch_search",
+		slowThreshold:  time.Second,
+		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(req, 200, `{}`), nil
+		}),
+	}
 	if _, err := c.Search(context.Background(), "products", map[string]any{"query": "x"}); err == nil {
 		t.Fatal("Search 接受了缺失 hits 的响应")
 	}
@@ -427,15 +449,20 @@ func TestSearchAndCountRejectMissingRequiredFields(t *testing.T) {
 
 func TestOperationsCloseResponseBodies(t *testing.T) {
 	var bodies []*trackedBody
-	c := &Client{name: "search", slowThreshold: time.Second, performer: performerFunc(func(req *http.Request) (*http.Response, error) {
-		status, content := 200, `{"count":1}`
-		if req.Method == http.MethodPut {
-			status, content = 400, `{"error":{"type":"mapper_parsing_exception"}}`
-		}
-		body := &trackedBody{Reader: strings.NewReader(content)}
-		bodies = append(bodies, body)
-		return &http.Response{StatusCode: status, Body: body, Header: make(http.Header), Request: req}, nil
-	})}
+	c := &Client{
+		name:           "search",
+		durationPrefix: "elasticSearch_search",
+		slowThreshold:  time.Second,
+		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
+			status, content := 200, `{"count":1}`
+			if req.Method == http.MethodPut {
+				status, content = 400, `{"error":{"type":"mapper_parsing_exception"}}`
+			}
+			body := &trackedBody{Reader: strings.NewReader(content)}
+			bodies = append(bodies, body)
+			return &http.Response{StatusCode: status, Body: body, Header: make(http.Header), Request: req}, nil
+		}),
+	}
 	if _, err := c.Count(context.Background(), "products", map[string]any{"query": "all"}); err != nil {
 		t.Fatal(err)
 	}
@@ -450,21 +477,26 @@ func TestOperationsCloseResponseBodies(t *testing.T) {
 func TestGetNotFoundAndBulkPartialFailure(t *testing.T) {
 	buf := captureElasticSearchLogs(t)
 	calls := 0
-	c := &Client{name: "search", slowThreshold: time.Second, performer: performerFunc(func(req *http.Request) (*http.Response, error) {
-		calls++
-		if req.Method == http.MethodGet {
-			return jsonResponse(req, 404, `{"found":false}`), nil
-		}
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		lines := bytes.Split(bytes.TrimSpace(body), []byte{'\n'})
-		if len(lines) != 4 || !bytes.Contains(lines[0], []byte(`"version_type":"external_gte"`)) || !bytes.Contains(lines[0], []byte(`"version":12`)) {
-			t.Fatalf("Bulk NDJSON 错误: %s", body)
-		}
-		return jsonResponse(req, 200, `{"errors":true,"items":[{"index":{"_id":"1","status":201}},{"index":{"_id":"2","status":429,"error":{"type":"rejected","reason":"secret-reason"}}}]}`), nil
-	})}
+	c := &Client{
+		name:           "search",
+		durationPrefix: "elasticSearch_search",
+		slowThreshold:  time.Second,
+		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
+			calls++
+			if req.Method == http.MethodGet {
+				return jsonResponse(req, 404, `{"found":false}`), nil
+			}
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := bytes.Split(bytes.TrimSpace(body), []byte{'\n'})
+			if len(lines) != 4 || !bytes.Contains(lines[0], []byte(`"version_type":"external_gte"`)) || !bytes.Contains(lines[0], []byte(`"version":12`)) {
+				t.Fatalf("Bulk NDJSON 错误: %s", body)
+			}
+			return jsonResponse(req, 200, `{"errors":true,"items":[{"index":{"_id":"1","status":201}},{"index":{"_id":"2","status":429,"error":{"type":"rejected","reason":"secret-reason"}}}]}`), nil
+		}),
+	}
 	_, err := c.Get(context.Background(), "products", "missing")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get 404: %v", err)
@@ -483,9 +515,14 @@ func TestGetNotFoundAndBulkPartialFailure(t *testing.T) {
 }
 
 func TestGetDistinguishesMissingIndexFromMissingDocument(t *testing.T) {
-	c := &Client{name: "search", slowThreshold: time.Second, performer: performerFunc(func(req *http.Request) (*http.Response, error) {
-		return jsonResponse(req, 404, `{"error":{"type":"index_not_found_exception","reason":"secret-index"},"status":404}`), nil
-	})}
+	c := &Client{
+		name:           "search",
+		durationPrefix: "elasticSearch_search",
+		slowThreshold:  time.Second,
+		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(req, 404, `{"error":{"type":"index_not_found_exception","reason":"secret-index"},"status":404}`), nil
+		}),
+	}
 	_, err := c.Get(context.Background(), "missing-index", "1")
 	var statusErr *HTTPError
 	if !errors.As(err, &statusErr) || statusErr.Status != 404 || statusErr.Type != "index_not_found_exception" {
@@ -495,9 +532,15 @@ func TestGetDistinguishesMissingIndexFromMissingDocument(t *testing.T) {
 
 func TestBulkRejectsMalformedResponseAndLogsError(t *testing.T) {
 	buf := captureElasticSearchLogs(t)
-	c := &Client{name: "search", logRequests: true, slowThreshold: time.Second, performer: performerFunc(func(req *http.Request) (*http.Response, error) {
-		return jsonResponse(req, 200, `{"errors":false,"items":[]}`), nil
-	})}
+	c := &Client{
+		name:           "search",
+		durationPrefix: "elasticSearch_search",
+		logRequests:    true,
+		slowThreshold:  time.Second,
+		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(req, 200, `{"errors":false,"items":[]}`), nil
+		}),
+	}
 	_, err := c.Bulk(context.Background(), "products", []BulkAction{{Kind: BulkUpsert, ID: "1", Document: map[string]any{"name": "first"}}})
 	if err == nil || !strings.Contains(err.Error(), "item count mismatch") || !strings.Contains(buf.String(), `"level":"ERROR"`) {
 		t.Fatalf("畸形响应被误判为成功: err=%v log=%q", err, buf.String())
@@ -505,9 +548,14 @@ func TestBulkRejectsMalformedResponseAndLogsError(t *testing.T) {
 }
 
 func TestBulkDoesNotCountInformationalStatusAsSuccess(t *testing.T) {
-	c := &Client{name: "search", slowThreshold: time.Second, performer: performerFunc(func(req *http.Request) (*http.Response, error) {
-		return jsonResponse(req, 200, `{"errors":true,"items":[{"index":{"_id":"1","status":102}}]}`), nil
-	})}
+	c := &Client{
+		name:           "search",
+		durationPrefix: "elasticSearch_search",
+		slowThreshold:  time.Second,
+		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(req, 200, `{"errors":true,"items":[{"index":{"_id":"1","status":102}}]}`), nil
+		}),
+	}
 	result, err := c.Bulk(context.Background(), "products", []BulkAction{{Kind: BulkIndex, ID: "1", Document: map[string]any{"name": "first"}}})
 	var bulkErr *BulkError
 	if !errors.As(err, &bulkErr) || result.Succeeded != 0 || len(result.Failures) != 1 || result.Failures[0].Status != 102 {
@@ -516,25 +564,35 @@ func TestBulkDoesNotCountInformationalStatusAsSuccess(t *testing.T) {
 }
 
 func TestBulkRejectsResponseWithoutErrorsFlag(t *testing.T) {
-	c := &Client{name: "search", slowThreshold: time.Second, performer: performerFunc(func(req *http.Request) (*http.Response, error) {
-		return jsonResponse(req, 200, `{"items":[{"index":{"_id":"1","status":201}}]}`), nil
-	})}
+	c := &Client{
+		name:           "search",
+		durationPrefix: "elasticSearch_search",
+		slowThreshold:  time.Second,
+		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(req, 200, `{"items":[{"index":{"_id":"1","status":201}}]}`), nil
+		}),
+	}
 	if _, err := c.Bulk(context.Background(), "products", []BulkAction{{Kind: BulkIndex, ID: "1", Document: map[string]any{"name": "first"}}}); err == nil {
 		t.Fatal("Bulk 接受了缺失 errors 标志的响应")
 	}
 }
 
 func TestBulkUpsertSuccessUsesNDJSON(t *testing.T) {
-	c := &Client{name: "search", slowThreshold: time.Second, performer: performerFunc(func(req *http.Request) (*http.Response, error) {
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.HasSuffix(body, []byte{'\n'}) || !bytes.Contains(body, []byte(`"doc_as_upsert":true`)) || !bytes.Contains(body, []byte(`"update"`)) {
-			t.Fatalf("Upsert NDJSON 错误: %s", body)
-		}
-		return jsonResponse(req, 200, `{"errors":false,"items":[{"update":{"_id":"1","status":200}}]}`), nil
-	})}
+	c := &Client{
+		name:           "search",
+		durationPrefix: "elasticSearch_search",
+		slowThreshold:  time.Second,
+		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.HasSuffix(body, []byte{'\n'}) || !bytes.Contains(body, []byte(`"doc_as_upsert":true`)) || !bytes.Contains(body, []byte(`"update"`)) {
+				t.Fatalf("Upsert NDJSON 错误: %s", body)
+			}
+			return jsonResponse(req, 200, `{"errors":false,"items":[{"update":{"_id":"1","status":200}}]}`), nil
+		}),
+	}
 	result, err := c.Bulk(context.Background(), "products", []BulkAction{{Kind: BulkUpsert, ID: "1", Document: map[string]any{"name": "first"}}})
 	if err != nil || result.Succeeded != 1 || len(result.Failures) != 0 {
 		t.Fatalf("Bulk Upsert: result=%+v err=%v", result, err)
