@@ -338,7 +338,7 @@ func TestPerformResponseBodyContract(t *testing.T) {
 	}
 }
 
-func TestPerformLogsStatusAndContextWithoutPayload(t *testing.T) {
+func TestNonBulkLogsStatusAndContextWithoutPayload(t *testing.T) {
 	buf := captureElasticSearchLogs(t)
 	ctx := logit.WithContext(context.Background())
 	logit.AddField(ctx, logit.Str("request_id", "req-1"))
@@ -350,7 +350,7 @@ func TestPerformLogsStatusAndContextWithoutPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "ApiKey secret-key")
-	res, err := c.perform(req)
+	res, err := c.performNonBulk(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestPerformLogsStatusAndContextWithoutPayload(t *testing.T) {
 	}
 }
 
-func TestPerformRoutesLogToNamedLogger(t *testing.T) {
+func TestNonBulkRoutesLogToNamedLogger(t *testing.T) {
 	var namedBuf bytes.Buffer
 	logger := logit.MustNew(logit.OptEncoder(logit.DefaultJSONEncoder), logit.OptWriter(logit.NewWriter(&namedBuf)))
 	name := t.Name()
@@ -381,7 +381,7 @@ func TestPerformRoutesLogToNamedLogger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := c.perform(req)
+	res, err := c.performNonBulk(req)
 	if err != nil {
 		t.Fatal(err)
 	}

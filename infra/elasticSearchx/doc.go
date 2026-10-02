@@ -14,6 +14,7 @@
 // v7 适配层包装 EOF 以规避 SDK 重试缺陷，调用方可用 errors.Is(err, io.EOF) 判断。
 // 不启用节点发现；节点失败后 SDK 仍可能安排后台恢复任务，由 Close 收尾。
 // 请求结果日志默认关闭，OptLogRequests(true) 显式开启；OptLogDetails 默认关闭详情日志。
+// 启动验活不输出请求结果日志或登记下游耗时，失败时仍返回错误。
 //
 // 下例还需导入 context、time、github.com/bpcoder16/pixiu/infra/elasticSearchx/v8：
 //
@@ -97,7 +98,7 @@
 // 响应体随基础操作读取采集，普通日志在响应 Body 关闭时输出。
 // Client 仅公开封装好的基础操作，不直接接入官方 esapi；
 // 基础操作会自行读取并关闭 Body，Bulk 在逐项解析后统一输出结果。
-// ctx 已调用 logit.WithStart 时，每次实际请求还记录 elasticSearch_<Name>_<序号>
+// ctx 已调用 logit.WithStart 时，每次实际业务请求还记录 elasticSearch_<Name>_<序号>
 // 下游耗时，独立于日志开关和级别过滤；业务可调用 logit.InfoDuration 汇总，
 // 例如 Name 为 catalog 时输出 elasticSearch_catalog_1_duration_ms。
 package elasticSearchx

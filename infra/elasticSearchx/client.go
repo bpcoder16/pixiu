@@ -230,10 +230,9 @@ func versionError(expected int, actual string) error {
 	return fmt.Errorf("elasticSearchx: server major mismatch: expected %d, got %q", expected, actual)
 }
 
-// perform 执行一次逻辑请求并记录最终结果；响应 Body 由内部调用方关闭。
+// perform 只执行底层请求并校验响应；日志、耗时及 Body 由具体请求方法处理。
 // 错误为 nil 时响应及 Body 均非 nil；底层返回的无效响应会转为错误。
 func (c *Client) perform(req *http.Request) (*http.Response, error) {
-	start := time.Now()
 	res, err := c.performer.Perform(req)
 	if err == nil {
 		switch {
@@ -243,34 +242,8 @@ func (c *Client) perform(req *http.Request) (*http.Response, error) {
 			err = errors.New("elasticSearchx: nil HTTP response body")
 		}
 	}
-	duration := time.Since(start)
-	status := 0
-	if res != nil {
-		status = res.StatusCode
-		if res.Request == nil {
-			res.Request = req
-		}
-	}
-	op, _ := req.Context().Value(operationKey{}).(operation)
-	// Bulk 的 HTTP 2xx 仍可能包含逐项失败，日志与耗时在解析及 Body 收尾后统一记录。
-	bulkResponse := op.name == "bulk" && err == nil && status >= 200 && status < 300
-	if !bulkResponse {
-		c.recordDuration(req.Context(), duration)
-	}
-	if !c.logRequests {
-		return res, err
-	}
-	if bulkResponse {
-		if c.logDetails && c.bulkLogEnabled(req.Context()) {
-			captureResponseDetails(req, res, nil)
-		}
-	} else if c.resultLogEnabled(req.Context(), op, status, err, duration) {
-		if c.logDetails && err == nil && res != nil && res.Body != nil {
-			// 随业务读取采集响应，关闭时才输出详情，避免日志抢先消耗响应流。
-			captureResponseDetails(req, res, func() { c.logResult(req, op, res, err, duration, nil) })
-		} else {
-			c.logResult(req, op, res, err, duration, nil)
-		}
+	if res != nil && res.Request == nil {
+		res.Request = req
 	}
 	return res, err
 }

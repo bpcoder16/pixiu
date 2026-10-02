@@ -53,7 +53,95 @@ func readLogRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	}
 }
 
-func TestPerformLogOptionsAndDetails(t *testing.T) {
+func TestPerformDoesNotLogOrRecordDuration(t *testing.T) {
+	buf := captureElasticSearchLogs(t)
+	body := &trackedBody{Reader: strings.NewReader(`{"count":1}`)}
+	client := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: body}, nil
+	}, OptLogRequests(true), OptLogDetails(true))
+	buf.Reset()
+	ctx := logit.WithStart(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://localhost/products/_count", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := client.perform(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.Request != req || res.Body != body || buf.Len() != 0 {
+		t.Fatalf("底层执行方法附加了日志行为或未补齐请求: response=%+v logs=%s", res, buf.String())
+	}
+	logit.InfoDuration(ctx, "done")
+	records := readLogRecords(t, buf)
+	if len(records) != 1 || records[0]["elasticSearch_catalog_1_duration_ms"] != nil {
+		t.Fatalf("底层执行方法登记了耗时: %v", records)
+	}
+}
+
+func TestStartupCheckDoesNotLogOrRecordDuration(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "关闭日志", true: "开启日志及详情"}[enabled], func(t *testing.T) {
+			buf := captureElasticSearchLogs(t)
+			cfg := Config{
+				Name:      "catalog",
+				Addresses: []string{"http://localhost:9200"},
+			}
+			transport, err := NewTransport(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := logit.WithStart(context.Background())
+			client, err := Attach(ctx, cfg, 8, performerFunc(func(req *http.Request) (*http.Response, error) {
+				return jsonResponse(req, 200, `{"version":{"number":"8.0.0"}}`), nil
+			}), nil, transport, OptLogRequests(enabled), OptLogDetails(enabled))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = client.Close(context.Background()) })
+			if buf.Len() != 0 {
+				t.Fatalf("启动验活输出了请求日志: %s", buf.String())
+			}
+			logit.InfoDuration(ctx, "done")
+			records := readLogRecords(t, buf)
+			if len(records) != 1 || records[0]["elasticSearch_catalog_1_duration_ms"] != nil {
+				t.Fatalf("启动验活登记了下游耗时: %v", records)
+			}
+		})
+	}
+}
+
+func TestRequestsWithoutHTTPDoNotRecordDuration(t *testing.T) {
+	buf := captureElasticSearchLogs(t)
+	client := newLoggingTestClient(t, func(*http.Request) (*http.Response, error) {
+		t.Fatal("无效参数或空批次发出了请求")
+		return nil, nil
+	})
+	ctx := logit.WithStart(context.Background())
+	if _, err := client.Count(ctx, "invalid/index", map[string]any{}); err == nil {
+		t.Fatal("普通请求未拒绝无效索引")
+	}
+	if _, err := client.Count(ctx, "products", make(chan int)); err == nil {
+		t.Fatal("普通请求未拒绝无法编码的请求体")
+	}
+	if _, err := client.Bulk(ctx, "products", nil); err != nil {
+		t.Fatalf("空批次未直接返回: %v", err)
+	}
+	if _, err := client.Bulk(ctx, "products", []BulkAction{{Kind: BulkIndex}}); err == nil {
+		t.Fatal("Bulk 未拒绝无效动作")
+	}
+	if _, err := client.Bulk(ctx, "invalid/index", []BulkAction{{Kind: BulkIndex, ID: "1", Document: map[string]any{}}}); err == nil {
+		t.Fatal("Bulk 未拒绝无效索引")
+	}
+	logit.InfoDuration(ctx, "done")
+	records := readLogRecords(t, buf)
+	if len(records) != 1 || records[0]["elasticSearch_catalog_1_duration_ms"] != nil {
+		t.Fatalf("未发出的请求登记了耗时: %v", records)
+	}
+}
+
+func TestNonBulkLogOptionsAndDetails(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		opts    []Option
@@ -102,8 +190,8 @@ func TestPerformLogOptionsAndDetails(t *testing.T) {
 					Request:    req,
 				}, nil
 			}, tt.opts...)
-			if !tt.log && buf.Len() != 0 {
-				t.Fatalf("日志关闭时启动验活仍输出日志: %s", buf.String())
+			if buf.Len() != 0 {
+				t.Fatalf("启动验活输出了请求日志: %s", buf.String())
 			}
 			buf.Reset()
 			req, err := http.NewRequest(http.MethodPost, "http://localhost/products/_search", strings.NewReader(requestBody))
@@ -111,7 +199,7 @@ func TestPerformLogOptionsAndDetails(t *testing.T) {
 				t.Fatal(err)
 			}
 			req.Header.Set("Authorization", "ApiKey auth-secret")
-			res, err := client.perform(req)
+			res, err := client.performNonBulk(req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -150,11 +238,14 @@ func TestPerformLogOptionsAndDetails(t *testing.T) {
 	}
 }
 
-func TestPerformDurationUsesClientNameWhenLogsDisabledOrFiltered(t *testing.T) {
+func TestRequestDurationUsesClientNameWhenLogsDisabledOrFiltered(t *testing.T) {
 	for _, filtered := range []bool{false, true} {
 		t.Run(map[bool]string{false: "关闭日志", true: "级别过滤"}[filtered], func(t *testing.T) {
 			buf := captureElasticSearchLogs(t)
 			client := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
+				if strings.HasSuffix(req.URL.Path, "/_bulk") {
+					return jsonResponse(req, 200, `{"errors":false,"items":[{"index":{"_id":"1","status":201}}]}`), nil
+				}
 				return jsonResponse(req, 200, `{"count":1}`), nil
 			}, OptLogRequests(filtered), OptLogDetails(true))
 			if filtered {
@@ -168,6 +259,9 @@ func TestPerformDurationUsesClientNameWhenLogsDisabledOrFiltered(t *testing.T) {
 				if _, err := client.Count(ctx, "products", map[string]any{"query": "all"}); err != nil {
 					t.Fatal(err)
 				}
+				if _, err := client.Bulk(ctx, "products", []BulkAction{{Kind: BulkIndex, ID: "1", Document: map[string]any{"name": "first"}}}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if buf.Len() != 0 {
 				t.Fatalf("结果日志开关或过滤失效: %s", buf.String())
@@ -177,7 +271,7 @@ func TestPerformDurationUsesClientNameWhenLogsDisabledOrFiltered(t *testing.T) {
 			}
 			logit.InfoDuration(ctx, "done")
 			records := readLogRecords(t, buf)
-			if len(records) != 1 || records[0]["elasticSearch_catalog_1_duration_ms"] == nil || records[0]["elasticSearch_catalog_2_duration_ms"] == nil || records[0]["elasticSearch_catalog_3_duration_ms"] != nil {
+			if len(records) != 1 || records[0]["elasticSearch_catalog_1_duration_ms"] == nil || records[0]["elasticSearch_catalog_2_duration_ms"] == nil || records[0]["elasticSearch_catalog_3_duration_ms"] == nil || records[0]["elasticSearch_catalog_4_duration_ms"] == nil || records[0]["elasticSearch_catalog_5_duration_ms"] != nil {
 				t.Fatalf("命名耗时丢失或重复: %v", records)
 			}
 		})
@@ -185,17 +279,21 @@ func TestPerformDurationUsesClientNameWhenLogsDisabledOrFiltered(t *testing.T) {
 }
 
 func TestBulkDetailsAndDurationAreRecordedOnce(t *testing.T) {
+	transportErr := errors.New("network failed")
 	for _, tt := range []struct {
 		name     string
 		status   int
 		response string
 		level    string
 		wantErr  bool
+		err      error
 	}{
 		{name: "成功", status: 200, response: `{"errors":false,"items":[{"index":{"_id":"1","status":201}}]}` + "\n", level: "INFO"},
 		{name: "逐项失败", status: 200, response: `{"errors":true,"items":[{"index":{"_id":"1","status":429,"error":{"type":"rejected"}}}]}`, level: "ERROR", wantErr: true},
 		{name: "畸形响应", status: 200, response: `{"errors":false,"items":[]}`, level: "ERROR", wantErr: true},
 		{name: "HTTP 失败", status: 503, response: `{"error":{"type":"unavailable"}}`, level: "ERROR", wantErr: true},
+		{name: "HTTP 4xx", status: 429, response: `{"error":{"type":"rejected"}}`, level: "WARN", wantErr: true},
+		{name: "传输失败", level: "ERROR", wantErr: true, err: transportErr},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := captureElasticSearchLogs(t)
@@ -206,6 +304,9 @@ func TestBulkDetailsAndDurationAreRecordedOnce(t *testing.T) {
 					t.Fatal(err)
 				}
 				requestBody = string(body)
+				if tt.err != nil {
+					return nil, tt.err
+				}
 				res := jsonResponse(req, tt.status, tt.response)
 				res.Proto = "HTTP/1.1"
 				res.Status = http.StatusText(tt.status)
@@ -217,12 +318,19 @@ func TestBulkDetailsAndDurationAreRecordedOnce(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Bulk 返回错误: %v", err)
 			}
+			if tt.err != nil && !errors.Is(err, tt.err) {
+				t.Fatalf("Bulk 传输错误未保留: %v", err)
+			}
 			records := readLogRecords(t, buf)
 			if len(records) != 1 || records[0]["level"] != tt.level {
 				t.Fatalf("Bulk 日志重复或分级错误: %v", records)
 			}
 			details := records[0][logit.DownstreamDetailsKey].(map[string]any)
-			if details["request_body"] != requestBody || details["response_body"] != tt.response || details["response_proto"] != "HTTP/1.1" || details["response_status_text"] != http.StatusText(tt.status) {
+			proto := "HTTP/1.1"
+			if tt.err != nil {
+				proto = ""
+			}
+			if details["request_body"] != requestBody || details["response_body"] != tt.response || details["response_proto"] != proto || details["response_status_text"] != http.StatusText(tt.status) {
 				t.Fatalf("Bulk 详情丢失: %v", details)
 			}
 			buf.Reset()
@@ -266,7 +374,7 @@ func TestDetailsPreserveBodyErrorsAndPartialRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := client.perform(req)
+	res, err := client.performNonBulk(req)
 	if err != nil || body.read {
 		t.Fatalf("详情采集提前读取了响应: err=%v read=%v", err, body.read)
 	}
@@ -285,7 +393,7 @@ func TestDetailsPreserveBodyErrorsAndPartialRead(t *testing.T) {
 	}
 }
 
-func TestPerformErrorLogWithDetailsIsImmediate(t *testing.T) {
+func TestNonBulkErrorLogWithDetailsIsImmediate(t *testing.T) {
 	for _, withResponse := range []bool{false, true} {
 		t.Run(map[bool]string{false: "无响应", true: "返回响应和错误"}[withResponse], func(t *testing.T) {
 			buf := captureElasticSearchLogs(t)
@@ -302,7 +410,7 @@ func TestPerformErrorLogWithDetailsIsImmediate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			res, err := client.perform(req)
+			res, err := client.performNonBulk(req)
 			if !errors.Is(err, transportErr) {
 				t.Fatalf("传输错误被改变: %v", err)
 			}
@@ -349,7 +457,7 @@ func TestFilteredOrDisabledDetailsDoNotReadBodyCopies(t *testing.T) {
 				t.Fatal("不可输出的日志读取了请求副本")
 				return nil, nil
 			}
-			res, err := client.perform(req)
+			res, err := client.performNonBulk(req)
 			if err != nil || res.Body != body {
 				t.Fatalf("不可输出的日志包装了响应流: err=%v", err)
 			}

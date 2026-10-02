@@ -144,16 +144,16 @@ func TestVersionFactoriesPassLogOptionsAndPreserveResponse(t *testing.T) {
 				},
 			} {
 				buf.Reset()
-				client, err := factory.open(context.Background(), cfg, tt.opts...)
+				ctx := logit.WithStart(context.Background())
+				client, err := factory.open(ctx, cfg, tt.opts...)
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer client.Close(context.Background())
-				if !tt.log && buf.Len() != 0 {
+				if buf.Len() != 0 {
 					t.Fatalf("%s 时启动验活仍输出日志: %s", tt.name, buf.String())
 				}
 				buf.Reset()
-				ctx := logit.WithStart(context.Background())
 				count, err := client.Count(ctx, "products", map[string]any{"query": "all"})
 				if err != nil || count != 4 {
 					t.Fatalf("详情采集改变了响应解析: count=%d err=%v", count, err)
