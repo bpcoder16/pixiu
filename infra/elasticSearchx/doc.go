@@ -20,9 +20,15 @@
 //
 // Search 返回扁平结果，Total 为 nil 表示未统计总数；非 nil 时 Relation 为 eq 表示
 // 准确数量，gte 表示下限。
-// 超时或分片失败时，Search 保留结果及状态，不额外返回错误；
-// 调用方应检查 TimedOut 和 Shards.Failed，决定是否接受部分结果。
+// 超时或分片失败时，Search 同时返回已有结果和 *PartialSearchError；
+// 错误包含 TimedOut 和 FailedShards，可通过 errors.As 识别，再决定是否接受部分结果。
+// 若同时发生 Body 关闭失败，结果仍保留，错误链包含两类错误；识别部分结果错误不代表没有其他错误。
 // Count 无法携带分片状态，分片失败时返回零值及错误，避免接受部分计数。
+// Search 拒绝非数组的 hits.hits；Get 要求成功响应含 found: true，存在的 _source 必须为对象。
+// 文档存在但索引禁用 _source 时，Get 返回 (nil, nil)；文档 404 仍返回 ErrNotFound。
+// Index 校验成功响应，分片失败返回 *PartialIndexError（可用 errors.As 识别）。
+// 此时主分片可能已经写入，不应盲目重试；Body 关闭失败会同时保留在错误链中。
+// 未分配副本不算失败，ingest pipeline 丢弃文档产生的 noop 仍按成功处理。
 // Took（服务端耗时）和 TerminatedEarly（提前终止标记）暂以注释保留，
 // 需要时同步恢复解析、映射和测试；使用 terminate_after 时按需启用 TerminatedEarly。
 // Hits、Aggregations 和 Shards.Failures 保留原始 JSON，业务解析时应使用明确的字段类型
@@ -49,11 +55,8 @@
 //	defer client.Close(context.Background()) // 应用停止请求后、日志关闭前调用
 //	result, err := client.Search(ctx, "products", queryDSL)
 //	if err != nil {
+//	    // 本例拒绝所有错误，包括超时或分片失败产生的 PartialSearchError。
 //	    return err
-//	}
-//	// 本例拒绝超时或分片失败的结果，业务也可自行处理部分结果。
-//	if result.TimedOut || result.Shards.Failed > 0 {
-//	    return errors.New("搜索结果不完整")
 //	}
 //	if result.Total != nil {
 //	    _ = result.Total.Value
@@ -124,8 +127,8 @@
 // Client 仅公开封装好的基础操作，不直接接入官方 esapi；
 // 各操作在完成解析和 Body 关闭后，按最终结果统一输出一次日志。
 // 成功及文档不存在为 Info，慢操作和 HTTP 4xx 为 Warn；
-// 网络、HTTP 5xx、解析和收尾错误为 Error。error_type 保留服务端错误类型，
-// 其余情况使用 document_not_found、bulk_error、transport_error 或 response_error。
+// 网络、HTTP 5xx、解析、收尾及 Search 部分结果错误为 Error。error_type 保留服务端错误类型，
+// 其余情况使用 document_not_found、bulk_error、partial_search_error、transport_error 或 response_error。
 // ctx 已调用 logit.WithStart 时，每次实际业务请求还记录 elasticSearch_<Name>_<序号>
 // 下游耗时，独立于日志开关和级别过滤；业务可调用 logit.InfoDuration 汇总，
 // 例如 Name 为 catalog 时输出 elasticSearch_catalog_1_duration_ms。

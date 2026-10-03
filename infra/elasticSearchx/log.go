@@ -43,6 +43,8 @@ func (c *Client) logResult(req *http.Request, op operation, res *http.Response, 
 		errorType = op.errorType
 		var httpErr *HTTPError
 		var bulkErr *BulkError
+		var partialSearchErr *PartialSearchError
+		var partialIndexErr *PartialIndexError
 		switch {
 		case err == ErrNotFound:
 			errorType = "document_not_found"
@@ -53,6 +55,10 @@ func (c *Client) logResult(req *http.Request, op operation, res *http.Response, 
 			}
 		case errors.As(err, &bulkErr):
 			errorType = "bulk_error"
+		case errors.As(err, &partialSearchErr):
+			errorType = "partial_search_error"
+		case errors.As(err, &partialIndexErr):
+			errorType = "partial_index_error"
 		}
 	}
 	details := map[string]any{

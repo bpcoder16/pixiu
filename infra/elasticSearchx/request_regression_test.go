@@ -22,6 +22,111 @@ func TestCountRejectsFailedShards(t *testing.T) {
 	}
 }
 
+func TestSearchPartialResultPreservesCloseErrorAndObservation(t *testing.T) {
+	for _, closeFails := range []bool{false, true} {
+		t.Run(map[bool]string{false: "部分结果", true: "部分结果和关闭错误"}[closeFails], func(t *testing.T) {
+			buf := captureElasticSearchLogs(t)
+			var closeErr error
+			if closeFails {
+				closeErr = errors.New("close failed")
+			}
+			const response = `{"timed_out":true,"_shards":{"failed":1,"failures":[{"reason":"secret"}]},"hits":{"hits":[{"_id":"1"}]},"aggregations":{"count":{"value":1}}}`
+			body := &errorResponseBody{
+				Reader:   strings.NewReader(response),
+				closeErr: closeErr,
+			}
+			c := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: 200, Body: body}, nil
+			}, OptLogRequests(true))
+			ctx := logit.WithStart(context.Background())
+			result, err := c.Search(ctx, "products", map[string]any{})
+			var partialErr *PartialSearchError
+			if !errors.As(err, &partialErr) || !partialErr.TimedOut || partialErr.FailedShards != 1 {
+				t.Fatalf("部分结果错误丢失: %v", err)
+			}
+			if closeErr != nil && !errors.Is(err, closeErr) {
+				t.Fatalf("关闭错误丢失: %v", err)
+			}
+			if closeErr == nil && err != partialErr {
+				t.Fatalf("单纯部分结果错误被额外包装: %v", err)
+			}
+			if string(result.Hits) != `[{"_id":"1"}]` || string(result.Aggregations) != `{"count":{"value":1}}` || !result.TimedOut || result.Shards.Failed != 1 || body.closed != 1 {
+				t.Fatalf("部分结果或资源收尾错误: result=%+v closed=%d", result, body.closed)
+			}
+			if strings.Contains(err.Error(), "secret") || strings.Contains(buf.String(), "secret") {
+				t.Fatal("错误文本或概要日志泄露分片原因")
+			}
+			logit.InfoDuration(ctx, "done")
+			records := readLogRecords(t, buf)
+			if len(records) != 2 || records[0]["level"] != "ERROR" || records[0][logit.DownstreamDetailsKey].(map[string]any)["error_type"] != "partial_search_error" {
+				t.Fatalf("部分结果未记录一次失败日志: %v", records)
+			}
+			elapsed, ok := records[1]["elasticSearch_catalog_1_duration_ms"]
+			if !ok || elapsed != records[0]["downstream_duration_ms"] || records[1]["elasticSearch_catalog_2_duration_ms"] != nil {
+				t.Fatalf("部分结果耗时丢失或重复: %v", records)
+			}
+		})
+	}
+}
+
+func TestSearchRejectsUnverifiedPartialResults(t *testing.T) {
+	readErr := errors.New("read failed")
+	closeErr := errors.New("close failed")
+	for _, tt := range []struct {
+		name     string
+		response string
+		status   int
+		readErr  error
+		closeErr error
+	}{
+		{
+			name:     "缺少命中数组",
+			response: `{"timed_out":true,"hits":{}}`,
+			status:   200,
+		},
+		{
+			name:     "尾部额外JSON",
+			response: `{"timed_out":true,"hits":{"hits":[]}} {}`,
+			status:   200,
+		},
+		{
+			name:     "完整JSON附带读取错误",
+			response: `{"timed_out":true,"hits":{"hits":[]}}`,
+			status:   200,
+			readErr:  readErr,
+		},
+		{
+			name:     "HTTP失败",
+			response: `{"timed_out":true,"hits":{"hits":[]}}`,
+			status:   500,
+		},
+		{
+			name:     "单独关闭失败",
+			response: `{"hits":{"hits":[]}}`,
+			status:   200,
+			closeErr: closeErr,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := &errorResponseBody{
+				Reader:   &finalReadErrorBody{data: tt.response, err: tt.readErr},
+				closeErr: tt.closeErr,
+			}
+			c := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tt.status, Body: body}, nil
+			})
+			result, err := c.Search(context.Background(), "products", map[string]any{})
+			var partialErr *PartialSearchError
+			if err == nil || errors.As(err, &partialErr) || result.Hits != nil || result.Total != nil || result.Aggregations != nil || result.TimedOut || result.Shards.Failed != 0 {
+				t.Fatalf("未验证的响应被作为部分结果返回: result=%+v err=%v", result, err)
+			}
+			if (tt.readErr != nil && !errors.Is(err, tt.readErr)) || (tt.closeErr != nil && !errors.Is(err, tt.closeErr)) || body.closed != 1 {
+				t.Fatalf("底层错误或收尾错误: err=%v closed=%d", err, body.closed)
+			}
+		})
+	}
+}
+
 func TestOperationsLogFinalResult(t *testing.T) {
 	for _, detailsEnabled := range []bool{false, true} {
 		for _, tt := range []struct {
@@ -29,6 +134,8 @@ func TestOperationsLogFinalResult(t *testing.T) {
 			status                                      int
 		}{
 			{"搜索解析失败", "search", `{"hits":`, "ERROR", "response_error", 200},
+			{"搜索超时", "search", `{"timed_out":true,"hits":{"hits":[]}}`, "ERROR", "partial_search_error", 200},
+			{"搜索分片失败", "search", `{"_shards":{"failed":1,"failures":[{"reason":"secret"}]},"hits":{"hits":[]}}`, "ERROR", "partial_search_error", 200},
 			{"计数缺失", "count", `{}`, "ERROR", "response_error", 200},
 			{"索引缺失", "get", `{"error":{"type":"index_not_found_exception"}}`, "WARN", "index_not_found_exception", 404},
 			{"文档缺失", "get", `{"found":false}`, "INFO", "document_not_found", 404},
@@ -201,14 +308,15 @@ func (b *finalReadErrorBody) Read(p []byte) (int, error) {
 func (*finalReadErrorBody) Close() error { return nil }
 
 func TestCompleteJSONPreservesReadError(t *testing.T) {
-	for _, operation := range []string{"search", "count", "get", "bulk"} {
+	for _, operation := range []string{"search", "count", "get", "index", "bulk"} {
 		t.Run(operation, func(t *testing.T) {
 			buf := captureElasticSearchLogs(t)
 			readErr := errors.New("response read failed")
 			responses := map[string]string{
 				"search": `{"hits":{"hits":[]}}`,
 				"count":  `{"count":1}`,
-				"get":    `{"_source":{}}`,
+				"get":    `{"found":true,"_source":{}}`,
+				"index":  `{"result":"created","_shards":{"total":1,"successful":1,"failed":0}}`,
 				"bulk":   `{"errors":false,"items":[{"index":{"_id":"1","status":201}}]}`,
 			}
 			c := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
@@ -222,6 +330,8 @@ func TestCompleteJSONPreservesReadError(t *testing.T) {
 				_, err = c.Count(context.Background(), "products", map[string]any{})
 			case "get":
 				_, err = c.Get(context.Background(), "products", "1")
+			case "index":
+				err = c.Index(context.Background(), "products", "1", map[string]any{})
 			case "bulk":
 				_, err = c.Bulk(context.Background(), "products", []BulkAction{{Kind: BulkIndex, ID: "1", Document: map[string]any{}}})
 			}
@@ -239,7 +349,7 @@ func TestResponseCloseErrorOverridesNonErrorLogLevel(t *testing.T) {
 		status   int
 		response string
 	}{
-		{"成功", 200, `{"_source":{}}`},
+		{"成功", 200, `{"found":true,"_source":{}}`},
 		{"文档缺失", 404, `{"found":false}`},
 		{"索引缺失", 404, `{"error":{"type":"index_not_found_exception"}}`},
 	} {

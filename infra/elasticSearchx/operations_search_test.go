@@ -3,6 +3,7 @@ package elasticSearchx
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"reflect"
 	"testing"
@@ -113,6 +114,19 @@ func TestSearchPreservesResponseStatus(t *testing.T) {
 			},
 		},
 		{
+			name: "超时与分片失败同时保留",
+			body: `{"timed_out":true,"_shards":{"total":2,"successful":1,"failed":1},"hits":{"hits":[]}}`,
+			want: SearchResult{
+				Hits:     json.RawMessage(`[]`),
+				TimedOut: true,
+				Shards: ShardsInfo{
+					Total:      2,
+					Successful: 1,
+					Failed:     1,
+				},
+			},
+		},
+		{
 			name: "提前终止标记暂不启用",
 			body: `{"took":1,"timed_out":false,"_shards":{"total":1,"successful":1,"skipped":0,"failed":0},"hits":{"total":{"value":1,"relation":"eq"},"hits":[{"_id":"1"}]},"terminated_early":true}`,
 			want: SearchResult{
@@ -144,7 +158,12 @@ func TestSearchPreservesResponseStatus(t *testing.T) {
 					"match_all": map[string]any{},
 				},
 			})
-			if err != nil {
+			if tt.want.TimedOut || tt.want.Shards.Failed > 0 {
+				var partialErr *PartialSearchError
+				if !errors.As(err, &partialErr) || partialErr.TimedOut != tt.want.TimedOut || partialErr.FailedShards != tt.want.Shards.Failed {
+					t.Fatalf("部分搜索结果错误未保留: err=%v", err)
+				}
+			} else if err != nil {
 				t.Fatalf("合法搜索响应被拒绝: %v", err)
 			}
 			if !reflect.DeepEqual(result, tt.want) {
