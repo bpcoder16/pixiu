@@ -37,16 +37,6 @@ func (e *PartialSearchError) Error() string {
 	return fmt.Sprintf("elasticSearchx: partial search response: timed_out=%t, failed_shards=%d", e.TimedOut, e.FailedShards)
 }
 
-// PartialIndexError 表示 Index 响应已完整解析，但存在分片写入失败。
-// 主分片可能已经写入，调用方不得盲目重试；组合错误中的其他失败仍须处理。
-type PartialIndexError struct {
-	FailedShards int
-}
-
-func (e *PartialIndexError) Error() string {
-	return fmt.Sprintf("elasticSearchx: partial index response: failed_shards=%d", e.FailedShards)
-}
-
 // Total 描述搜索命中数量；Relation 为 eq 时数量准确，为 gte 时仅表示下限。
 type Total struct {
 	Value    uint64 `json:"value"`
@@ -94,7 +84,11 @@ func (c *Client) Search(ctx context.Context, index string, dsl any) (SearchResul
 		// TerminatedEarly *bool `json:"terminated_early"`
 	}
 	var partialErr *PartialSearchError
-	err := c.jsonRequest(ctx, http.MethodPost, index, "search", "_search", dsl, func(reader io.Reader) error {
+	op := operation{
+		name:  "search",
+		index: index,
+	}
+	err := c.jsonRequest(ctx, http.MethodPost, "_search", op, dsl, func(reader io.Reader) error {
 		if err := jsonx.DecodeOne(reader, &payload); err != nil {
 			return fmt.Errorf("elasticSearchx: decode search response: %w", err)
 		}
@@ -136,7 +130,11 @@ func (c *Client) Count(ctx context.Context, index string, dsl any) (int64, error
 		Count  *int64     `json:"count"`
 		Shards ShardsInfo `json:"_shards"`
 	}
-	err := c.jsonRequest(ctx, http.MethodPost, index, "count", "_count", dsl, func(reader io.Reader) error {
+	op := operation{
+		name:  "count",
+		index: index,
+	}
+	err := c.jsonRequest(ctx, http.MethodPost, "_count", op, dsl, func(reader io.Reader) error {
 		if err := jsonx.DecodeOne(reader, &payload); err != nil {
 			return fmt.Errorf("elasticSearchx: decode count response: %w", err)
 		}
@@ -189,7 +187,7 @@ func (c *Client) Get(ctx context.Context, index, id string) (json.RawMessage, er
 }
 
 // Index 按显式文档 ID 创建或整体覆盖文档。
-// 分片失败返回 *PartialIndexError；主分片可能已经写入，不应盲目重试。
+// 主分片写入成功时，副本失败不返回错误；开启请求日志时以 Warn 记录失败分片数。
 func (c *Client) Index(ctx context.Context, index, id string, document any) error {
 	if id == "" || document == nil {
 		return errors.New("elasticSearchx: empty document ID or content")
@@ -202,7 +200,13 @@ func (c *Client) Index(ctx context.Context, index, id string, document any) erro
 			Failed     *int `json:"failed"`
 		} `json:"_shards"`
 	}
-	return c.jsonRequest(ctx, http.MethodPut, index, "index", "_doc/"+url.PathEscape(id), document, func(reader io.Reader) error {
+	var failedShards int
+	op := operation{
+		name:         "index",
+		index:        index,
+		failedShards: &failedShards,
+	}
+	return c.jsonRequest(ctx, http.MethodPut, "_doc/"+url.PathEscape(id), op, document, func(reader io.Reader) error {
 		if err := jsonx.DecodeOne(reader, &payload); err != nil {
 			return fmt.Errorf("elasticSearchx: decode index response: %w", err)
 		}
@@ -215,9 +219,8 @@ func (c *Client) Index(ctx context.Context, index, id string, document any) erro
 		if total < 0 || successful < 0 || failed < 0 || successful > total || failed > total-successful {
 			return errors.New("elasticSearchx: invalid index shard counts")
 		}
-		if failed > 0 {
-			return &PartialIndexError{FailedShards: failed}
-		}
+		// 成功响应中的副本失败只用于观测，不改变主分片写入成功的结果。
+		failedShards = failed
 		return nil
 	})
 }

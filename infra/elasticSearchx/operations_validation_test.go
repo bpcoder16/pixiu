@@ -193,7 +193,7 @@ func TestIndexValidatesResponseShape(t *testing.T) {
 	}
 }
 
-func TestIndexRejectsFailedShards(t *testing.T) {
+func TestIndexReplicaFailuresDoNotFailWrite(t *testing.T) {
 	for _, closeFails := range []bool{false, true} {
 		t.Run(fmt.Sprint(closeFails), func(t *testing.T) {
 			buf := captureElasticSearchLogs(t)
@@ -210,20 +210,27 @@ func TestIndexRejectsFailedShards(t *testing.T) {
 			}, OptLogRequests(true))
 			ctx := logit.WithStart(context.Background())
 			err := c.Index(ctx, "products", "1", map[string]any{})
-			var partialErr *PartialIndexError
-			if !errors.As(err, &partialErr) || partialErr.FailedShards != 1 || (closeErr != nil && !errors.Is(err, closeErr)) || body.closed != 1 {
-				t.Fatalf("分片失败或关闭错误丢失: err=%v closed=%d", err, body.closed)
+			if !errors.Is(err, closeErr) || body.closed != 1 {
+				t.Fatalf("副本失败影响写入结果或关闭错误丢失: err=%v closed=%d", err, body.closed)
 			}
 			logit.InfoDuration(ctx, "done")
 			records := readLogRecords(t, buf)
-			if len(records) != 2 || records[0]["level"] != "ERROR" || records[0][logit.DownstreamDetailsKey].(map[string]any)["error_type"] != "partial_index_error" {
-				t.Fatalf("分片失败日志错误: %v", records)
+			wantLevel, wantErrorType := "WARN", ""
+			if closeFails {
+				wantLevel, wantErrorType = "ERROR", "response_error"
+			}
+			if len(records) != 2 || records[0]["level"] != wantLevel {
+				t.Fatalf("副本失败日志级别或数量错误: %v", records)
+			}
+			details := records[0][logit.DownstreamDetailsKey].(map[string]any)
+			if details["error_type"] != wantErrorType || details["failed_shards"] != float64(1) {
+				t.Fatalf("副本失败日志详情错误: %v", records)
 			}
 			elapsed, ok := records[1]["elasticSearch_catalog_1_duration_ms"]
 			if !ok || elapsed != records[0]["downstream_duration_ms"] || records[1]["elasticSearch_catalog_2_duration_ms"] != nil {
 				t.Fatalf("分片失败耗时丢失或重复: %v", records)
 			}
-			if strings.Contains(err.Error(), "secret") || strings.Contains(buf.String(), "secret") {
+			if (err != nil && strings.Contains(err.Error(), "secret")) || strings.Contains(buf.String(), "secret") {
 				t.Fatal("分片失败泄露服务端原因")
 			}
 		})

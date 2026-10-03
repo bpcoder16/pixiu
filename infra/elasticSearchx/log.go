@@ -31,6 +31,14 @@ func (c *Client) detailsEnabled() bool {
 func (c *Client) logResult(req *http.Request, op operation, res *http.Response, err error, duration time.Duration, requestBody, responseBody []byte) {
 	ctx := req.Context()
 	level := c.resultLevel(err, duration)
+	failedShards := 0
+	if op.failedShards != nil {
+		failedShards = *op.failedShards
+	}
+	// 副本异常提升成功日志的级别，已有的动作或收尾错误仍按 Error 记录。
+	if failedShards > 0 && level == logit.InfoLevel {
+		level = logit.WarnLevel
+	}
 	if !c.logRequests || !logit.LoggerFromContext(ctx).Enabled(level) {
 		return
 	}
@@ -44,7 +52,6 @@ func (c *Client) logResult(req *http.Request, op operation, res *http.Response, 
 		var httpErr *HTTPError
 		var bulkErr *BulkError
 		var partialSearchErr *PartialSearchError
-		var partialIndexErr *PartialIndexError
 		switch {
 		case err == ErrNotFound:
 			errorType = "document_not_found"
@@ -57,8 +64,6 @@ func (c *Client) logResult(req *http.Request, op operation, res *http.Response, 
 			errorType = "bulk_error"
 		case errors.As(err, &partialSearchErr):
 			errorType = "partial_search_error"
-		case errors.As(err, &partialIndexErr):
-			errorType = "partial_index_error"
 		}
 	}
 	details := map[string]any{
@@ -71,6 +76,9 @@ func (c *Client) logResult(req *http.Request, op operation, res *http.Response, 
 	if op.bulk != nil && status >= 200 && status < 300 {
 		details["succeeded"] = op.bulk.Succeeded
 		details["failed"] = len(op.bulk.Failures)
+	}
+	if failedShards > 0 {
+		details["failed_shards"] = failedShards
 	}
 	if c.logDetails {
 		proto, statusText := "", ""

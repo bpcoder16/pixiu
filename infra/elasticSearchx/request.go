@@ -18,20 +18,17 @@ import (
 
 // operation 只在一次同步操作内使用，元数据直接交给日志，不存入 context。
 type operation struct {
-	name      string
-	index     string
-	errorType string
-	bulk      *BulkResult
+	name         string
+	index        string
+	errorType    string
+	bulk         *BulkResult
+	failedShards *int // 写入操作在解析后填充，仅用于最终日志，不参与错误判定。
 }
 
-func (c *Client) jsonRequest(ctx context.Context, method, index, name, suffix string, payload any, decode func(io.Reader) error) error {
+func (c *Client) jsonRequest(ctx context.Context, method, suffix string, op operation, payload any, decode func(io.Reader) error) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("elasticSearchx: encode %s request: %w", name, err)
-	}
-	op := operation{
-		name:  name,
-		index: index,
+		return fmt.Errorf("elasticSearchx: encode %s request: %w", op.name, err)
 	}
 	return c.request(ctx, method, suffix, op, body, "application/json", decode)
 }

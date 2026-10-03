@@ -26,8 +26,8 @@
 // Count 无法携带分片状态，分片失败时返回零值及错误，避免接受部分计数。
 // Search 拒绝非数组的 hits.hits；Get 要求成功响应含 found: true，存在的 _source 必须为对象。
 // 文档存在但索引禁用 _source 时，Get 返回 (nil, nil)；文档 404 仍返回 ErrNotFound。
-// Index 校验成功响应，分片失败返回 *PartialIndexError（可用 errors.As 识别）。
-// 此时主分片可能已经写入，不应盲目重试；Body 关闭失败会同时保留在错误链中。
+// Index 校验成功响应，仅副本失败时仍返回成功，不应据此重试；副本恢复由 ES 负责。
+// 开启请求日志时记 Warn 和 failed_shards；Body 关闭等独立错误仍正常返回并记 Error。
 // 未分配副本不算失败，ingest pipeline 丢弃文档产生的 noop 仍按成功处理。
 // Took（服务端耗时）和 TerminatedEarly（提前终止标记）暂以注释保留，
 // 需要时同步恢复解析、映射和测试；使用 terminate_after 时按需启用 TerminatedEarly。
@@ -115,6 +115,10 @@
 //	return nil
 //
 // Succeeded 表示成功完成的动作数，也包含 delete 返回 404 且无 error 的情况，不依赖 result 字段。
+// 动作失败返回 BulkError，并保留 result.Failures；仅副本失败不影响成功数或返回错误。
+// failure.Position 是原始批次中从 0 开始的下标，可通过 actions[failure.Position] 定位原动作。
+// result.FailedShards 按成功动作累加副本失败数，不对物理分片去重，仅用于观测，不应据此重试。
+// 开启请求日志时，副本异常记 Warn 和 failed_shards；若还有动作或关闭错误则仍记 Error。
 // create 的重复 ID、update 的文档缺失，以及 delete 的索引缺失仍计为失败。
 //
 // 命名与默认实例由版本适配包创建，公共包负责查询和统一关闭：

@@ -120,16 +120,21 @@ func (a BulkAction) WithExternalVersion(version int64, versionType VersionType) 
 
 // BulkFailure 保留失败项供调用方判断是否重试或忽略。
 type BulkFailure struct {
-	ID     string
-	Status int
-	Type   string
-	Reason string
+	// Position 是原始 actions 中从 0 开始的下标，重复 ID 也能定位具体动作。
+	Position int
+	ID       string
+	Status   int
+	Type     string
+	Reason   string
 }
 
 // BulkResult 汇总服务端逐项操作结果；Succeeded 包含删除时文档已不存在的动作。
+// 仅副本失败不改变动作的成功结果，也不进入 Failures。
 type BulkResult struct {
 	Succeeded int
 	Failures  []BulkFailure
+	// FailedShards 按成功动作累加副本失败数，不对物理分片去重；仅用于观测，不应据此重试。
+	FailedShards int
 }
 
 // BulkError 表示 HTTP 成功但至少一个批量动作失败。
@@ -150,9 +155,10 @@ func (c *Client) Bulk(ctx context.Context, index string, actions []BulkAction) (
 	}
 	var result BulkResult
 	op := operation{
-		name:  "bulk",
-		index: index,
-		bulk:  &result,
+		name:         "bulk",
+		index:        index,
+		bulk:         &result,
+		failedShards: &result.FailedShards,
 	}
 	err = c.request(ctx, http.MethodPost, "_bulk", op, body, "application/x-ndjson", func(reader io.Reader) error {
 		var err error
@@ -228,7 +234,10 @@ func decodeBulk(reader io.Reader, actions []BulkAction) (BulkResult, error) {
 		Items  []map[bulkKind]struct {
 			ID     string `json:"_id"`
 			Status int    `json:"status"`
-			Error  *struct {
+			Shards struct {
+				Failed int `json:"failed"`
+			} `json:"_shards"`
+			Error *struct {
 				Type   string `json:"type"`
 				Reason string `json:"reason"`
 			} `json:"error"`
@@ -259,9 +268,17 @@ func decodeBulk(reader io.Reader, actions []BulkAction) (BulkResult, error) {
 		}
 		if succeeded && value.Error == nil {
 			result.Succeeded++
+			// 主分片写入已完成，副本恢复由 ES 负责，不将副本异常视为动作失败。
+			if value.Shards.Failed > 0 {
+				result.FailedShards += value.Shards.Failed
+			}
 			continue
 		}
-		failure := BulkFailure{ID: value.ID, Status: value.Status}
+		failure := BulkFailure{
+			Position: i,
+			ID:       value.ID,
+			Status:   value.Status,
+		}
 		if failure.ID == "" {
 			failure.ID = actions[i].id
 		}

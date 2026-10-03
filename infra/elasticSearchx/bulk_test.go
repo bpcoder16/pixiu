@@ -3,10 +3,14 @@ package elasticSearchx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/bpcoder16/pixiu/logit"
 )
 
 func TestBulkOfficialActionsUseNDJSON(t *testing.T) {
@@ -36,6 +40,117 @@ func TestBulkOfficialActionsUseNDJSON(t *testing.T) {
 	})
 	if err != nil || result.Succeeded != 4 || len(result.Failures) != 0 || calls != 1 {
 		t.Fatalf("四种动作未正确执行: result=%+v calls=%d err=%v", result, calls, err)
+	}
+}
+
+func TestBulkFailuresPreservePositionWithDuplicateIDs(t *testing.T) {
+	for _, failedPosition := range []int{0, 1} {
+		t.Run(fmt.Sprint(failedPosition), func(t *testing.T) {
+			items := []string{
+				`{"index":{"_id":"same","status":200}}`,
+				`{"index":{"_id":"same","status":200}}`,
+			}
+			// 省略失败项的 _id，同时验证回退到原动作 ID 时仍保留原始位置。
+			items[failedPosition] = `{"index":{"status":429,"error":{"type":"rejected","reason":"busy"}}}`
+			c := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
+				return jsonResponse(req, http.StatusOK, `{"errors":true,"items":[`+strings.Join(items, ",")+`]}`), nil
+			})
+			result, err := c.Bulk(context.Background(), "products", []BulkAction{
+				NewBulkIndex("same", map[string]int{"value": 1}),
+				NewBulkIndex("same", map[string]int{"value": 2}),
+			})
+			var bulkErr *BulkError
+			if !errors.As(err, &bulkErr) || bulkErr.Failed != 1 || result.Succeeded != 1 || len(result.Failures) != 1 {
+				t.Fatalf("重复 ID 的失败结果错误: result=%+v err=%v", result, err)
+			}
+			want := BulkFailure{
+				Position: failedPosition,
+				ID:       "same",
+				Status:   429,
+				Type:     "rejected",
+				Reason:   "busy",
+			}
+			if result.Failures[0] != want {
+				t.Fatalf("无法定位重复 ID 的失败动作: got=%+v want=%+v", result.Failures[0], want)
+			}
+		})
+	}
+}
+
+func TestBulkReplicaFailuresDoNotFailWrite(t *testing.T) {
+	for _, closeFails := range []bool{false, true} {
+		t.Run(fmt.Sprint(closeFails), func(t *testing.T) {
+			buf := captureElasticSearchLogs(t)
+			var closeErr error
+			if closeFails {
+				closeErr = errors.New("close failed")
+			}
+			body := &errorResponseBody{
+				Reader: strings.NewReader(`{"errors":false,"items":[
+					{"index":{"_id":"1","status":201,"_shards":{"total":2,"successful":1,"failed":1}}},
+					{"create":{"_id":"2","status":201,"_shards":{"total":2,"successful":1,"failed":1}}},
+					{"update":{"_id":"3","status":200,"_shards":{"total":2,"successful":1,"failed":1}}},
+					{"delete":{"_id":"4","status":404,"_shards":{"total":2,"successful":1,"failed":1}}},
+					{"index":{"_id":"5","status":201,"_shards":{"total":2,"successful":1,"failed":0}}},
+					{"update":{"_id":"6","status":200,"_shards":{"total":0,"successful":0,"failed":0}}}
+				]}`),
+				closeErr: closeErr,
+			}
+			c := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: body}, nil
+			}, OptLogRequests(true))
+			result, err := c.Bulk(context.Background(), "products", []BulkAction{
+				NewBulkIndex("1", map[string]int{"value": 1}),
+				NewBulkCreate("2", map[string]int{"value": 2}),
+				NewBulkUpdate("3", map[string]int{"value": 3}),
+				NewBulkDelete("4"),
+				NewBulkIndex("5", map[string]int{"value": 5}),
+				NewBulkUpdate("6", map[string]int{"value": 6}),
+			})
+			if !errors.Is(err, closeErr) || result.Succeeded != 6 || len(result.Failures) != 0 || result.FailedShards != 4 || body.closed != 1 {
+				t.Fatalf("副本失败影响写入结果或关闭错误丢失: result=%+v err=%v closed=%d", result, err, body.closed)
+			}
+			wantLevel, wantErrorType := "WARN", ""
+			if closeFails {
+				wantLevel, wantErrorType = "ERROR", "response_error"
+			}
+			records := readLogRecords(t, buf)
+			if len(records) != 1 || records[0]["level"] != wantLevel {
+				t.Fatalf("副本失败日志级别或数量错误: %v", records)
+			}
+			details := records[0][logit.DownstreamDetailsKey].(map[string]any)
+			if details["error_type"] != wantErrorType || details["failed_shards"] != float64(4) || details["failed"] != float64(0) || details["succeeded"] != float64(6) {
+				t.Fatalf("副本失败日志详情错误: %v", details)
+			}
+		})
+	}
+}
+
+func TestBulkRejectsInconsistentErrorsFlag(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		response string
+	}{
+		{
+			name:     "动作失败但 errors 为 false",
+			response: `{"errors":false,"items":[{"index":{"_id":"1","status":429,"error":{"type":"rejected"}}}]}`,
+		},
+		{
+			name:     "仅分片失败但 errors 为 true",
+			response: `{"errors":true,"items":[{"index":{"_id":"1","status":201,"_shards":{"total":2,"successful":1,"failed":1}}}]}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
+				return jsonResponse(req, http.StatusOK, tt.response), nil
+			})
+			_, err := c.Bulk(context.Background(), "products", []BulkAction{
+				NewBulkIndex("1", map[string]int{"value": 1}),
+			})
+			if err == nil || !strings.Contains(err.Error(), "inconsistent bulk response") {
+				t.Fatalf("矛盾的顶层标记未被拒绝: err=%v", err)
+			}
+		})
 	}
 }
 

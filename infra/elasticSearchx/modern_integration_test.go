@@ -162,11 +162,12 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 	for _, factory := range factories {
 		t.Run(fmt.Sprint(factory.major), func(t *testing.T) {
 			for _, tt := range []struct {
-				name      string
-				response  string
-				succeeded int
-				failures  []elasticSearchx.BulkFailure
-				level     string
+				name         string
+				response     string
+				succeeded    int
+				failures     []elasticSearchx.BulkFailure
+				failedShards int
+				level        string
 			}{
 				{
 					name:      "全部成功",
@@ -180,10 +181,11 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 					succeeded: 4,
 					failures: []elasticSearchx.BulkFailure{
 						{
-							ID:     "2",
-							Status: 429,
-							Type:   "rejected",
-							Reason: "busy",
+							Position: 1,
+							ID:       "2",
+							Status:   429,
+							Type:     "rejected",
+							Reason:   "busy",
 						},
 					},
 					level: "ERROR",
@@ -194,19 +196,44 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 					succeeded: 3,
 					failures: []elasticSearchx.BulkFailure{
 						{
-							ID:     "4",
-							Status: 409,
-							Type:   "version_conflict_engine_exception",
-							Reason: "already exists",
+							Position: 3,
+							ID:       "4",
+							Status:   409,
+							Type:     "version_conflict_engine_exception",
+							Reason:   "already exists",
 						},
 						{
-							ID:     "5",
-							Status: 404,
-							Type:   "document_missing_exception",
-							Reason: "missing",
+							Position: 4,
+							ID:       "5",
+							Status:   404,
+							Type:     "document_missing_exception",
+							Reason:   "missing",
 						},
 					},
 					level: "ERROR",
+				},
+				{
+					name:         "仅副本失败",
+					response:     `{"errors":false,"items":[{"index":{"_id":"1","status":201,"_shards":{"total":2,"successful":1,"failed":1}}},{"update":{"_id":"2","status":200}},{"delete":{"_id":"3","status":404}},{"create":{"_id":"4","status":201}},{"update":{"_id":"5","status":200}}]}`,
+					succeeded:    5,
+					failedShards: 1,
+					level:        "WARN",
+				},
+				{
+					name:      "分片失败与动作失败并存",
+					response:  `{"errors":true,"items":[{"index":{"_id":"1","status":201,"_shards":{"total":2,"successful":1,"failed":1}}},{"update":{"_id":"2","status":200}},{"delete":{"_id":"3","status":404}},{"create":{"_id":"4","status":409,"error":{"type":"version_conflict_engine_exception","reason":"already exists"}}},{"update":{"_id":"5","status":200}}]}`,
+					succeeded: 4,
+					failures: []elasticSearchx.BulkFailure{
+						{
+							Position: 3,
+							ID:       "4",
+							Status:   409,
+							Type:     "version_conflict_engine_exception",
+							Reason:   "already exists",
+						},
+					},
+					failedShards: 1,
+					level:        "ERROR",
 				},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
@@ -244,7 +271,7 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 						elasticSearchx.NewBulkCreate("4", map[string]any{"value": 4}),
 						elasticSearchx.NewBulkUpdate("5", map[string]any{"value": 5}),
 					})
-					if result.Succeeded != tt.succeeded || len(result.Failures) != len(tt.failures) || calls.Load() != 1 {
+					if result.Succeeded != tt.succeeded || len(result.Failures) != len(tt.failures) || result.FailedShards != tt.failedShards || calls.Load() != 1 {
 						t.Fatalf("Bulk 结果或请求次数错误: result=%+v calls=%d", result, calls.Load())
 					}
 					if len(tt.failures) > 0 {
@@ -272,6 +299,20 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 					details := record[logit.DownstreamDetailsKey].(map[string]any)
 					if record["level"] != tt.level || record[logit.DownstreamIDKey] != "catalog" || details["operation"] != "bulk" || details["succeeded"] != float64(tt.succeeded) || details["failed"] != float64(len(tt.failures)) || details["request_body"] != requestBody || details["response_body"] != tt.response {
 						t.Fatalf("Bulk 日志结果或详情错误: %v", record)
+					}
+					wantErrorType := ""
+					if len(tt.failures) > 0 {
+						wantErrorType = "bulk_error"
+					}
+					if details["error_type"] != wantErrorType {
+						t.Fatalf("Bulk 动作失败的日志分类错误: %v", record)
+					}
+					if tt.failedShards > 0 {
+						if details["failed_shards"] != float64(tt.failedShards) {
+							t.Fatalf("副本异常观测信息丢失: %v", details)
+						}
+					} else if _, ok := details["failed_shards"]; ok {
+						t.Fatalf("无副本异常时多余的观测信息: %v", details)
 					}
 					buf.Reset()
 					logit.InfoDuration(ctx, "done")
