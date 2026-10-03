@@ -177,6 +177,7 @@ func TestNonBulkLogOptionsAndDetails(t *testing.T) {
 			const responseBody = `{"hits":{"hits":[]}}`
 			body := &trackedBody{Reader: strings.NewReader(responseBody)}
 			client := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
+				req.Header.Set("Authorization", "ApiKey auth-secret")
 				got, err := io.ReadAll(req.Body)
 				if err != nil || string(got) != requestBody {
 					t.Fatalf("日志改变了发送的请求体: body=%q err=%v", got, err)
@@ -194,24 +195,9 @@ func TestNonBulkLogOptionsAndDetails(t *testing.T) {
 				t.Fatalf("启动验活输出了请求日志: %s", buf.String())
 			}
 			buf.Reset()
-			req, err := http.NewRequest(http.MethodPost, "http://localhost/products/_search", strings.NewReader(requestBody))
-			if err != nil {
-				t.Fatal(err)
-			}
-			req.Header.Set("Authorization", "ApiKey auth-secret")
-			res, err := client.performNonBulk(req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tt.details && buf.Len() != 0 {
-				t.Fatal("详情日志提前读取并输出了响应体")
-			}
-			got, err := io.ReadAll(res.Body)
-			if err != nil || string(got) != responseBody {
-				t.Fatalf("业务读取响应体失败: body=%q err=%v", got, err)
-			}
-			if err := res.Body.Close(); err != nil || !body.closed {
-				t.Fatalf("原始响应体未关闭: err=%v closed=%v", err, body.closed)
+			result, err := client.Search(context.Background(), "products", json.RawMessage(requestBody))
+			if err != nil || string(result.Hits) != "[]" || !body.closed {
+				t.Fatalf("业务结果或响应收尾错误: result=%+v err=%v closed=%v", result, err, body.closed)
 			}
 			records := readLogRecords(t, buf)
 			if !tt.log {
@@ -363,37 +349,7 @@ func (b *failingLogBody) Close() error {
 	return b.closeErr
 }
 
-func TestDetailsPreserveBodyErrorsAndPartialRead(t *testing.T) {
-	buf := captureElasticSearchLogs(t)
-	body := &failingLogBody{readErr: errors.New("read failed"), closeErr: errors.New("close failed")}
-	client := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 200, Body: body, Request: req}, nil
-	}, OptLogRequests(true), OptLogDetails(true))
-	buf.Reset()
-	req, err := http.NewRequest(http.MethodGet, "http://localhost/products/_search", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := client.performNonBulk(req)
-	if err != nil || body.read {
-		t.Fatalf("详情采集提前读取了响应: err=%v read=%v", err, body.read)
-	}
-	data, err := io.ReadAll(res.Body)
-	if string(data) != "partial" || !errors.Is(err, body.readErr) {
-		t.Fatalf("读取错误或数据被改变: data=%q err=%v", data, err)
-	}
-	for range 2 {
-		if err := res.Body.Close(); !errors.Is(err, body.closeErr) {
-			t.Fatalf("关闭错误被改变: %v", err)
-		}
-	}
-	records := readLogRecords(t, buf)
-	if body.closed != 1 || len(records) != 1 || records[0][logit.DownstreamDetailsKey].(map[string]any)["response_body"] != "partial" {
-		t.Fatalf("关闭或日志重复，部分响应丢失: closed=%d logs=%v", body.closed, records)
-	}
-}
-
-func TestNonBulkErrorLogWithDetailsIsImmediate(t *testing.T) {
+func TestTransportErrorLogsAfterCleanup(t *testing.T) {
 	for _, withResponse := range []bool{false, true} {
 		t.Run(map[bool]string{false: "无响应", true: "返回响应和错误"}[withResponse], func(t *testing.T) {
 			buf := captureElasticSearchLogs(t)
@@ -406,24 +362,17 @@ func TestNonBulkErrorLogWithDetailsIsImmediate(t *testing.T) {
 			}, OptLogRequests(true), OptLogDetails(true))
 			buf.Reset()
 			ctx := logit.WithStart(context.Background())
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://localhost/products/_search", strings.NewReader(`{"query":"all"}`))
-			if err != nil {
-				t.Fatal(err)
-			}
-			res, err := client.performNonBulk(req)
+			_, err := client.Count(ctx, "products", map[string]any{"query": "all"})
 			if !errors.Is(err, transportErr) {
 				t.Fatalf("传输错误被改变: %v", err)
 			}
 			records := readLogRecords(t, buf)
 			if len(records) != 1 || records[0]["level"] != "ERROR" {
-				t.Fatalf("错误日志未立即输出: %v", records)
+				t.Fatalf("操作返回前未输出错误日志: %v", records)
 			}
 			details := records[0][logit.DownstreamDetailsKey].(map[string]any)
 			if details["request_body"] != `{"query":"all"}` || details["response_body"] != "" || details["response_proto"] != "" || details["response_status_text"] != "" {
 				t.Fatalf("错误日志详情缺值约定错误: %v", details)
-			}
-			if res != nil {
-				_ = res.Body.Close()
 			}
 			buf.Reset()
 			logit.InfoDuration(ctx, "done")
@@ -435,11 +384,11 @@ func TestNonBulkErrorLogWithDetailsIsImmediate(t *testing.T) {
 	}
 }
 
-func TestFilteredOrDisabledDetailsDoNotReadBodyCopies(t *testing.T) {
+func TestFilteredOrDisabledDetailsPreserveOperation(t *testing.T) {
 	for _, filtered := range []bool{false, true} {
 		t.Run(map[bool]string{false: "关闭日志", true: "级别过滤"}[filtered], func(t *testing.T) {
 			buf := captureElasticSearchLogs(t)
-			body := &trackedBody{Reader: strings.NewReader("response")}
+			body := &trackedBody{Reader: strings.NewReader(`{"count":1}`)}
 			client := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: 200, Body: body, Request: req}, nil
 			}, OptLogRequests(filtered), OptLogDetails(true))
@@ -449,19 +398,10 @@ func TestFilteredOrDisabledDetailsDoNotReadBodyCopies(t *testing.T) {
 				}
 			}
 			buf.Reset()
-			req, err := http.NewRequest(http.MethodPost, "http://localhost/products/_search", strings.NewReader("request"))
-			if err != nil {
-				t.Fatal(err)
+			count, err := client.Count(context.Background(), "products", map[string]any{})
+			if err != nil || count != 1 || !body.closed {
+				t.Fatalf("日志开关或过滤影响操作结果: count=%d err=%v closed=%v", count, err, body.closed)
 			}
-			req.GetBody = func() (io.ReadCloser, error) {
-				t.Fatal("不可输出的日志读取了请求副本")
-				return nil, nil
-			}
-			res, err := client.performNonBulk(req)
-			if err != nil || res.Body != body {
-				t.Fatalf("不可输出的日志包装了响应流: err=%v", err)
-			}
-			_ = res.Body.Close()
 			if buf.Len() != 0 {
 				t.Fatalf("日志过滤失效: %s", buf.String())
 			}

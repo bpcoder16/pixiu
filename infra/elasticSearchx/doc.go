@@ -12,7 +12,9 @@
 // TLS 最低版本为 1.2，默认 Transport 已设置更严格的版本下限时保留它。
 // 不启用 SDK 自动重试；Go HTTP Transport 自身仍遵循标准库的安全重发规则。
 // v7 适配层包装 EOF 以规避 SDK 重试缺陷，调用方可用 errors.Is(err, io.EOF) 判断。
-// 不启用节点发现；节点失败后 SDK 仍可能安排后台恢复任务，由 Close 收尾。
+// 不启用节点发现；Close 后拒绝新的操作，在途操作应由应用先行停止。
+// v8/v9 的 SDK 后台恢复任务由 Close 收尾；v7 没有对应关闭接口，
+// 已安排的恢复定时器仍会触发，但仅更新连接状态，不主动发起探测请求。
 // 请求结果日志默认关闭，OptLogRequests(true) 显式开启；OptLogDetails 默认关闭详情日志。
 // 启动验活不输出请求结果日志或登记下游耗时，失败时仍返回错误。
 //
@@ -20,6 +22,7 @@
 // 准确数量，gte 表示下限。
 // 超时或分片失败时，Search 保留结果及状态，不额外返回错误；
 // 调用方应检查 TimedOut 和 Shards.Failed，决定是否接受部分结果。
+// Count 无法携带分片状态，分片失败时返回零值及错误，避免接受部分计数。
 // Took（服务端耗时）和 TerminatedEarly（提前终止标记）暂以注释保留，
 // 需要时同步恢复解析、映射和测试；使用 terminate_after 时按需启用 TerminatedEarly。
 // Hits、Aggregations 和 Shards.Failures 保留原始 JSON，业务解析时应使用明确的字段类型
@@ -115,12 +118,16 @@
 // OptLogRequests(true) 开启请求结果日志，OptLogRequests(false) 关闭结果及详情日志。
 // 单独设置 OptLogDetails(true) 不会开启请求结果日志。
 // 详情仅增加 request_body、response_proto、response_body、response_status_text，
-// 不记录 Header；Body 不主动脱敏或截断。请求体从 GetBody 副本读取，
-// 响应体随基础操作读取采集，普通日志在响应 Body 关闭时输出。
+// 不记录 Header；Body 不主动脱敏或截断。请求详情复用已编码的请求体，
+// 响应详情随操作解析采集；解析失败时可能只包含已读取部分。
 // Client 仅公开封装好的基础操作，不直接接入官方 esapi；
-// 基础操作会自行读取并关闭 Body，Bulk 在逐项解析后统一输出结果。
+// 各操作在完成解析和 Body 关闭后，按最终结果统一输出一次日志。
+// 成功及文档不存在为 Info，慢操作和 HTTP 4xx 为 Warn；
+// 网络、HTTP 5xx、解析和收尾错误为 Error。error_type 保留服务端错误类型，
+// 其余情况使用 document_not_found、bulk_error、transport_error 或 response_error。
 // ctx 已调用 logit.WithStart 时，每次实际业务请求还记录 elasticSearch_<Name>_<序号>
 // 下游耗时，独立于日志开关和级别过滤；业务可调用 logit.InfoDuration 汇总，
 // 例如 Name 为 catalog 时输出 elasticSearch_catalog_1_duration_ms。
-// 耗时前缀在客户端创建时计算，普通请求和 Bulk 共用。
+// 耗时包含请求执行、响应解析和 Body 关闭，不包含请求编码及日志写入。
+// 本地参数错误、空 Bulk 和关闭后拒绝的操作不计时；耗时前缀在客户端创建时计算。
 package elasticSearchx

@@ -348,20 +348,15 @@ func TestNonBulkLogsStatusAndContextWithoutPayload(t *testing.T) {
 		logRequests:    true,
 		slowThreshold:  time.Second,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
+			req.Header.Set("Authorization", "ApiKey secret-key")
 			return jsonResponse(req, 503, `{"error":{"type":"unavailable","reason":"secret-body"}}`), nil
 		}),
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://localhost/private-index/_search?token=secret-query", strings.NewReader(`{"query":"secret-dsl"}`))
-	if err != nil {
-		t.Fatal(err)
+	_, err := c.Search(ctx, "products", map[string]any{"query": "secret-dsl"})
+	if err == nil {
+		t.Fatal("HTTP 503 未返回错误")
 	}
-	req.Header.Set("Authorization", "ApiKey secret-key")
-	res, err := c.performNonBulk(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
-	if strings.Contains(buf.String(), "secret") || strings.Contains(buf.String(), "private-index") {
+	if strings.Contains(buf.String(), "secret") {
 		t.Fatalf("日志泄露请求内容: %s", buf.String())
 	}
 	var record map[string]any
@@ -389,15 +384,9 @@ func TestNonBulkRoutesLogToNamedLogger(t *testing.T) {
 		}),
 	}
 	ctx := logit.WithLoggerName(context.Background(), name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/", nil)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := c.Count(ctx, "products", map[string]any{}); err == nil {
+		t.Fatal("HTTP 503 未返回错误")
 	}
-	res, err := c.performNonBulk(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
 	if !strings.Contains(namedBuf.String(), `"downstream_id":"search"`) {
 		t.Fatalf("未写入命名 Logger: %q", namedBuf.String())
 	}

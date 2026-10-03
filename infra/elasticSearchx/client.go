@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +12,10 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/bpcoder16/pixiu/jsonx"
 )
 
 // Config 配置一个可复用的 Elasticsearch 连接。
@@ -55,7 +57,7 @@ func OptLogRequests(enabled bool) Option {
 }
 
 // OptLogDetails 控制是否采集请求体和响应详情，默认关闭；仅在请求日志可输出时生效。
-// 普通响应在调用方关闭 Body 时输出日志，响应体只包含已读取的内容。
+// 所有操作在解析和收尾完成后输出日志，响应体只包含实际读取的内容。
 func OptLogDetails(enabled bool) Option {
 	return func(c *Client) { c.logDetails = enabled }
 }
@@ -78,14 +80,10 @@ type Client struct {
 	logDetails     bool
 	close          sync.Once
 	closeErr       error
+	closed         atomic.Bool
 }
 
-type operationKey struct{}
-
-type operation struct {
-	name  string
-	index string
-}
+var errClientClosed = errors.New("elasticSearchx: client is closed")
 
 // NewTransport 验证配置并创建由该客户端独占的 HTTP 连接池。
 func NewTransport(cfg Config) (*http.Transport, error) {
@@ -190,18 +188,17 @@ func Attach(ctx context.Context, cfg Config, major int, performer Performer, clo
 		}
 	}
 	if ctx == nil {
-		_ = c.Close(context.Background())
-		return nil, errors.New("elasticSearchx: nil context")
+		return nil, errors.Join(errors.New("elasticSearchx: nil context"), c.Close(context.Background()))
 	}
 	if err := c.verify(ctx, major); err != nil {
-		_ = c.Close(context.Background())
-		return nil, err
+		return nil, errors.Join(err, c.Close(context.Background()))
 	}
 	return c, nil
 }
 
-func (c *Client) verify(ctx context.Context, major int) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/", nil)
+func (c *Client) verify(ctx context.Context, major int) (resultErr error) {
+	// 使用相对路径，Host 随 SDK 选择的实际节点发送。
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 	if err != nil {
 		return fmt.Errorf("elasticSearchx: build startup check: %w", err)
 	}
@@ -209,7 +206,11 @@ func (c *Client) verify(ctx context.Context, major int) error {
 	if err != nil {
 		return fmt.Errorf("elasticSearchx: startup check: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() {
+		if err := res.Body.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("elasticSearchx: close startup response: %w", err))
+		}
+	}()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("elasticSearchx: startup check: HTTP %d", res.StatusCode)
 	}
@@ -218,7 +219,7 @@ func (c *Client) verify(ctx context.Context, major int) error {
 			Number string `json:"number"`
 		} `json:"version"`
 	}
-	if err := json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&info); err != nil {
+	if err := jsonx.DecodeOne(io.LimitReader(res.Body, 64<<10), &info); err != nil {
 		return fmt.Errorf("elasticSearchx: decode startup check: %w", err)
 	}
 	var found int
@@ -233,8 +234,11 @@ func versionError(expected int, actual string) error {
 }
 
 // perform 只执行底层请求并校验响应；日志、耗时及 Body 由具体请求方法处理。
-// 错误为 nil 时响应及 Body 均非 nil；底层返回的无效响应会转为错误。
+// 错误为 nil 时响应及 Body 均非 nil；失败时关闭可能返回的 Body。
 func (c *Client) perform(req *http.Request) (*http.Response, error) {
+	if c.closed.Load() {
+		return nil, errClientClosed
+	}
 	res, err := c.performer.Perform(req)
 	if err == nil {
 		switch {
@@ -247,12 +251,19 @@ func (c *Client) perform(req *http.Request) (*http.Response, error) {
 	if res != nil && res.Request == nil {
 		res.Request = req
 	}
+	if err != nil && res != nil && res.Body != nil {
+		if closeErr := res.Body.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}
 	return res, err
 }
 
 // Close 关闭客户端持有的资源；重复调用返回首次结果。停止请求后再调用。
 func (c *Client) Close(ctx context.Context) error {
 	c.close.Do(func() {
+		// v7 没有 SDK Close，必须由共同层阻止后续重新建连。
+		c.closed.Store(true)
 		if c.closeClient != nil {
 			c.closeErr = c.closeClient(ctx)
 		}
