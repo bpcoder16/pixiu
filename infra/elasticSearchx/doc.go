@@ -66,6 +66,57 @@
 //	_ = result.Aggregations
 //	return nil
 //
+// Bulk 支持 index、create、update、delete，可在同一索引的一次请求内混用。
+// 所有动作均通过构造函数创建并要求显式 ID；零值 BulkAction 不可用。
+// NewBulkIndex 新增或整篇覆盖，NewBulkCreate 仅新增（ID 已存在时失败），
+// NewBulkDelete 删除文档（文档已不存在也视为完成）。
+// NewBulkUpdate 仅部分更新，文档不存在时失败；
+// NewBulkUpsert 在文档存在时部分更新，不存在时插入同一份内容；
+// NewBulkUpsertWithInitial 在文档存在时部分更新，不存在时插入独立的初始文档。
+// BulkAction 的字段均为内部实现；三个 update 构造函数均编码为官方 update 动作。
+// 构造函数只组装动作，必要参数在 Bulk 发送前校验；缺少初始文档不会退化为普通更新。
+// index/delete 可调用 WithExternalVersion 设置外部版本，该方法返回动作副本，原动作不变；
+// 文档不做深拷贝，create/update 不接受外部版本。
+// 例如，client 为已创建的客户端：
+//
+//	result, err := client.Bulk(ctx, "products", []elasticSearchx.BulkAction{
+//	    elasticSearchx.NewBulkIndex("1", map[string]any{
+//	        "name":  "新版商品",
+//	        "stock": 10,
+//	    }).WithExternalVersion(12, elasticSearchx.VersionExternalGTE),
+//	    elasticSearchx.NewBulkCreate("2", map[string]any{
+//	        "name":  "新商品",
+//	        "stock": 5,
+//	    }),
+//	    elasticSearchx.NewBulkUpdate("1", map[string]any{"stock": 8}),
+//	    elasticSearchx.NewBulkUpsert("4", map[string]any{
+//	        "name":  "补货商品",
+//	        "stock": 6,
+//	    }),
+//	    elasticSearchx.NewBulkUpsertWithInitial(
+//	        "5",
+//	        map[string]any{"stock": 3},
+//	        map[string]any{
+//	            "name":  "初始商品",
+//	            "stock": 3,
+//	        },
+//	    ),
+//	    elasticSearchx.NewBulkDelete("3"),
+//	})
+//	if err != nil {
+//	    var bulkErr *elasticSearchx.BulkError
+//	    if errors.As(err, &bulkErr) {
+//	        // 部分失败仍保留成功数与按输入顺序排列的失败项，不应整批盲目重试。
+//	        _ = result.Succeeded
+//	        _ = result.Failures
+//	    }
+//	    return err
+//	}
+//	return nil
+//
+// Succeeded 表示成功完成的动作数，也包含 delete 返回 404 且无 error 的情况，不依赖 result 字段。
+// create 的重复 ID、update 的文档缺失，以及 delete 的索引缺失仍计为失败。
+//
 // 命名与默认实例由版本适配包创建，公共包负责查询和统一关闭：
 // v7/v8/v9.NewNamed 按 Config.Name 登记，NewDefault 同时设置默认引用。
 // elasticSearchx.Default() 与 elasticSearchx.Named(cfg.Name) 返回同一实例。

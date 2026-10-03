@@ -261,7 +261,7 @@ func TestResponseAndTransportErrorClosesBody(t *testing.T) {
 				if operation == "count" {
 					_, err = c.Count(context.Background(), "products", map[string]any{})
 				} else {
-					_, err = c.Bulk(context.Background(), "products", []BulkAction{{Kind: BulkIndex, ID: "1", Document: map[string]any{}}})
+					_, err = c.Bulk(context.Background(), "products", []BulkAction{NewBulkIndex("1", map[string]any{})})
 				}
 			}
 			if !errors.Is(err, transportErr) || !errors.Is(err, closeErr) || body.closed != 1 {
@@ -333,7 +333,7 @@ func TestCompleteJSONPreservesReadError(t *testing.T) {
 			case "index":
 				err = c.Index(context.Background(), "products", "1", map[string]any{})
 			case "bulk":
-				_, err = c.Bulk(context.Background(), "products", []BulkAction{{Kind: BulkIndex, ID: "1", Document: map[string]any{}}})
+				_, err = c.Bulk(context.Background(), "products", []BulkAction{NewBulkIndex("1", map[string]any{})})
 			}
 			records := readLogRecords(t, buf)
 			if !errors.Is(err, readErr) || len(records) != 1 || records[0]["level"] != "ERROR" {

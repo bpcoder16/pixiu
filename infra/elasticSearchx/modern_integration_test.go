@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/infra/elasticSearchx"
+	elasticSearchxv7 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v7"
 	elasticSearchxv8 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v8"
 	elasticSearchxv9 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v9"
 	"github.com/bpcoder16/pixiu/logit"
@@ -121,11 +122,7 @@ func TestModernVersionFactoriesDoNotRetryEOF(t *testing.T) {
 							err = client.Index(ctx, "products", "1", map[string]any{"value": 1})
 						case "Bulk":
 							_, err = client.Bulk(ctx, "products", []elasticSearchx.BulkAction{
-								{
-									Kind:     elasticSearchx.BulkIndex,
-									ID:       "1",
-									Document: map[string]any{"value": 1},
-								},
+								elasticSearchx.NewBulkIndex("1", map[string]any{"value": 1}),
 							})
 						}
 					}
@@ -138,7 +135,7 @@ func TestModernVersionFactoriesDoNotRetryEOF(t *testing.T) {
 	}
 }
 
-func TestModernVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
+func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 	// SDK 的兼容模式会改写媒体类型；这里验证普通 NDJSON 请求路径。
 	t.Setenv("ELASTIC_CLIENT_APIVERSIONING", "false")
 	var buf bytes.Buffer
@@ -149,28 +146,67 @@ func TestModernVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 		logit.SetDefault(oldLogger)
 		_ = logit.Close(logger)
 	})
-	const requestBody = "{\"index\":{\"_id\":\"1\"}}\n{\"value\":1}\n{\"update\":{\"_id\":\"2\"}}\n{\"doc\":{\"value\":2},\"doc_as_upsert\":true}\n"
-	for _, factory := range modernVersionFactories {
+	const requestBody = "{\"index\":{\"_id\":\"1\"}}\n{\"value\":1}\n" +
+		"{\"update\":{\"_id\":\"2\"}}\n{\"doc\":{\"value\":2},\"doc_as_upsert\":true}\n" +
+		"{\"delete\":{\"_id\":\"3\"}}\n" +
+		"{\"create\":{\"_id\":\"4\"}}\n{\"value\":4}\n" +
+		"{\"update\":{\"_id\":\"5\"}}\n{\"doc\":{\"value\":5}}\n"
+	factories := []struct {
+		major int
+		open  func(context.Context, elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+	}{
+		{7, elasticSearchxv7.New},
+		{8, elasticSearchxv8.New},
+		{9, elasticSearchxv9.New},
+	}
+	for _, factory := range factories {
 		t.Run(fmt.Sprint(factory.major), func(t *testing.T) {
 			for _, tt := range []struct {
 				name      string
 				response  string
 				succeeded int
-				failed    int
+				failures  []elasticSearchx.BulkFailure
 				level     string
 			}{
 				{
 					name:      "全部成功",
-					response:  `{"errors":false,"items":[{"index":{"_id":"1","status":201}},{"update":{"_id":"2","status":200}}]}`,
-					succeeded: 2,
+					response:  `{"errors":false,"items":[{"index":{"_id":"1","status":201}},{"update":{"_id":"2","status":200}},{"delete":{"_id":"3","status":404,"result":"not_found"}},{"create":{"_id":"4","status":201}},{"update":{"_id":"5","status":200}}]}`,
+					succeeded: 5,
 					level:     "INFO",
 				},
 				{
 					name:      "部分失败",
-					response:  `{"errors":true,"items":[{"index":{"_id":"1","status":201}},{"update":{"_id":"2","status":429,"error":{"type":"rejected","reason":"busy"}}}]}`,
-					succeeded: 1,
-					failed:    1,
-					level:     "ERROR",
+					response:  `{"errors":true,"items":[{"index":{"_id":"1","status":201}},{"update":{"_id":"2","status":429,"error":{"type":"rejected","reason":"busy"}}},{"delete":{"_id":"3","status":404,"result":"not_found"}},{"create":{"_id":"4","status":201}},{"update":{"_id":"5","status":200}}]}`,
+					succeeded: 4,
+					failures: []elasticSearchx.BulkFailure{
+						{
+							ID:     "2",
+							Status: 429,
+							Type:   "rejected",
+							Reason: "busy",
+						},
+					},
+					level: "ERROR",
+				},
+				{
+					name:      "重复创建及更新缺失文档",
+					response:  `{"errors":true,"items":[{"index":{"_id":"1","status":201}},{"update":{"_id":"2","status":200}},{"delete":{"_id":"3","status":404,"result":"not_found"}},{"create":{"_id":"4","status":409,"error":{"type":"version_conflict_engine_exception","reason":"already exists"}}},{"update":{"_id":"5","status":404,"error":{"type":"document_missing_exception","reason":"missing"}}}]}`,
+					succeeded: 3,
+					failures: []elasticSearchx.BulkFailure{
+						{
+							ID:     "4",
+							Status: 409,
+							Type:   "version_conflict_engine_exception",
+							Reason: "already exists",
+						},
+						{
+							ID:     "5",
+							Status: 404,
+							Type:   "document_missing_exception",
+							Reason: "missing",
+						},
+					},
+					level: "ERROR",
 				},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
@@ -179,7 +215,7 @@ func TestModernVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 						w.Header().Set("X-Elastic-Product", "Elasticsearch")
 						w.Header().Set("Content-Type", "application/json")
 						if req.URL.Path == "/" {
-							fmt.Fprintf(w, `{"version":{"number":"%d.0.0"}}`, factory.major)
+							fmt.Fprintf(w, `{"version":{"number":"%d.0.0","build_flavor":"default"},"tagline":"You Know, for Search"}`, factory.major)
 							return
 						}
 						calls.Add(1)
@@ -202,30 +238,24 @@ func TestModernVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 					buf.Reset()
 					ctx := logit.WithStart(context.Background())
 					result, err := client.Bulk(ctx, "products", []elasticSearchx.BulkAction{
-						{
-							Kind:     elasticSearchx.BulkIndex,
-							ID:       "1",
-							Document: map[string]any{"value": 1},
-						},
-						{
-							Kind:     elasticSearchx.BulkUpsert,
-							ID:       "2",
-							Document: map[string]any{"value": 2},
-						},
+						elasticSearchx.NewBulkIndex("1", map[string]any{"value": 1}),
+						elasticSearchx.NewBulkUpsert("2", map[string]any{"value": 2}),
+						elasticSearchx.NewBulkDelete("3"),
+						elasticSearchx.NewBulkCreate("4", map[string]any{"value": 4}),
+						elasticSearchx.NewBulkUpdate("5", map[string]any{"value": 5}),
 					})
-					if result.Succeeded != tt.succeeded || len(result.Failures) != tt.failed || calls.Load() != 1 {
+					if result.Succeeded != tt.succeeded || len(result.Failures) != len(tt.failures) || calls.Load() != 1 {
 						t.Fatalf("Bulk 结果或请求次数错误: result=%+v calls=%d", result, calls.Load())
 					}
-					if tt.failed > 0 {
+					if len(tt.failures) > 0 {
 						var bulkErr *elasticSearchx.BulkError
-						wantFailure := elasticSearchx.BulkFailure{
-							ID:     "2",
-							Status: 429,
-							Type:   "rejected",
-							Reason: "busy",
+						if !errors.As(err, &bulkErr) || bulkErr.Failed != len(tt.failures) {
+							t.Fatalf("逐项失败未返回 BulkError: err=%v", err)
 						}
-						if !errors.As(err, &bulkErr) || bulkErr.Failed != tt.failed || result.Failures[0] != wantFailure {
-							t.Fatalf("逐项失败未保留: err=%v failures=%+v", err, result.Failures)
+						for i, want := range tt.failures {
+							if result.Failures[i] != want {
+								t.Fatalf("失败详情或顺序错误: failures=%+v", result.Failures)
+							}
 						}
 					} else if err != nil {
 						t.Fatalf("全部成功仍返回错误: %v", err)
@@ -240,7 +270,7 @@ func TestModernVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 						t.Fatalf("Bulk 日志不是一条: extra=%v err=%v", extra, err)
 					}
 					details := record[logit.DownstreamDetailsKey].(map[string]any)
-					if record["level"] != tt.level || record[logit.DownstreamIDKey] != "catalog" || details["operation"] != "bulk" || details["succeeded"] != float64(tt.succeeded) || details["failed"] != float64(tt.failed) || details["request_body"] != requestBody || details["response_body"] != tt.response {
+					if record["level"] != tt.level || record[logit.DownstreamIDKey] != "catalog" || details["operation"] != "bulk" || details["succeeded"] != float64(tt.succeeded) || details["failed"] != float64(len(tt.failures)) || details["request_body"] != requestBody || details["response_body"] != tt.response {
 						t.Fatalf("Bulk 日志结果或详情错误: %v", record)
 					}
 					buf.Reset()

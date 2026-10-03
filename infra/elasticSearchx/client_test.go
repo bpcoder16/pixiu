@@ -490,9 +490,10 @@ func TestGetNotFoundAndBulkPartialFailure(t *testing.T) {
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get 404: %v", err)
 	}
+	versioned := NewBulkIndex("1", map[string]any{"name": "first"}).WithExternalVersion(12, VersionExternalGTE)
 	result, err := c.Bulk(context.Background(), "products", []BulkAction{
-		{Kind: BulkIndex, ID: "1", Document: map[string]any{"name": "first"}, Version: 12, VersionType: VersionExternalGTE},
-		{Kind: BulkIndex, ID: "2", Document: map[string]any{"name": "second"}},
+		versioned,
+		NewBulkIndex("2", map[string]any{"name": "second"}),
 	})
 	var bulkErr *BulkError
 	if !errors.As(err, &bulkErr) || result.Succeeded != 1 || len(result.Failures) != 1 || result.Failures[0].Status != 429 || calls != 2 {
@@ -530,7 +531,9 @@ func TestBulkRejectsMalformedResponseAndLogsError(t *testing.T) {
 			return jsonResponse(req, 200, `{"errors":false,"items":[]}`), nil
 		}),
 	}
-	_, err := c.Bulk(context.Background(), "products", []BulkAction{{Kind: BulkUpsert, ID: "1", Document: map[string]any{"name": "first"}}})
+	_, err := c.Bulk(context.Background(), "products", []BulkAction{
+		NewBulkUpsert("1", map[string]any{"name": "first"}),
+	})
 	if err == nil || !strings.Contains(err.Error(), "item count mismatch") || !strings.Contains(buf.String(), `"level":"ERROR"`) {
 		t.Fatalf("畸形响应被误判为成功: err=%v log=%q", err, buf.String())
 	}
@@ -545,7 +548,7 @@ func TestBulkDoesNotCountInformationalStatusAsSuccess(t *testing.T) {
 			return jsonResponse(req, 200, `{"errors":true,"items":[{"index":{"_id":"1","status":102}}]}`), nil
 		}),
 	}
-	result, err := c.Bulk(context.Background(), "products", []BulkAction{{Kind: BulkIndex, ID: "1", Document: map[string]any{"name": "first"}}})
+	result, err := c.Bulk(context.Background(), "products", []BulkAction{NewBulkIndex("1", map[string]any{"name": "first"})})
 	var bulkErr *BulkError
 	if !errors.As(err, &bulkErr) || result.Succeeded != 0 || len(result.Failures) != 1 || result.Failures[0].Status != 102 {
 		t.Fatalf("1xx 批量项被误判为成功: result=%+v err=%v", result, err)
@@ -561,12 +564,12 @@ func TestBulkRejectsResponseWithoutErrorsFlag(t *testing.T) {
 			return jsonResponse(req, 200, `{"items":[{"index":{"_id":"1","status":201}}]}`), nil
 		}),
 	}
-	if _, err := c.Bulk(context.Background(), "products", []BulkAction{{Kind: BulkIndex, ID: "1", Document: map[string]any{"name": "first"}}}); err == nil {
+	if _, err := c.Bulk(context.Background(), "products", []BulkAction{NewBulkIndex("1", map[string]any{"name": "first"})}); err == nil {
 		t.Fatal("Bulk 接受了缺失 errors 标志的响应")
 	}
 }
 
-func TestBulkUpsertSuccessUsesNDJSON(t *testing.T) {
+func TestBulkUpdateDocAsUpsertSuccessUsesNDJSON(t *testing.T) {
 	c := &Client{
 		name:           "search",
 		durationPrefix: "elasticSearch_search",
@@ -582,7 +585,9 @@ func TestBulkUpsertSuccessUsesNDJSON(t *testing.T) {
 			return jsonResponse(req, 200, `{"errors":false,"items":[{"update":{"_id":"1","status":200}}]}`), nil
 		}),
 	}
-	result, err := c.Bulk(context.Background(), "products", []BulkAction{{Kind: BulkUpsert, ID: "1", Document: map[string]any{"name": "first"}}})
+	result, err := c.Bulk(context.Background(), "products", []BulkAction{
+		NewBulkUpsert("1", map[string]any{"name": "first"}),
+	})
 	if err != nil || result.Succeeded != 1 || len(result.Failures) != 0 {
 		t.Fatalf("Bulk Upsert: result=%+v err=%v", result, err)
 	}

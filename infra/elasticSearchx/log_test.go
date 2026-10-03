@@ -128,10 +128,10 @@ func TestRequestsWithoutHTTPDoNotRecordDuration(t *testing.T) {
 	if _, err := client.Bulk(ctx, "products", nil); err != nil {
 		t.Fatalf("空批次未直接返回: %v", err)
 	}
-	if _, err := client.Bulk(ctx, "products", []BulkAction{{Kind: BulkIndex}}); err == nil {
+	if _, err := client.Bulk(ctx, "products", []BulkAction{NewBulkIndex("", nil)}); err == nil {
 		t.Fatal("Bulk 未拒绝无效动作")
 	}
-	if _, err := client.Bulk(ctx, "invalid/index", []BulkAction{{Kind: BulkIndex, ID: "1", Document: map[string]any{}}}); err == nil {
+	if _, err := client.Bulk(ctx, "invalid/index", []BulkAction{NewBulkIndex("1", map[string]any{})}); err == nil {
 		t.Fatal("Bulk 未拒绝无效索引")
 	}
 	logit.InfoDuration(ctx, "done")
@@ -262,7 +262,7 @@ func TestRequestDurationUsesClientNameWhenLogsDisabledOrFiltered(t *testing.T) {
 				if _, err := client.Count(ctx, "products", map[string]any{"query": "all"}); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := client.Bulk(ctx, "products", []BulkAction{{Kind: BulkIndex, ID: "1", Document: map[string]any{"name": "first"}}}); err != nil {
+				if _, err := client.Bulk(ctx, "products", []BulkAction{NewBulkIndex("1", map[string]any{"name": "first"})}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -317,7 +317,7 @@ func TestBulkDetailsAndDurationAreRecordedOnce(t *testing.T) {
 			}, OptLogRequests(true), OptLogDetails(true))
 			buf.Reset()
 			ctx := logit.WithStart(context.Background())
-			_, err := client.Bulk(ctx, "products", []BulkAction{{Kind: BulkIndex, ID: "1", Document: map[string]any{"name": "first"}}})
+			_, err := client.Bulk(ctx, "products", []BulkAction{NewBulkIndex("1", map[string]any{"name": "first"})})
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Bulk 返回错误: %v", err)
 			}
