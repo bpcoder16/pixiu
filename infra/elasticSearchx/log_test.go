@@ -225,19 +225,36 @@ func TestNonBulkLogOptionsAndDetails(t *testing.T) {
 }
 
 func TestRequestDurationUsesClientNameWhenLogsDisabledOrFiltered(t *testing.T) {
-	for _, filtered := range []bool{false, true} {
-		t.Run(map[bool]string{false: "关闭日志", true: "级别过滤"}[filtered], func(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		log      bool
+		minLevel logit.Level
+	}{
+		{
+			name:     "关闭日志",
+			minLevel: logit.InfoLevel,
+		},
+		{
+			name:     "级别过滤",
+			log:      true,
+			minLevel: logit.ErrorLevel,
+		},
+		{
+			name:     "全部结果级别过滤",
+			log:      true,
+			minLevel: logit.FatalLevel,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
 			buf := captureElasticSearchLogs(t)
 			client := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
 				if strings.HasSuffix(req.URL.Path, "/_bulk") {
 					return jsonResponse(req, 200, `{"errors":false,"items":[{"index":{"_id":"1","status":201}}]}`), nil
 				}
 				return jsonResponse(req, 200, `{"count":1}`), nil
-			}, OptLogRequests(filtered), OptLogDetails(true))
-			if filtered {
-				if err := logit.SetMinLevel(logit.Default(), logit.ErrorLevel); err != nil {
-					t.Fatal(err)
-				}
+			}, OptLogRequests(tt.log), OptLogDetails(true))
+			if err := logit.SetMinLevel(logit.Default(), tt.minLevel); err != nil {
+				t.Fatal(err)
 			}
 			buf.Reset()
 			ctx := logit.WithStart(context.Background())

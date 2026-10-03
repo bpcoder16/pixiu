@@ -117,6 +117,7 @@
 //
 // OptLogRequests(true) 开启请求结果日志，OptLogRequests(false) 关闭结果及详情日志。
 // 单独设置 OptLogDetails(true) 不会开启请求结果日志。
+// 详情采集只由这两个开关决定，日志级别在最终输出时判断。
 // 详情仅增加 request_body、response_proto、response_body、response_status_text，
 // 不记录 Header；Body 不主动脱敏或截断。请求详情复用已编码的请求体，
 // 响应详情随操作解析采集；解析失败时可能只包含已读取部分。
