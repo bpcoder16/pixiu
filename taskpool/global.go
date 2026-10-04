@@ -13,8 +13,8 @@ var defaultPool atomic.Pointer[Pool]
 
 // NewDefault 创建并启动任务池，成功后注册为默认池；失败时默认池保持不变。
 // 其他通过 New 创建的实例不受影响；替换已有默认池时，旧池仍由调用方关闭。
-func NewDefault(stopCtx context.Context, cfg Config) (*Pool, error) {
-	p, err := New(stopCtx, cfg)
+func NewDefault(cfg Config) (*Pool, error) {
+	p, err := New(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +40,7 @@ func Submit(ctx context.Context, name string, fn func(context.Context) error) er
 	return p.Submit(ctx, name, fn)
 }
 
-// Wait 等待当前默认任务池的停机排空；与 Shutdown 合计只能对同一池调用一次。
+// Wait 可选地等待当前默认任务池的全部 worker 退出，不发起关闭；允许重复或并发调用。
 func Wait() error {
 	p := Default()
 	if p == nil {
@@ -49,7 +49,7 @@ func Wait() error {
 	return p.Wait()
 }
 
-// Shutdown 主动关闭当前默认任务池；与 Wait 合计只能对同一池调用一次。
+// Shutdown 关闭当前默认任务池，等待完成或宽限到期；允许重复或并发调用。
 func Shutdown() error {
 	p := Default()
 	if p == nil {

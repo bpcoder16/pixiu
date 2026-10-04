@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/bpcoder16/pixiu/taskpool"
 )
@@ -15,7 +16,7 @@ func globalTestConfig() taskpool.Config {
 func TestNewDefaultRegistersPool(t *testing.T) {
 	old := taskpool.Swap(nil)
 	t.Cleanup(func() { taskpool.Swap(old) })
-	pool, err := taskpool.NewDefault(context.Background(), globalTestConfig())
+	pool, err := taskpool.NewDefault(globalTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,20 +35,15 @@ func TestNewDefaultRegistersPool(t *testing.T) {
 }
 
 func TestNewDefaultFailureKeepsPreviousPool(t *testing.T) {
-	previous, err := taskpool.New(context.Background(), globalTestConfig())
+	previous, err := taskpool.New(globalTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { previous.Shutdown() })
 	old := taskpool.Swap(previous)
 	t.Cleanup(func() { taskpool.Swap(old) })
-	if pool, err := taskpool.NewDefault(nil, globalTestConfig()); pool != nil || !errors.Is(err, taskpool.ErrInvalidConfig) {
-		t.Errorf("NewDefault(nil) = %p, %v, want nil and ErrInvalidConfig", pool, err)
-	}
-	stopCtx, stop := context.WithCancel(context.Background())
-	stop()
-	if pool, err := taskpool.NewDefault(stopCtx, globalTestConfig()); pool != nil || !errors.Is(err, context.Canceled) {
-		t.Errorf("NewDefault(canceled) = %p, %v, want nil and context.Canceled", pool, err)
+	if pool, err := taskpool.NewDefault(taskpool.Config{}); pool != nil || !errors.Is(err, taskpool.ErrInvalidConfig) {
+		t.Errorf("NewDefault(Config{}) = %p, %v, want nil and ErrInvalidConfig", pool, err)
 	}
 	if got := taskpool.Default(); got != previous {
 		t.Errorf("创建失败后 Default() = %p, want %p", got, previous)
@@ -57,14 +53,14 @@ func TestNewDefaultFailureKeepsPreviousPool(t *testing.T) {
 func TestInstancePoolCoexistsWithDefault(t *testing.T) {
 	old := taskpool.Swap(nil)
 	t.Cleanup(func() { taskpool.Swap(old) })
-	otherPool, err := taskpool.New(context.Background(), globalTestConfig())
+	otherPool, err := taskpool.New(globalTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := taskpool.Default(); got != nil {
 		t.Fatalf("New 创建独立池后 Default() = %p, want nil", got)
 	}
-	defaultPool, err := taskpool.NewDefault(context.Background(), globalTestConfig())
+	defaultPool, err := taskpool.NewDefault(globalTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,11 +113,11 @@ func TestGlobalWithoutDefault(t *testing.T) {
 }
 
 func TestGlobalSubmitAndShutdownFollowDefault(t *testing.T) {
-	first, err := taskpool.New(context.Background(), globalTestConfig())
+	first, err := taskpool.New(globalTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := taskpool.New(context.Background(), globalTestConfig())
+	second, err := taskpool.New(globalTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,9 +161,7 @@ func TestGlobalSubmitAndShutdownFollowDefault(t *testing.T) {
 }
 
 func TestGlobalWait(t *testing.T) {
-	stopCtx, stop := context.WithCancel(context.Background())
-	defer stop()
-	pool, err := taskpool.New(stopCtx, globalTestConfig())
+	pool, err := taskpool.New(globalTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,11 +170,73 @@ func TestGlobalWait(t *testing.T) {
 	if err := taskpool.Submit(context.Background(), "wait", func(context.Context) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	stop()
+	if err := taskpool.Shutdown(); err != nil {
+		t.Fatal(err)
+	}
 	if err := taskpool.Wait(); err != nil {
 		t.Fatal(err)
 	}
 	if got := pool.Stats(); got.Succeeded != 1 {
 		t.Errorf("Stats() = %+v, want one completed task", got)
+	}
+}
+
+func TestGlobalShutdownTimeoutAndWaitForCleanup(t *testing.T) {
+	cfg := globalTestConfig()
+	cfg.DrainTimeout = 20 * time.Millisecond
+	p, err := taskpool.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := taskpool.Swap(p)
+	t.Cleanup(func() { taskpool.Swap(old) })
+	started := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		close(release)
+		_ = p.Shutdown()
+		_ = p.Wait()
+	})
+	if err := taskpool.Submit(context.Background(), "cleanup", func(ctx context.Context) error {
+		close(started)
+		select {
+		case <-ctx.Done():
+		case <-release:
+			return nil
+		}
+		<-release
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	shutdownErr := taskpool.Shutdown()
+	if !errors.Is(shutdownErr, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown = %v, want deadline exceeded", shutdownErr)
+	}
+	if err := p.Shutdown(); err != shutdownErr {
+		t.Fatalf("实例 Shutdown = %v, want saved error %v", err, shutdownErr)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- taskpool.Wait() }()
+	select {
+	case err := <-waited:
+		t.Fatalf("清理完成前 Wait 返回: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	release <- struct{}{}
+	select {
+	case err := <-waited:
+		if err != shutdownErr {
+			t.Fatalf("全局 Wait = %v, want saved error %v", err, shutdownErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("清理结束后全局 Wait 未返回")
+	}
+	if err := taskpool.Wait(); err != shutdownErr {
+		t.Fatalf("重复全局 Wait = %v, want saved error %v", err, shutdownErr)
+	}
+	if got := p.Stats(); got.Workers != 0 || got.Running != 0 {
+		t.Fatalf("Wait 后 Stats = %+v", got)
 	}
 }

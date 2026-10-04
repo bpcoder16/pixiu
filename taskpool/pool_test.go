@@ -3,9 +3,11 @@ package taskpool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,7 +34,6 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		{},
 		{MinWorkers: 2, MaxWorkers: 1, QueueSize: 1, MaxRetries: 1},
 		{MinWorkers: 1, MaxWorkers: 1, MaxRetries: 1},
-		{MinWorkers: 1, MaxWorkers: 1, QueueSize: 1, MaxRetries: 0},
 		{MinWorkers: 1, MaxWorkers: 1, QueueSize: 1, MaxRetries: -1},
 		{MinWorkers: 1, MaxWorkers: 1, QueueSize: 1, MaxRetries: 101},
 		{MinWorkers: 1, MaxWorkers: 1, QueueSize: 1, MaxRetries: int(^uint(0) >> 1)},
@@ -40,27 +41,39 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		{MinWorkers: 1, MaxWorkers: 1, QueueSize: 1, MaxRetries: 1, IdleTimeout: -1},
 		{MinWorkers: 1, MaxWorkers: 1, QueueSize: 1, MaxRetries: 1, DrainTimeout: -1},
 	} {
-		if pool, err := New(context.Background(), cfg); err == nil || pool != nil {
+		if pool, err := New(cfg); err == nil || pool != nil {
 			t.Fatalf("New(%+v) = %v, %v, want error", cfg, pool, err)
 		}
 	}
 }
 
-func TestNewRejectsInvalidContext(t *testing.T) {
-	if p, err := New(nil, testConfig()); p != nil || !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("New(nil) = %v, %v, want ErrInvalidConfig", p, err)
+func TestZeroRetriesExecutesFailureOnce(t *testing.T) {
+	cfg := testConfig()
+	cfg.MaxRetries = 0
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if p, err := New(ctx, testConfig()); p != nil || !errors.Is(err, context.Canceled) {
-		t.Fatalf("New(canceled) = %v, %v, want context canceled", p, err)
+	defer p.Shutdown()
+	var calls atomic.Int32
+	if err := p.Submit(context.Background(), "no-retry", func(context.Context) error {
+		calls.Add(1)
+		return errors.New("permanent failure")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Shutdown(); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Stats(); calls.Load() != 1 || got.Failed != 1 || got.Succeeded != 0 || got.Running != 0 {
+		t.Fatalf("calls=%d Stats=%+v, want one failed attempt", calls.Load(), got)
 	}
 }
 
 func TestNewAcceptsMaximumRetries(t *testing.T) {
 	cfg := testConfig()
 	cfg.MaxRetries = 100
-	p, err := New(context.Background(), cfg)
+	p, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +83,7 @@ func TestNewAcceptsMaximumRetries(t *testing.T) {
 }
 
 func TestDefaultDrainTimeout(t *testing.T) {
-	p, err := New(context.Background(), testConfig())
+	p, err := New(testConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +96,7 @@ func TestDefaultDrainTimeout(t *testing.T) {
 }
 
 func TestSubmitWaitsForSpaceAndHonorsContext(t *testing.T) {
-	p, err := New(context.Background(), testConfig())
+	p, err := New(testConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +130,7 @@ func TestSubmitWaitsForSpaceAndHonorsContext(t *testing.T) {
 func TestConfiguredSubmitTimeoutLimitsFullQueueWait(t *testing.T) {
 	cfg := testConfig()
 	cfg.SubmitTimeout = 20 * time.Millisecond
-	p, err := New(context.Background(), cfg)
+	p, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +160,7 @@ func TestConfiguredSubmitTimeoutLimitsFullQueueWait(t *testing.T) {
 }
 
 func TestDefaultSubmitTimeoutLimitsFullQueueWait(t *testing.T) {
-	p, err := New(context.Background(), testConfig())
+	p, err := New(testConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +206,7 @@ func TestDefaultSubmitTimeoutLimitsFullQueueWait(t *testing.T) {
 func TestCallerCancellationPreemptsConfiguredSubmitTimeout(t *testing.T) {
 	cfg := testConfig()
 	cfg.SubmitTimeout = time.Second
-	p, err := New(context.Background(), cfg)
+	p, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,23 +235,43 @@ func TestCallerCancellationPreemptsConfiguredSubmitTimeout(t *testing.T) {
 	}
 }
 
-func TestConfiguredSubmitTimeoutDoesNotLimitImmediateAdmission(t *testing.T) {
+func TestExpiredSubmitTimeoutRejectsAvailableQueue(t *testing.T) {
 	cfg := testConfig()
 	cfg.SubmitTimeout = time.Nanosecond
-	p, err := New(context.Background(), cfg)
+	p, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Submit(context.Background(), "available", func(context.Context) error { return nil }); err != nil {
-		t.Fatalf("空队列 Submit = %v", err)
+	defer p.Shutdown()
+	if err := p.Submit(context.Background(), "available", func(context.Context) error { return nil }); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("预算已过期的空队列 Submit = %v, want deadline exceeded", err)
 	}
-	if err := p.Shutdown(); err != nil {
+	if got := p.Stats(); got.Accepted != 0 {
+		t.Fatalf("超时任务不应被接收: %+v", got)
+	}
+}
+
+func TestSubmitTimeoutIncludesInitialLockWait(t *testing.T) {
+	cfg := testConfig()
+	cfg.SubmitTimeout = 20 * time.Millisecond
+	p, err := New(cfg)
+	if err != nil {
 		t.Fatal(err)
+	}
+	defer p.Shutdown()
+	// 模拟首次获取锁超过提交预算；队列始终有空位，取得锁后仍应拒绝过期任务。
+	p.mu.Lock()
+	time.AfterFunc(100*time.Millisecond, p.mu.Unlock)
+	if err := p.Submit(context.Background(), "lock-wait", func(context.Context) error { return nil }); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("获取锁耗尽预算后的 Submit = %v, want deadline exceeded", err)
+	}
+	if got := p.Stats(); got.Accepted != 0 {
+		t.Fatalf("超时任务不应被接收: %+v", got)
 	}
 }
 
 func TestAcceptedTaskSurvivesSubmitContextCancellation(t *testing.T) {
-	p, err := New(context.Background(), testConfig())
+	p, err := New(testConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +298,7 @@ func TestAcceptedTaskSurvivesSubmitContextCancellation(t *testing.T) {
 func TestWaitingSubmitSucceedsAfterSpaceOpens(t *testing.T) {
 	cfg := testConfig()
 	cfg.SubmitTimeout = time.Second
-	p, err := New(context.Background(), cfg)
+	p, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +343,7 @@ func TestWaitingSubmitSucceedsAfterSpaceOpens(t *testing.T) {
 
 func TestWorkersExpandAndShrinkWithinRange(t *testing.T) {
 	cfg := Config{MinWorkers: 1, MaxWorkers: 3, QueueSize: 3, MaxRetries: 1, IdleTimeout: 20 * time.Millisecond}
-	p, err := New(context.Background(), cfg)
+	p, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +381,7 @@ func TestWorkersExpandAndShrinkWithinRange(t *testing.T) {
 func TestRetryDoesNotBlockOnFullQueue(t *testing.T) {
 	cfg := testConfig()
 	cfg.MaxRetries = 1
-	p, err := New(context.Background(), cfg)
+	p, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +419,7 @@ func TestRetryDoesNotBlockOnFullQueue(t *testing.T) {
 }
 
 func TestShutdownDrainsAndRejectsWaiters(t *testing.T) {
-	p, err := New(context.Background(), testConfig())
+	p, err := New(testConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,10 +455,8 @@ func TestShutdownDrainsAndRejectsWaiters(t *testing.T) {
 	}
 }
 
-func TestParentCancellationDrainsAndRejectsWaiters(t *testing.T) {
-	runCtx, stop := context.WithCancel(context.Background())
-	defer stop()
-	p, err := New(runCtx, testConfig())
+func TestShutdownPreservesTaskContextWhileDraining(t *testing.T) {
+	p, err := New(testConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +490,8 @@ func TestParentCancellationDrainsAndRejectsWaiters(t *testing.T) {
 		t.Fatalf("队列仍满时 Submit 提前返回: %v", err)
 	case <-time.After(10 * time.Millisecond):
 	}
-	stop()
+	shutdown := make(chan error, 1)
+	go func() { shutdown <- p.Shutdown() }()
 	select {
 	case err := <-result:
 		if !errors.Is(err, ErrClosed) {
@@ -476,6 +508,9 @@ func TestParentCancellationDrainsAndRejectsWaiters(t *testing.T) {
 	case <-time.After(10 * time.Millisecond):
 	}
 	close(release)
+	if err := <-shutdown; err != nil {
+		t.Fatal(err)
+	}
 	if err := <-waited; err != nil {
 		t.Fatal(err)
 	}
@@ -492,22 +527,15 @@ func TestParentCancellationDrainsAndRejectsWaiters(t *testing.T) {
 	}
 }
 
-func TestWaitBeforeStopDoesNotStartDrainTimeout(t *testing.T) {
-	runCtx, stop := context.WithCancel(context.Background())
-	defer stop()
+func TestWaitBeforeShutdownDoesNotStartDrainTimeout(t *testing.T) {
 	cfg := testConfig()
 	cfg.DrainTimeout = 20 * time.Millisecond
-	p, err := New(runCtx, cfg)
+	p, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waited := make(chan error, 1)
 	go func() { waited <- p.Wait() }()
-	waitUntil(t, func() bool {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		return p.terminalCalled
-	})
 	time.Sleep(50 * time.Millisecond)
 	select {
 	case err := <-waited:
@@ -517,78 +545,69 @@ func TestWaitBeforeStopDoesNotStartDrainTimeout(t *testing.T) {
 	if err := p.Submit(context.Background(), "still-open", func(context.Context) error { return nil }); err != nil {
 		t.Fatalf("停机前 Submit = %v", err)
 	}
-	stop()
+	if err := p.Shutdown(); err != nil {
+		t.Fatal(err)
+	}
 	if err := <-waited; err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestTerminalMethodsCanOnlyBeCalledOnce(t *testing.T) {
-	expectPanic := func(t *testing.T, call func()) {
-		t.Helper()
-		defer func() {
-			if recover() == nil {
-				t.Error("重复调用未 panic")
-			}
-		}()
-		call()
-	}
-
-	p, err := New(context.Background(), testConfig())
+func TestTerminalMethodsCanBeRepeated(t *testing.T) {
+	p, err := New(testConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := p.Shutdown(); err != nil {
 		t.Fatal(err)
 	}
-	expectPanic(t, func() { _ = p.Shutdown() })
-	expectPanic(t, func() { _ = p.Wait() })
-
-	runCtx, stop := context.WithCancel(context.Background())
-	p, err = New(runCtx, testConfig())
-	if err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if err := p.Wait(); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Shutdown(); err != nil {
+			t.Fatal(err)
+		}
 	}
-	stop()
-	if err := p.Wait(); err != nil {
-		t.Fatal(err)
-	}
-	expectPanic(t, func() { _ = p.Wait() })
-	expectPanic(t, func() { _ = p.Shutdown() })
 }
 
-func TestConcurrentTerminalMethodsOnlyOneSucceeds(t *testing.T) {
-	runCtx, stop := context.WithCancel(context.Background())
-	defer stop()
-	p, err := New(runCtx, testConfig())
+func TestConcurrentShutdownAndWait(t *testing.T) {
+	p, err := New(testConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	start := make(chan struct{})
-	results := make(chan bool, 2)
-	call := func(fn func() error) {
+	results := make(chan error, 20)
+	for i := range 20 {
 		go func() {
 			<-start
-			defer func() { results <- recover() != nil }()
-			_ = fn()
+			if i%2 == 0 {
+				results <- p.Wait()
+			} else {
+				results <- p.Shutdown()
+			}
 		}()
 	}
-	call(p.Wait)
-	call(p.Shutdown)
 	close(start)
-	stop()
-	first, second := <-results, <-results
-	if first == second {
-		t.Fatalf("并发终止调用的 panic 结果 = %v, %v, want exactly one", first, second)
+	for range 20 {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("并发关闭或等待未返回")
+		}
+	}
+	if got := p.Stats(); got.Workers != 0 {
+		t.Fatalf("关闭后仍有消费者: %+v", got)
 	}
 }
 
-func TestWaitDeadlineAfterStopAbortsTasks(t *testing.T) {
-	runCtx, stop := context.WithCancel(context.Background())
-	defer stop()
+func TestWaitReturnsSavedTimeoutAfterWorkersExit(t *testing.T) {
 	cfg := testConfig()
 	cfg.DrainTimeout = 20 * time.Millisecond
-	p, err := New(runCtx, cfg)
+	p, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -607,155 +626,191 @@ func TestWaitDeadlineAfterStopAbortsTasks(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	stop()
+	shutdownErr := p.Shutdown()
+	if !errors.Is(shutdownErr, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown = %v, want deadline exceeded", shutdownErr)
+	}
 	if err := p.Wait(); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("停机 Wait = %v, want deadline exceeded", err)
 	}
 	if got := p.Stats(); got.Abandoned != 1 {
 		t.Fatalf("停机超时后 Stats = %+v, want one abandoned task", got)
 	}
-	waitUntil(t, func() bool { return p.Stats().Workers == 0 })
+	if got := p.Stats(); got.Workers != 0 || got.Running != 0 {
+		t.Fatalf("Wait 返回时消费者尚未退出: %+v", got)
+	}
 }
 
-func TestGraceTimeoutRequiresWaitToAbort(t *testing.T) {
-	runCtx, stop := context.WithCancel(context.Background())
-	defer stop()
+func TestShutdownCancelsRetryWait(t *testing.T) {
 	cfg := testConfig()
 	cfg.DrainTimeout = 20 * time.Millisecond
-	p, err := New(runCtx, cfg)
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Wait()
+	defer p.Shutdown()
+	var calls atomic.Int32
+	attempted := make(chan struct{}, 2)
+	if err := p.Submit(context.Background(), "retry", func(context.Context) error {
+		calls.Add(1)
+		attempted <- struct{}{}
+		return errors.New("temporary")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	<-attempted
+	shutdownErr := p.Shutdown()
+	if !errors.Is(shutdownErr, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown = %v, want deadline exceeded", shutdownErr)
+	}
+	if err := p.Wait(); err != shutdownErr {
+		t.Fatalf("Wait = %v, want saved error %v", err, shutdownErr)
+	}
+	if got := p.Stats(); calls.Load() != 1 || got.Failed != 1 || got.Workers != 0 {
+		t.Fatalf("取消重试后 calls=%d Stats=%+v", calls.Load(), got)
+	}
+}
+
+func TestShutdownCancelsTasksWithoutWait(t *testing.T) {
+	cfg := testConfig()
+	cfg.DrainTimeout = 20 * time.Millisecond
+	p, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		close(release)
+		_ = p.Shutdown()
+		_ = p.Wait()
+	})
 	if err := p.Submit(context.Background(), "running", func(ctx context.Context) error {
 		close(started)
-		<-ctx.Done()
-		return ctx.Err()
-	}); err != nil {
-		t.Fatal(err)
-	}
-	<-started
-	if err := p.Submit(context.Background(), "pending", func(context.Context) error {
-		t.Error("放弃的任务不应执行")
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	stop()
-	waitUntil(t, func() bool {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		return p.state == stateDraining
-	})
-	select {
-	case <-p.graceExpired:
-	case <-time.After(3 * time.Second):
-		t.Fatal("停机宽限期未结束")
-	}
-	if got := p.Stats(); got.Pending != 1 || got.Running != 1 || got.Abandoned != 0 {
-		t.Fatalf("未调用 Wait 时任务不应中止: %+v", got)
-	}
-	if err := p.ctx.Err(); err != nil {
-		t.Fatalf("未调用 Wait 时执行 context = %v, want nil", err)
-	}
-	if err := p.Wait(); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("宽限期后调用 Wait = %v, want deadline exceeded", err)
-	}
-	if got := p.Stats(); got.Abandoned != 1 {
-		t.Fatalf("Wait 超时后 Stats = %+v, want one abandoned task", got)
-	}
-	waitUntil(t, func() bool { return p.Stats().Workers == 0 })
-}
-
-func TestShutdownWaitsForWorkersWithoutStopSignal(t *testing.T) {
-	cfg := testConfig()
-	cfg.DrainTimeout = 20 * time.Millisecond
-	p, err := New(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	started := make(chan struct{})
-	release := make(chan struct{})
-	if err := p.Submit(context.Background(), "running", func(context.Context) error {
-		close(started)
-		<-release
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	<-started
-	shutdown := make(chan error, 1)
-	go func() { shutdown <- p.Shutdown() }()
-	waitUntil(t, func() bool {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		return p.state == stateDraining
-	})
-	time.Sleep(50 * time.Millisecond)
-	select {
-	case err := <-shutdown:
-		close(release)
-		t.Fatalf("Shutdown 未等待 worker: %v", err)
-	default:
-	}
-	close(release)
-	if err := <-shutdown; err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestShutdownIgnoresGraceTimeout(t *testing.T) {
-	runCtx, stop := context.WithCancel(context.Background())
-	defer stop()
-	cfg := testConfig()
-	cfg.DrainTimeout = 20 * time.Millisecond
-	p, err := New(runCtx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	started := make(chan struct{})
-	release := make(chan struct{})
-	defer close(release)
-	if err := p.Submit(context.Background(), "ignores-cancel", func(context.Context) error {
-		close(started)
-		<-release
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	<-started
-	shutdown := make(chan error, 1)
-	go func() { shutdown <- p.Shutdown() }()
-	stop()
-	waitUntil(t, func() bool {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		return p.state == stateDraining
-	})
-	select {
-	case <-p.graceExpired:
-	case <-time.After(3 * time.Second):
-		t.Fatal("停机宽限期未结束")
-	}
-	if got := p.Stats(); got.Running != 1 || got.Abandoned != 0 {
-		t.Fatalf("Shutdown 不应因宽限期中止任务: %+v", got)
-	}
-	if err := p.ctx.Err(); err != nil {
-		t.Fatalf("Shutdown 期间执行 context = %v, want nil", err)
-	}
-	select {
-	case err := <-shutdown:
-		t.Fatalf("宽限期结束时 Shutdown 提前返回: %v", err)
-	default:
-	}
-	release <- struct{}{}
-	select {
-	case err := <-shutdown:
-		if err != nil {
-			t.Fatalf("Shutdown = %v, want nil", err)
+		select {
+		case <-ctx.Done():
+			close(canceled)
+			return ctx.Err()
+		case <-release:
+			return nil
 		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	var pendingCalls atomic.Int32
+	if err := p.Submit(context.Background(), "pending", func(context.Context) error {
+		pendingCalls.Add(1)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	shutdownErr := p.Shutdown()
+	select {
+	case <-canceled:
 	case <-time.After(3 * time.Second):
-		t.Fatal("worker 退出后 Shutdown 未返回")
+		t.Fatal("未调用 Wait 时，Shutdown 超时没有取消任务")
+	}
+	if !errors.Is(shutdownErr, context.DeadlineExceeded) || !strings.Contains(shutdownErr.Error(), "unfinished=2") {
+		t.Fatalf("Shutdown = %v, want timeout with two unfinished tasks", shutdownErr)
+	}
+	// 不调用 Wait，任务也会自行完成退出；测试只观察最终统计。
+	waitUntil(t, func() bool { return p.Stats().Workers == 0 })
+	if got := p.Stats(); pendingCalls.Load() != 0 || got.Abandoned != 1 || got.Failed != 1 || got.Workers != 0 {
+		t.Fatalf("自动中止后 calls=%d Stats=%+v", pendingCalls.Load(), got)
+	}
+}
+
+func TestShutdownTimeoutThenWaitForCleanup(t *testing.T) {
+	for _, waitBeforeShutdown := range []bool{false, true} {
+		t.Run(fmt.Sprintf("waitBeforeShutdown=%t", waitBeforeShutdown), func(t *testing.T) {
+			cfg := testConfig()
+			cfg.DrainTimeout = 20 * time.Millisecond
+			p, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			started := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			defer func() {
+				releaseOnce.Do(func() { close(release) })
+				_ = p.Shutdown()
+				_ = p.Wait()
+			}()
+			if err := p.Submit(context.Background(), "cleanup", func(ctx context.Context) error {
+				close(started)
+				// 清理过程可能晚于取消完成，等待方必须能确认真正退出。
+				select {
+				case <-ctx.Done():
+				case <-release:
+					return nil
+				}
+				<-release
+				return ctx.Err()
+			}); err != nil {
+				t.Fatal(err)
+			}
+			<-started
+			waited := make(chan error, 1)
+			if waitBeforeShutdown {
+				go func() { waited <- p.Wait() }()
+			}
+			shutdown := make(chan error, 1)
+			go func() { shutdown <- p.Shutdown() }()
+			var shutdownErr error
+			select {
+			case shutdownErr = <-shutdown:
+				if !errors.Is(shutdownErr, context.DeadlineExceeded) {
+					t.Fatalf("Shutdown = %v, want deadline exceeded", shutdownErr)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("Shutdown 未按宽限时间返回")
+			}
+			if !waitBeforeShutdown {
+				go func() { waited <- p.Wait() }()
+			}
+			select {
+			case err := <-waited:
+				t.Fatalf("任务仍在清理时 Wait 返回: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+			// 多个观察者共用同一次超时结果，不重新启动排空或倒计时。
+			results := make(chan error, 8)
+			for range 8 {
+				go func() { results <- p.Shutdown() }()
+			}
+			for range 8 {
+				select {
+				case err := <-results:
+					if err != shutdownErr {
+						t.Fatalf("重复 Shutdown = %v, want saved error %v", err, shutdownErr)
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatal("超时后重复 Shutdown 未返回")
+				}
+			}
+			releaseOnce.Do(func() { close(release) })
+			select {
+			case err := <-waited:
+				if err != shutdownErr {
+					t.Fatalf("Wait = %v, want saved error %v", err, shutdownErr)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("清理结束后 Wait 未返回")
+			}
+			if got := p.Stats(); got.Workers != 0 || got.Running != 0 || got.Failed != 1 {
+				t.Fatalf("Wait 后 Stats = %+v", got)
+			}
+			if err := p.Wait(); err != shutdownErr {
+				t.Fatalf("再次 Wait = %v, want saved error %v", err, shutdownErr)
+			}
+			if err := p.Shutdown(); err != shutdownErr {
+				t.Fatalf("退出后 Shutdown = %v, want saved error %v", err, shutdownErr)
+			}
+		})
 	}
 }
 
@@ -773,7 +828,7 @@ func TestTaskErrorsAndPanicGoToStderr(t *testing.T) {
 	})
 	cfg := testConfig()
 	cfg.MaxRetries = 1
-	p, err := New(context.Background(), cfg)
+	p, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
