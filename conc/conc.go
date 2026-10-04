@@ -16,6 +16,8 @@ var (
 )
 
 // Task 是一次调用内的同步任务；返回快照前收集到的返回值和错误会一并保留。
+// 任务及其同步调用的函数不得调用 runtime.Goexit，包括内部使用它的 testing.T.Fatal/FailNow。
+// 任务失败应返回错误；Goexit 会终止工作协程，不属于可恢复的 panic。
 type Task func(context.Context) (any, error)
 
 // Result 保存一个任务返回的值、错误和实际执行耗时。

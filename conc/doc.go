@@ -32,6 +32,7 @@
 //
 // RunNamed 默认等待全部任务结束，返回整组耗时、每项任务的结果和带任务名的聚合错误。
 // 设置 WithTimeout 后，到时返回结果快照，不等待仍在执行的任务；快照前已完成的结果会保留。
+// 已开始且不响应 context 取消的任务可能在返回后继续运行。
 // 未完成任务以 Result.TimedOut=true、Result.Err=context.DeadlineExceeded 标记，
 // Result.Started 区分是否已经启动；其 Result.Duration 为零。
 // 已完成任务的 Result.Duration 仅包含实际执行，Report.Duration 还包含调度与限流等待。
@@ -41,9 +42,13 @@
 // 调用方传入的 context 不会因此被取消。
 // 未设置整体超时时，取消模式仍等待已启动的任务结束；任务函数需要自行响应 context。
 // 调用方可用 WithLimit 限制本次调用的并发数；WithLimit 与 WithTimeout 不能同时使用。
+// 本包不支持同时限制并发数并在整体超时后立即返回；父 context 取消仍须等待已启动的任务，
+// 直到全部任务结束，或本次显式设置的 WithTimeout 到达。
 // 任务来自 map，启动顺序及聚合错误的文本顺序不保证。
 // 传入的 context 取消后，尚未开始且已观察到取消的任务不会执行。
 // 任务 panic 会转为包含堆栈的 PanicError，由调用方决定如何记录或上报。
+// 任务及其同步调用的函数不得调用 runtime.Goexit，包括内部使用它的 testing.T.Fatal/FailNow；
+// 此类退出会终止工作协程，本包不保证其结果收集或剩余任务调度。任务失败应返回错误。
 //
 // 本包没有全局任务池或进程级并发额度，也不执行后台任务或自动写日志。
 package conc
