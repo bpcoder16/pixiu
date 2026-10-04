@@ -35,10 +35,10 @@ func TestRotateNamesPreviousPeriodAtBoundary(t *testing.T) {
 				t.Fatal(err)
 			}
 			r.mu.Lock()
-			ready, err := r.advanceLocked(boundary)
+			err = r.advanceLocked(boundary)
 			r.mu.Unlock()
-			if !ready || err != nil {
-				t.Fatalf("轮转后当前时段应就绪: ready=%v, err=%v", ready, err)
+			if err != nil {
+				t.Fatalf("轮转后当前时段应就绪: %v", err)
 			}
 			newPath := path + "." + tt.new
 			assertLink(t, path, newPath)
@@ -164,10 +164,10 @@ func TestRotateMaxFilesThreeKeepsPreviousPeriods(t *testing.T) {
 	defer r.Close()
 	for i := 1; i <= 3; i++ {
 		r.mu.Lock()
-		ready, err := r.advanceLocked(start.Add(time.Duration(i) * time.Hour))
+		err := r.advanceLocked(start.Add(time.Duration(i) * time.Hour))
 		r.mu.Unlock()
-		if !ready || err != nil {
-			t.Fatalf("轮转失败: ready=%v, err=%v", ready, err)
+		if err != nil {
+			t.Fatalf("轮转失败: %v", err)
 		}
 	}
 	if err := r.Sync(); err != nil {
@@ -189,38 +189,70 @@ func TestRotateMaxFilesThreeKeepsPreviousPeriods(t *testing.T) {
 }
 
 func TestRotateCleanupCountsCurrentPeriodAndPreservesUnrelatedFiles(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "app.log")
-	for _, suffix := range []string{"20260918", "20260921", "20260922", "2026092210", "2026092222", "20260999", "2026092200.gz", "notes"} {
-		if err := os.WriteFile(path+"."+suffix, []byte("keep data"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	for _, tt := range []struct {
+		name      string
+		every     time.Duration
+		current   string
+		expired   string
+		preserved []string
+		directory string
+		symlink   string
+	}{
+		{
+			name:      "day",
+			every:     24 * time.Hour,
+			current:   "20260923",
+			expired:   "20260918",
+			preserved: []string{"20260921", "20260922", "2026092210", "2026092222", "20260999", "20261301", "20260230", "2026092200.gz", "notes"},
+			directory: "20260924",
+			symlink:   "20260925",
+		},
+		{
+			name:      "hour",
+			every:     time.Hour,
+			current:   "2026092312",
+			expired:   "2026083123",
+			preserved: []string{"2026090100", "2026092300", "20260921", "20260922", "2026092324", "2026130100", "2026023000", "2026092200.gz", "notes"},
+			directory: "2026092313",
+			symlink:   "2026092314",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "app.log")
+			for _, suffix := range append([]string{tt.expired}, tt.preserved...) {
+				if err := os.WriteFile(path+"."+suffix, []byte("keep data"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// 排在当前文件之后的目录和软链也不能占用保留名额。
+			if err := os.Mkdir(path+"."+tt.directory, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Base(path)+".notes", path+"."+tt.symlink); err != nil {
+				t.Fatal(err)
+			}
+			cfg := defaultConfig()
+			cfg.every = tt.every
+			cfg.maxFiles = 3
+			r, err := openFile(path, cfg, time.Date(2026, 9, 23, 12, 0, 0, 0, time.Local))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			if _, err := os.Stat(path + "." + tt.expired); !os.IsNotExist(err) {
+				t.Fatalf("最旧时段文件未删除: %v", err)
+			}
+			for _, suffix := range append(tt.preserved, tt.symlink) {
+				if data, err := os.ReadFile(path + "." + suffix); err != nil || string(data) != "keep data" {
+					t.Errorf("应保留文件 %s: %q, %v", suffix, data, err)
+				}
+			}
+			if info, err := os.Stat(path + "." + tt.directory); err != nil || !info.IsDir() {
+				t.Fatalf("无关目录被修改: %v", err)
+			}
+			assertLink(t, path, path+"."+tt.current)
+		})
 	}
-	if err := os.Mkdir(path+".20260920", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Base(path)+".notes", path+".20260919"); err != nil {
-		t.Fatal(err)
-	}
-	cfg := defaultConfig()
-	cfg.every = 24 * time.Hour
-	cfg.maxFiles = 3
-	r, err := openFile(path, cfg, time.Date(2026, 9, 23, 12, 0, 0, 0, time.Local))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	if _, err := os.Stat(path + ".20260918"); !os.IsNotExist(err) {
-		t.Fatalf("oldest period was not deleted: %v", err)
-	}
-	for _, suffix := range []string{"20260921", "20260922", "2026092210", "2026092222", "20260999", "2026092200.gz", "notes", "20260919"} {
-		if data, err := os.ReadFile(path + "." + suffix); err != nil || string(data) != "keep data" {
-			t.Errorf("preserved file %s: %q, %v", suffix, data, err)
-		}
-	}
-	if info, err := os.Stat(path + ".20260920"); err != nil || !info.IsDir() {
-		t.Fatalf("unrelated directory changed: %v", err)
-	}
-	assertLink(t, path, path+".20260923")
 }
 
 func TestRotateRejectsInvalidPeriodAndFileLimit(t *testing.T) {

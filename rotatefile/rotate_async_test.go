@@ -171,8 +171,8 @@ func TestRotateCleanupDoesNotWaitForPendingFiles(t *testing.T) {
 		t.Helper()
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		if ready, err := r.advanceLocked(now); !ready || err != nil {
-			t.Fatalf("轮转失败: ready=%v, err=%v", ready, err)
+		if err := r.advanceLocked(now); err != nil {
+			t.Fatalf("轮转失败: %v", err)
 		}
 		if _, err := r.f.Write([]byte(line)); err != nil {
 			t.Fatal(err)
@@ -239,7 +239,7 @@ func TestRotateConcurrentWritesDuringRepeatedRotations(t *testing.T) {
 	wg.Go(func() {
 		for range 40 {
 			r.mu.Lock()
-			_, err := r.advanceLocked(r.boundary.Add(time.Hour))
+			err := r.advanceLocked(r.boundary.Add(time.Hour))
 			r.mu.Unlock()
 			if err != nil {
 				t.Error(err)
@@ -284,7 +284,7 @@ func TestRotateConcurrentCleanupNeverUnlinksActiveFile(t *testing.T) {
 					r.mu.Lock()
 					defer r.mu.Unlock()
 					previous := r.f.Name()
-					if _, err := r.advanceLocked(r.boundary.Add(time.Hour)); err != nil {
+					if err := r.advanceLocked(r.boundary.Add(time.Hour)); err != nil {
 						t.Error(err)
 						return
 					}

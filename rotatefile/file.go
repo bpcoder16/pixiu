@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -134,7 +134,7 @@ func (r *File) Write(p []byte) (int, error) {
 	if r.closed {
 		return 0, os.ErrClosed
 	}
-	if ready, rotateErr := r.advanceLocked(time.Now()); !ready {
+	if rotateErr := r.advanceLocked(time.Now()); rotateErr != nil {
 		return 0, rotateErr
 	}
 	n, err := r.f.Write(p)
@@ -145,6 +145,7 @@ func (r *File) Write(p []byte) (int, error) {
 }
 
 // Sync 等待旧文件同步、关闭完成，再同步当前文件，不触发轮转或清理。
+// 旧文件同步、关闭错误仅输出到 stderr，不从这里返回；nil 不代表历史文件都同步成功。
 func (r *File) Sync() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -157,8 +158,9 @@ func (r *File) Sync() error {
 	return r.f.Sync()
 }
 
-// Fd 返回当前底层文件描述符，供需要文件描述符的调用方使用。
-// fd 重定向仍绑定打开时的文件，软链切换不会改变已有 fd 的目标。
+// Fd 返回当前底层文件的借用描述符，调用方不得直接关闭。
+// 下一次轮转或 Close 可能使其失效，使用期间应避免并发轮转或关闭。
+// 已完成的 fd 复制或重定向仍绑定原文件，不随软链切换。
 func (r *File) Fd() uintptr {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -166,6 +168,8 @@ func (r *File) Fd() uintptr {
 }
 
 // Close 停止写入及定时清理，等待后台工作完成，再同步、关闭当前文件。
+// 首次调用只返回当前文件的同步、关闭错误；重复调用返回 os.ErrClosed。
+// 后台错误仅输出到 stderr。
 func (r *File) Close() error {
 	r.mu.Lock()
 	if r.closed {
@@ -186,19 +190,19 @@ func (r *File) Close() error {
 
 // advanceLocked 在持有 mu 时调用。先打开新文件并原子替换软链；
 // 两步都成功后才切换当前文件，失败时禁止把新时段数据写回旧文件。
-// ready 表示当前时段已就绪；旧文件独立异步关闭，不影响本次写入。
-func (r *File) advanceLocked(now time.Time) (ready bool, err error) {
+// 旧文件独立异步关闭，不影响本次写入。
+func (r *File) advanceLocked(now time.Time) error {
 	boundary := periodStart(now, r.cfg.every)
 	// 同时段或时钟回拨时继续写当前文件，避免重新打开清理可能删除的旧路径。
 	if boundary.After(r.boundary) {
 		target := r.periodPath(boundary)
 		nextFile, openErr := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if openErr != nil {
-			return false, openErr
+			return openErr
 		}
 		if linkErr := replaceSymlink(r.path, filepath.Base(target)); linkErr != nil {
 			_ = nextFile.Close()
-			return false, linkErr
+			return linkErr
 		}
 		oldFile := r.f
 		r.f = nextFile
@@ -206,7 +210,7 @@ func (r *File) advanceLocked(now time.Time) (ready bool, err error) {
 		r.closing++
 		go r.closeOldFile(oldFile)
 	}
-	return true, nil
+	return nil
 }
 
 // closeOldFile 每个旧句柄只执行一次；Sync 失败后仍关闭文件，不等待其他旧文件。
@@ -295,47 +299,39 @@ func (r *File) cleanup() error {
 	if err != nil {
 		return err
 	}
-	type periodFile struct {
-		name string
-		time time.Time
-	}
-	files := make([]periodFile, 0, len(entries))
 	prefix := r.baseName + "."
-	for _, e := range entries {
+	kept := 0
+	var removeErr error
+	// ReadDir 已按文件名排序，同一维度的定长日期后缀可直接倒序比较新旧。
+	for _, e := range slices.Backward(entries) {
 		if !e.Type().IsRegular() || !strings.HasPrefix(e.Name(), prefix) {
 			continue
 		}
-		ts, ok := parsePeriodSuffix(strings.TrimPrefix(e.Name(), prefix), r.cfg.every)
-		if ok {
-			files = append(files, periodFile{name: e.Name(), time: ts})
+		if !validPeriodSuffix(strings.TrimPrefix(e.Name(), prefix), r.cfg.every) {
+			continue
 		}
-	}
-	sort.Slice(files, func(i, j int) bool {
-		if files[i].time.Equal(files[j].time) {
-			return files[i].name > files[j].name
+		if kept < r.cfg.maxFiles {
+			kept++
+			continue
 		}
-		return files[i].time.After(files[j].time)
-	})
-	var removeErr error
-	for i := r.cfg.maxFiles; i < len(files); i++ {
-		err := os.Remove(filepath.Join(r.dir, files[i].name))
-		if !os.IsNotExist(err) {
+		err := os.Remove(filepath.Join(r.dir, e.Name()))
+		if err != nil && !os.IsNotExist(err) {
 			removeErr = errors.Join(removeErr, err)
 		}
 	}
 	return removeErr
 }
 
-func parsePeriodSuffix(suffix string, every time.Duration) (time.Time, bool) {
+func validPeriodSuffix(suffix string, every time.Duration) bool {
 	layout := hourlyLayout
 	if every == 24*time.Hour {
 		layout = dailyLayout
 	}
 	if len(suffix) != len(layout) {
-		return time.Time{}, false
+		return false
 	}
-	ts, err := time.ParseInLocation(layout, suffix, time.Local)
-	return ts, err == nil
+	_, err := time.ParseInLocation(layout, suffix, time.Local)
+	return err == nil
 }
 
 func periodStart(t time.Time, every time.Duration) time.Time {
