@@ -62,7 +62,7 @@ func TestNewUsesContextAndClosesClient(t *testing.T) {
 		t.Fatalf("启动 Ping 不应产生日志: %q", buf.String())
 	}
 	if !client.Client().Options().ContextTimeoutEnabled {
-		t.Fatal("命令必须遵守调用方 context")
+		t.Fatal("必须启用调用方 context 截止时间支持")
 	}
 	if options.ContextTimeoutEnabled {
 		t.Fatal("New 不应修改调用方配置")
@@ -170,7 +170,7 @@ func TestHookLogsCommandResultsAndArgs(t *testing.T) {
 	}
 
 	buf.Reset()
-	secretErr := errors.New("password-in-error")
+	secretErr := errors.New("WRONGTYPE password-in-error")
 	got := hook.ProcessHook(func(context.Context, redis.Cmder) error { return secretErr })(ctx, cmd)
 	if !errors.Is(got, secretErr) {
 		t.Fatalf("命令错误必须原样返回: %v", got)
@@ -179,6 +179,9 @@ func TestHookLogsCommandResultsAndArgs(t *testing.T) {
 	details = record["downstream_details"].(map[string]any)
 	if record["level"] != "ERROR" || strings.Contains(buf.String(), "password-in-error") {
 		t.Fatalf("错误分级或原始错误隔离异常: %q", buf.String())
+	}
+	if details["error_code"] != "" {
+		t.Fatalf("非 Redis 错误不应提取错误码: %v", details)
 	}
 	args, ok = details["args"].([]any)
 	if !ok || len(args) != 1 || args[0] != "private-key" {

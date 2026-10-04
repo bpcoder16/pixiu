@@ -99,6 +99,7 @@ func (h *loggerHook) logResult(ctx context.Context, elapsed time.Duration, comma
 		"command":    strings.ToLower(command),
 		"status":     status,
 		"error_type": classifyError(err),
+		"error_code": redisErrorCode(err),
 		"args":       commandArgs(cmd),
 	}
 	fields := logit.DownstreamFields(downstreamRedisMessage, h.name, elapsed, details)
@@ -155,6 +156,7 @@ func (h *loggerHook) logBatch(ctx context.Context, elapsed time.Duration, cmds [
 		"command":     "pipeline",
 		"status":      status,
 		"error_type":  classifyError(firstError),
+		"error_code":  redisErrorCode(firstError),
 		"count":       end - start,
 		"misses":      misses,
 		"errors":      failures,
@@ -211,4 +213,20 @@ func classifyError(err error) string {
 		return "redis"
 	}
 	return "other"
+}
+
+func redisErrorCode(err error) string {
+	redisErr, ok := errors.AsType[redis.Error](err)
+	if !ok {
+		return ""
+	}
+	// 仅输出已知错误码，避免自定义错误的首词把原始错误信息带入日志。
+	code, _, _ := strings.Cut(redisErr.Error(), " ")
+	switch code {
+	case "ERR", "WRONGTYPE", "NOAUTH", "WRONGPASS", "NOPERM", "OOM", "BUSY",
+		"NOSCRIPT", "LOADING", "READONLY", "MASTERDOWN", "MISCONF", "EXECABORT", "NOREPLICAS":
+		return code
+	default:
+		return ""
+	}
 }

@@ -64,8 +64,10 @@
 // 应用先登记日志关闭函数，再登记 Redis 关闭函数，确保日志最后关闭。
 // 命名客户端不应单独关闭或重复登记关闭函数。
 //
-// New 用 ctx 执行 Ping，失败时清理连接并返回错误。命令 context 的取消和截止时间
-// 会被驱动遵守；其他连接、池和重试参数沿用 go-redis 语义。
+// New 用 ctx 执行 Ping，失败时清理连接并返回错误。未禁用驱动读写 deadline 时，
+// 命令读写会参考 ctx 的截止时间。主动 cancel 不保证打断进行中的 socket I/O，
+// 取消后仍可能返回成功；初始化 Ping 也遵循这一边界。需要限制等待时间时，应使用
+// 带 deadline 的 context 并保留合理的读写超时；其他选项沿用 go-redis 语义。
 // Network 是传输方式，Addr 是连接地址。普通 TCP 连接只需设置 host:port 形式的
 // Addr，Network 留空时驱动默认使用 tcp；从 Host、Port 组装时建议用 net.JoinHostPort
 // 兼容 IPv6。Unix socket 连接应设置 Network: "unix" 和路径 Addr；TLS 连接仍使用
@@ -74,7 +76,8 @@
 // MaxRetries 为 0 时驱动默认重试 3 次，为 -1 时禁用重试；非幂等操作应显式选择。
 // 默认只记录失败与慢调用；LogCommands 开启后正常命令也以 Debug 输出。
 // 所有已输出的业务命令日志均附加完整请求参数，可能包含 key、值和凭据。
-// 日志不包含命令返回值或原始错误文本。底层客户端供业务使用全部命令、
+// 日志保留 error_type 分类，并以 error_code 输出白名单内的 Redis 错误码，
+// 其他情况为空字符串；不包含命令返回值或原始错误文本。底层客户端供业务使用全部命令、
 // Pipeline、Lua 和 Pub/Sub；调用方不能自行关闭它或在运行期修改配置与 Hook。
 // ctx 已调用 logit.WithStart 时，每次业务命令或批量执行会以 Redis_<Name> 为前缀自动编号记录下游耗时，
 // 供业务调用 logit.InfoDuration 汇总；此登记不受 LogCommands 和日志级别限制。
