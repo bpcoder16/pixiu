@@ -34,8 +34,9 @@
 // 返回值在解锁后读取，并发 Set 时可能与 bool 不对应同一时刻。
 // 两者均不触发 Loader。GetOrSetFunc 的函数在缓存锁内执行，应快速完成且不可重入缓存。
 // Stats 的 Hits 和 Misses 统计 Get、GetOrSet、GetOrSetFunc 与 GetAndDelete 的查找。
-// Has 和 GetAndDelete 不触发 Loader；Keys、Items 和 Range 系列仅访问未过期条目。
-// Range 系列按 LRU 方向遍历，并发修改时不保证得到完整快照。
+// Has 和 GetAndDelete 不触发 Loader；Keys、Items 仅访问未过期条目。
+// Range 和 RangeBackwards 暂不提供：底层 ttlcache v3.4.1 在 LRU 顺序变化时可能重复遍历且无法结束。
+// 待上游修复并升级依赖、验证后再考虑恢复；无需顺序的遍历可使用 Keys 或 Items。
 // SetWithTTL 的 0 表示该条目不过期。
 // 不启动后台清理；写入前会清理过期条目，纯读期间可按需调用 DeleteExpired。
 // 容量按条目数计算；可变引用类型的并发安全和拷贝由调用方负责。

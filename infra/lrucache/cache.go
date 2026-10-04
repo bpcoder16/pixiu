@@ -160,8 +160,14 @@ func (c *Cache[K, V]) Items() map[K]V {
 	return values
 }
 
+/*
+Range 和 RangeBackwards 暂停对外提供，保留实现以便上游修复后重新评估。
+ttlcache/v3 v3.4.1 在执行回调时释放锁，随后继续沿可变 LRU 链表遍历；
+回调或并发操作中的 Get 等操作会调整链表顺序，可能导致重复访问且无法结束。
+有序遍历不是当前核心能力，暂不在封装层修补。
+TODO: 待上游修复并升级依赖，验证正反向顺序、提前停止及回调访问缓存、并发读取时的终止性后，再考虑恢复。
+
 // Range 按最近使用到最久未使用的方向遍历未过期条目；fn 返回 false 时停止。
-// 并发修改缓存时遍历为弱一致语义，可能跳过条目；fn 不应依赖完整快照。
 func (c *Cache[K, V]) Range(fn func(K, V) bool) {
 	c.cache.Range(func(item *ttlcache.Item[K, V]) bool {
 		return fn(item.Key(), item.Value())
@@ -169,12 +175,12 @@ func (c *Cache[K, V]) Range(fn func(K, V) bool) {
 }
 
 // RangeBackwards 按最久未使用到最近使用的方向遍历未过期条目；fn 返回 false 时停止。
-// 并发修改缓存时遍历为弱一致语义，可能跳过条目；fn 不应依赖完整快照。
 func (c *Cache[K, V]) RangeBackwards(fn func(K, V) bool) {
 	c.cache.RangeBackwards(func(item *ttlcache.Item[K, V]) bool {
 		return fn(item.Key(), item.Value())
 	})
 }
+*/
 
 // Stats 返回此实例的累计统计快照。
 func (c *Cache[K, V]) Stats() Stats {

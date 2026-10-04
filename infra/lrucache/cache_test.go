@@ -1,7 +1,6 @@
 package lrucache
 
 import (
-	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -247,7 +246,7 @@ func TestGetAndDeleteDoesNotLoad(t *testing.T) {
 	}
 }
 
-func TestKeysItemsAndRangeOrder(t *testing.T) {
+func TestKeysAndItems(t *testing.T) {
 	cache, err := New[string, int](Config[string, int]{Capacity: 4})
 	if err != nil {
 		t.Fatal(err)
@@ -281,30 +280,6 @@ func TestKeysItemsAndRangeOrder(t *testing.T) {
 	items["a"] = 100
 	if value, found := cache.Get("a"); !found || value != 1 {
 		t.Fatalf("Items map mutation changed cache: %d, %v", value, found)
-	}
-	var forward []string
-	cache.Range(func(key string, value int) bool {
-		forward = append(forward, key)
-		return true
-	})
-	if !slices.Equal(forward, []string{"a", "c", "b"}) {
-		t.Fatalf("Range order = %v", forward)
-	}
-	var backward []string
-	cache.RangeBackwards(func(key string, value int) bool {
-		backward = append(backward, key)
-		return true
-	})
-	if !slices.Equal(backward, []string{"b", "c", "a"}) {
-		t.Fatalf("RangeBackwards order = %v", backward)
-	}
-	visited := 0
-	cache.Range(func(string, int) bool {
-		visited++
-		return false
-	})
-	if visited != 1 {
-		t.Fatalf("Range visited %d items after callback stopped", visited)
 	}
 }
 
