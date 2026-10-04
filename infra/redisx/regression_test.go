@@ -202,7 +202,7 @@ func newWireClient(t *testing.T, logCommands bool, reply func(string) string) *C
 		}()
 		return client, nil
 	}
-	client, err := New(context.Background(), Config{
+	client, err := New(Config{
 		Name:          "cache",
 		SlowThreshold: time.Hour,
 		LogCommands:   logCommands,

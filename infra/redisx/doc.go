@@ -3,7 +3,7 @@
 //
 // 以下两个示例需导入 errors、time、github.com/redis/go-redis/v9、
 // github.com/bpcoder16/pixiu/infra/redisx、github.com/bpcoder16/pixiu/lifecycle
-// 和 github.com/bpcoder16/pixiu/logit；ctx 和 logger 由应用提供。
+// 和 github.com/bpcoder16/pixiu/logit；logger 由应用提供。
 // 独立客户端使用 New 创建，每个客户端都单独登记 Close：
 //
 //	var stack lifecycle.Stack
@@ -12,7 +12,7 @@
 //	}); err != nil {
 //	    return err
 //	}
-//	client, err := redisx.New(ctx, redisx.Config{
+//	client, err := redisx.New(redisx.Config{
 //	    Name: "cache",
 //	    Options: redis.Options{
 //	        Addr:         "127.0.0.1:6379",
@@ -43,11 +43,11 @@
 //	if err := stack.Register(redisx.CloseAll); err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	_, err := redisx.NewNamed(ctx, cfg)
+//	_, err := redisx.NewNamed(cfg)
 //	if err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	if _, err := redisx.NewNamed(ctx, sessionCfg); err != nil {
+//	if _, err := redisx.NewNamed(sessionCfg); err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
 //	client := redisx.Named(cfg.Name)
@@ -64,10 +64,13 @@
 // 应用先登记日志关闭函数，再登记 Redis 关闭函数，确保日志最后关闭。
 // 命名客户端不应单独关闭或重复登记关闭函数。
 //
-// New 用 ctx 执行 Ping，失败时清理连接并返回错误。未禁用驱动读写 deadline 时，
-// 命令读写会参考 ctx 的截止时间。主动 cancel 不保证打断进行中的 socket I/O，
-// 取消后仍可能返回成功；初始化 Ping 也遵循这一边界。需要限制等待时间时，应使用
-// 带 deadline 的 context 并保留合理的读写超时；其他选项沿用 go-redis 语义。
+// New、NewNamed 和 NewDefault 不接收外部 ctx，初始化 Ping 使用内部
+// context.Background()；超时和重试由 Config.Options 控制，不额外设置总 deadline。
+// 初始化失败时清理连接并返回错误。客户端生命周期由 Close 或 CloseAll 显式管理。
+// 真实 Redis 命令继续使用调用方 ctx；未禁用驱动读写 deadline 时，命令读写会参考
+// ctx 的截止时间。主动 cancel 不保证打断进行中的 socket I/O，取消后仍可能返回成功。
+// 业务命令需要限制等待时间时，应使用带 deadline 的 context 并保留合理的读写超时；
+// 取消业务 ctx 不关闭客户端，其他选项沿用 go-redis 语义。
 // Network 是传输方式，Addr 是连接地址。普通 TCP 连接只需设置 host:port 形式的
 // Addr，Network 留空时驱动默认使用 tcp；从 Host、Port 组装时建议用 net.JoinHostPort
 // 兼容 IPv6。Unix socket 连接应设置 Network: "unix" 和路径 Addr；TLS 连接仍使用
@@ -83,9 +86,9 @@
 // 供业务调用 logit.InfoDuration 汇总；此登记不受 LogCommands 和日志级别限制。
 // 未调用 WithStart 时跳过；初始化 Ping 和连接握手命令不计入。
 //
-// 单个逻辑下游可显式初始化默认客户端，省去每次按名称查询。cfg 已由应用构造：
+// 单个逻辑下游可显式初始化默认客户端，省去每次按名称查询。cfg 和业务 ctx 由应用提供：
 //
-//	if _, err := redisx.NewDefault(ctx, cfg); err != nil {
+//	if _, err := redisx.NewDefault(cfg); err != nil {
 //	    return err
 //	}
 //	return redisx.Default().Client().Ping(ctx).Err()

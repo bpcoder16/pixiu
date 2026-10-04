@@ -101,14 +101,14 @@ func TestNewNamedRegistersAndRejectsDuplicate(t *testing.T) {
 			MaxRetries:      -1,
 		},
 	}
-	client, err := NewNamed(context.Background(), cfg)
+	client, err := NewNamed(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := Named(name); got != client {
 		t.Fatalf("命名客户端未登记: got=%p", got)
 	}
-	if _, err := NewNamed(context.Background(), cfg); err == nil {
+	if _, err := NewNamed(cfg); err == nil {
 		t.Fatal("重复名称未被拒绝")
 	}
 	if got := Named(name); got != client {
@@ -117,11 +117,11 @@ func TestNewNamedRegistersAndRejectsDuplicate(t *testing.T) {
 }
 
 func TestNewNamedFailureDoesNotReserveName(t *testing.T) {
-	if _, err := NewNamed(context.Background(), Config{}); err == nil {
+	if _, err := NewNamed(Config{}); err == nil {
 		t.Fatal("空名称被接受")
 	}
 	name := t.Name()
-	if _, err := NewNamed(context.Background(), Config{Name: name}); err == nil {
+	if _, err := NewNamed(Config{Name: name}); err == nil {
 		t.Fatal("无效地址配置被接受")
 	}
 	assertNamedPanic(t, fmt.Sprintf("redisx: client %q is not registered", name), func() {

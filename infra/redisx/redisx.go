@@ -32,11 +32,9 @@ type Client struct {
 
 type startupPingKey struct{}
 
-// New 创建客户端并用 ctx 验活；失败时关闭已创建的客户端。
-func New(ctx context.Context, cfg Config) (*Client, error) {
-	if ctx == nil {
-		return nil, errors.New("redisx: nil context")
-	}
+// New 创建客户端并验活；初始化超时和重试由 Config.Options 控制。
+// 客户端由调用方显式 Close，初始化失败时自动关闭已创建的客户端。
+func New(cfg Config) (*Client, error) {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return nil, errors.New("redisx: empty name")
 	}
@@ -59,7 +57,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	rdb.AddHook(newLoggerHook(cfg.Name, cfg.SlowThreshold, cfg.LogCommands))
 	c := &Client{redis: rdb}
 	// 初始化 Ping 的失败交给 New 调用方统一记录，避免同一启动错误重复入日志。
-	pingCtx := context.WithValue(ctx, startupPingKey{}, true)
+	pingCtx := context.WithValue(context.Background(), startupPingKey{}, true)
 	if err := rdb.Ping(pingCtx).Err(); err != nil {
 		return nil, fmt.Errorf("redisx: ping %q: %w", cfg.Name, errors.Join(err, c.Close()))
 	}

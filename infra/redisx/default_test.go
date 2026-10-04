@@ -23,15 +23,12 @@ func TestNewDefaultAndCloseAll(t *testing.T) {
 		Default()
 	})
 	for _, name := range []string{"", " \t "} {
-		if client, err := NewDefault(ctx, Config{Name: name}); client != nil || err == nil || err.Error() != "redisx: empty name" {
+		if client, err := NewDefault(Config{Name: name}); client != nil || err == nil || err.Error() != "redisx: empty name" {
 			t.Fatalf("空名称 %q: client=%v err=%v", name, client, err)
 		}
 	}
 	name := t.Name()
-	if client, err := NewDefault(nil, Config{Name: name}); client != nil || err == nil || err.Error() != "redisx: nil context" {
-		t.Fatalf("nil context: client=%v err=%v", client, err)
-	}
-	if client, err := NewDefault(ctx, Config{Name: name}); client != nil || err == nil {
+	if client, err := NewDefault(Config{Name: name}); client != nil || err == nil {
 		t.Fatalf("无效地址被接受: client=%v err=%v", client, err)
 	}
 	assertNamedPanic(t, "redisx: default client is not registered", func() {
@@ -48,7 +45,7 @@ func TestNewDefaultAndCloseAll(t *testing.T) {
 			MaxRetries:      -1,
 		},
 	}
-	client, err := NewDefault(ctx, cfg)
+	client, err := NewDefault(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,19 +56,19 @@ func TestNewDefaultAndCloseAll(t *testing.T) {
 		t.Fatalf("默认客户端不可用: %v", err)
 	}
 	for _, duplicateName := range []string{name, "rejected"} {
-		if got, err := NewDefault(ctx, Config{Name: duplicateName}); got != nil || err == nil || err.Error() != "redisx: default client is already registered" {
+		if got, err := NewDefault(Config{Name: duplicateName}); got != nil || err == nil || err.Error() != "redisx: default client is already registered" {
 			t.Fatalf("重复默认初始化 = %p, %v", got, err)
 		}
 	}
-	if _, err := NewNamed(ctx, cfg); err == nil || err.Error() != fmt.Sprintf("redisx: client %q is already registered", name) {
+	if _, err := NewNamed(cfg); err == nil || err.Error() != fmt.Sprintf("redisx: client %q is already registered", name) {
 		t.Fatalf("默认名称重复登记错误 = %v", err)
 	}
 	cfg.Name = "session"
-	other, err := NewNamed(ctx, cfg)
+	other, err := NewNamed(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	independent, err := New(ctx, cfg)
+	independent, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +96,7 @@ func TestNewDefaultAndCloseAll(t *testing.T) {
 	assertNamedPanic(t, "redisx: named clients closed", func() {
 		Named(name)
 	})
-	if got, err := NewDefault(ctx, cfg); got != nil || err == nil || err.Error() != "redisx: named clients closed" {
+	if got, err := NewDefault(cfg); got != nil || err == nil || err.Error() != "redisx: named clients closed" {
 		t.Fatalf("关闭后默认初始化 = %p, %v", got, err)
 	}
 }

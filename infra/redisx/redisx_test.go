@@ -19,38 +19,76 @@ import (
 )
 
 func TestNewValidatesConfig(t *testing.T) {
-	valid := Config{Name: "cache", Options: redis.Options{Addr: "127.0.0.1:6379"}}
+	valid := Config{
+		Name:    "cache",
+		Options: redis.Options{Addr: "127.0.0.1:6379"},
+	}
 	type testCase struct {
 		name string
-		ctx  context.Context
 		cfg  Config
 	}
 	tests := []testCase{
-		{"nil context", nil, valid},
-		{"empty name", context.Background(), Config{Options: valid.Options}},
-		{"empty address", context.Background(), Config{Name: "cache"}},
-		{"negative threshold", context.Background(), Config{Name: "cache", Options: valid.Options, SlowThreshold: -1}},
-		{"negative pool", context.Background(), Config{Name: "cache", Options: redis.Options{Addr: valid.Options.Addr, PoolSize: -1}}},
+		{
+			name: "empty name",
+			cfg:  Config{Options: valid.Options},
+		},
+		{
+			name: "empty address",
+			cfg:  Config{Name: "cache"},
+		},
+		{
+			name: "negative threshold",
+			cfg: Config{
+				Name:          "cache",
+				Options:       valid.Options,
+				SlowThreshold: -1,
+			},
+		},
+		{
+			name: "negative pool",
+			cfg: Config{
+				Name: "cache",
+				Options: redis.Options{
+					Addr:     valid.Options.Addr,
+					PoolSize: -1,
+				},
+			},
+		},
 	}
 	if strconv.IntSize > 32 {
 		tooLarge := int64(1 << 32)
-		tests = append(tests, testCase{"oversized pool", context.Background(), Config{Name: "cache", Options: redis.Options{Addr: valid.Options.Addr, PoolSize: int(tooLarge)}}})
+		tests = append(tests, testCase{
+			name: "oversized pool",
+			cfg: Config{
+				Name: "cache",
+				Options: redis.Options{
+					Addr:     valid.Options.Addr,
+					PoolSize: int(tooLarge),
+				},
+			},
+		})
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := New(tt.ctx, tt.cfg); err == nil {
+			if _, err := New(tt.cfg); err == nil {
 				t.Fatal("New 应拒绝无效配置")
 			}
 		})
 	}
 }
 
-func TestNewUsesContextAndClosesClient(t *testing.T) {
+func TestNewAndExplicitClose(t *testing.T) {
 	var buf bytes.Buffer
 	useLogger(t, &buf, logit.DebugLevel)
 	dialer, closed := pingDialer("+PONG\r\n", false)
-	options := redis.Options{Addr: "test", Dialer: dialer, Protocol: 2, DisableIdentity: true, MaxRetries: -1}
-	client, err := New(context.Background(), Config{
+	options := redis.Options{
+		Addr:            "test",
+		Dialer:          dialer,
+		Protocol:        2,
+		DisableIdentity: true,
+		MaxRetries:      -1,
+	}
+	client, err := New(Config{
 		Name:        "cache",
 		Options:     options,
 		LogCommands: true,
@@ -58,6 +96,7 @@ func TestNewUsesContextAndClosesClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = client.Close() })
 	if buf.Len() != 0 {
 		t.Fatalf("启动 Ping 不应产生日志: %q", buf.String())
 	}
@@ -73,6 +112,14 @@ func TestNewUsesContextAndClosesClient(t *testing.T) {
 	if record := onlyRecord(t, &buf); record["downstream_details"].(map[string]any)["command"] != "ping" {
 		t.Fatalf("真实命令未经过 Hook: %v", record)
 	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := client.Client().Ping(canceled).Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("业务命令应传播 context 取消: %v", err)
+	}
+	if err := client.Client().Ping(context.Background()).Err(); err != nil {
+		t.Fatalf("取消业务命令不应关闭客户端: %v", err)
+	}
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -84,12 +131,41 @@ func TestNewUsesContextAndClosesClient(t *testing.T) {
 	if err := client.Close(); err != nil {
 		t.Fatalf("重复关闭: %v", err)
 	}
+	if err := client.Client().Ping(context.Background()).Err(); !errors.Is(err, redis.ErrClosed) {
+		t.Fatalf("显式关闭后不应再接受命令: %v", err)
+	}
+}
 
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err = New(canceled, Config{Name: "cache", Options: options})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("初始化应传播 context 取消: %v", err)
+func TestNewRespectsConfiguredReadTimeout(t *testing.T) {
+	dialer, closed := pingDialer("", false)
+	begin := time.Now()
+	client, err := New(Config{
+		Name: "cache",
+		Options: redis.Options{
+			Addr:            "test",
+			Dialer:          dialer,
+			Protocol:        2,
+			DisableIdentity: true,
+			MaxRetries:      -1,
+			ReadTimeout:     20 * time.Millisecond,
+			WriteTimeout:    time.Second,
+		},
+	})
+	if client != nil {
+		_ = client.Close()
+		t.Fatal("初始化超时不应返回客户端")
+	}
+	var timeout net.Error
+	if !errors.As(err, &timeout) || !timeout.Timeout() {
+		t.Fatalf("初始化应按配置返回超时错误: %v", err)
+	}
+	if elapsed := time.Since(begin); elapsed > 500*time.Millisecond {
+		t.Fatalf("初始化未遵守配置的读超时: %v", elapsed)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("初始化超时后连接未关闭")
 	}
 }
 
@@ -97,8 +173,15 @@ func TestNewFailureDoesNotLogStartupPing(t *testing.T) {
 	var buf bytes.Buffer
 	useLogger(t, &buf, logit.DebugLevel)
 	dialer, closed := pingDialer("-ERR unavailable\r\n", false)
-	_, err := New(context.Background(), Config{
-		Name: "cache", Options: redis.Options{Addr: "test", Dialer: dialer, Protocol: 2, DisableIdentity: true, MaxRetries: -1},
+	_, err := New(Config{
+		Name: "cache",
+		Options: redis.Options{
+			Addr:            "test",
+			Dialer:          dialer,
+			Protocol:        2,
+			DisableIdentity: true,
+			MaxRetries:      -1,
+		},
 	})
 	if err == nil {
 		t.Fatal("启动 Ping 应失败")
@@ -115,8 +198,16 @@ func TestNewFailureDoesNotLogStartupPing(t *testing.T) {
 
 func TestCommandRespectsContextDeadline(t *testing.T) {
 	dialer, _ := pingDialer("+PONG\r\n", true)
-	client, err := New(context.Background(), Config{
-		Name: "cache", Options: redis.Options{Addr: "test", Dialer: dialer, Protocol: 2, DisableIdentity: true, MaxRetries: -1, ReadTimeout: time.Second},
+	client, err := New(Config{
+		Name: "cache",
+		Options: redis.Options{
+			Addr:            "test",
+			Dialer:          dialer,
+			Protocol:        2,
+			DisableIdentity: true,
+			MaxRetries:      -1,
+			ReadTimeout:     time.Second,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -547,6 +638,9 @@ func pingDialer(pingReply string, blockAfterFirst bool) (func(context.Context, s
 						continue
 					}
 					response = pingReply
+				}
+				if response == "" {
+					continue
 				}
 				if _, err := server.Write([]byte(response)); err != nil {
 					return
