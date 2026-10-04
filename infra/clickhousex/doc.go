@@ -55,6 +55,8 @@
 //	return stack.Close()
 //
 // 从库可接受延迟的查询使用 SlaveDB；写入及要求最新数据的查询使用 MasterDB。
+// Create 依赖默认事务的 Commit 发送批次，不要设置 SkipDefaultTransaction=true。
+// 提交错误由 Create.Error 返回；此机制不提供 MySQL 式的多语句回滚保证。
 // GORM 的 Info、Warn、Error 诊断消息按对应级别记录；慢查询和错误总会记录 SQL，
 // InterpolateSQL 默认关闭，以保留占位符。ctx 已调用 logit.WithStart 时，每次
 // GORM Trace 以 ClickHouse_<Name> 为前缀自动编号登记下游耗时，供 logit.InfoDuration 汇总。

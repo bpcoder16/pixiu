@@ -173,12 +173,11 @@ func open(ctx context.Context, cfg Config, prepared preparedEndpoint, endpointTy
 	}
 
 	// 方言版本探测使用 Background；关闭后启动网络操作均受 ctx 控制。
+	// 保留默认事务：方言通过 Prepare/Exec 追加批次，驱动在 Commit 时才发送。
 	db, err := gormcore.Open(sqlDB, gormclickhouse.New(gormclickhouse.Config{
 		Conn:                      sqlDB,
 		SkipInitializeWithVersion: true,
-	}), newTraceLogger(cfg, endpointType, prepared.name), func(config *gorm.Config) {
-		config.SkipDefaultTransaction = true
-	})
+	}), newTraceLogger(cfg, endpointType, prepared.name))
 	if err != nil {
 		return nil, nil, fmt.Errorf("clickhousex: initialize endpoint %q: %w", prepared.name, err)
 	}

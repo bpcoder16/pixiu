@@ -410,13 +410,11 @@ func newDryRunDB(t *testing.T, l logger.Interface) *gorm.DB {
 	db, err := gormcore.Open(sqlDB, gormclickhouse.New(gormclickhouse.Config{
 		Conn:                      sqlDB,
 		SkipInitializeWithVersion: true,
-	}), logger.Default.LogMode(logger.Silent), func(config *gorm.Config) {
-		config.SkipDefaultTransaction = true
-	})
+	}), logger.Default.LogMode(logger.Silent))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !db.Config.SkipDefaultTransaction || !db.Config.DisableAutomaticPing {
+	if db.Config.SkipDefaultTransaction || !db.Config.DisableAutomaticPing {
 		t.Fatalf("ClickHouse GORM 初始化配置错误: %+v", db.Config)
 	}
 	db.Config.Logger = l
