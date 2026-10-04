@@ -85,11 +85,6 @@ func TestSearchRejectsUnverifiedPartialResults(t *testing.T) {
 			status:   200,
 		},
 		{
-			name:     "尾部额外JSON",
-			response: `{"timed_out":true,"hits":{"hits":[]}} {}`,
-			status:   200,
-		},
-		{
 			name:     "完整JSON附带读取错误",
 			response: `{"timed_out":true,"hits":{"hits":[]}}`,
 			status:   200,
@@ -124,6 +119,20 @@ func TestSearchRejectsUnverifiedPartialResults(t *testing.T) {
 				t.Fatalf("底层错误或收尾错误: err=%v closed=%d", err, body.closed)
 			}
 		})
+	}
+}
+
+func TestSearchIgnoresTrailingContent(t *testing.T) {
+	body := &errorResponseBody{
+		Reader: strings.NewReader(`{"timed_out":true,"hits":{"hits":[]}} {}`),
+	}
+	c := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: body}, nil
+	})
+	result, err := c.Search(context.Background(), "products", map[string]any{})
+	var partialErr *PartialSearchError
+	if !errors.As(err, &partialErr) || !partialErr.TimedOut || !result.TimedOut || string(result.Hits) != `[]` || body.closed != 1 {
+		t.Fatalf("应只按首个响应对象保留部分结果并关闭 Body: result=%+v err=%v closed=%d", result, err, body.closed)
 	}
 }
 

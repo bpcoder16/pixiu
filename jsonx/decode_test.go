@@ -39,14 +39,20 @@ func TestDecodeOneSingleValue(t *testing.T) {
 	}
 }
 
-func TestDecodeOneRejectsExtraContent(t *testing.T) {
+func TestDecodeOneIgnoresTrailingContent(t *testing.T) {
 	for _, input := range []string{
 		`{"count":1}{"count":2}`,
 		`{"count":1} null`,
 		`{"count":1} 2`,
 		`{"count":1} []`,
+		`{"count":1} "text"`,
+		`{"count":1} true`,
 		`{"count":1} trailing`,
 		`{"count":1} {`,
+		"{\"count\":1}\v",
+		"{\"count\":1}\f",
+		"{\"count\":1}\u00a0",
+		"{\"count\":1}\x00",
 	} {
 		t.Run(input, func(t *testing.T) {
 			for _, split := range []bool{false, true} {
@@ -54,10 +60,25 @@ func TestDecodeOneRejectsExtraContent(t *testing.T) {
 				if split {
 					reader = iotest.OneByteReader(reader)
 				}
-				var got any
-				if err := DecodeOne(reader, &got); err == nil {
-					t.Fatalf("分段=%v: 未拒绝额外内容", split)
+				var got struct {
+					Count int `json:"count"`
 				}
+				if err := DecodeOne(reader, &got); err != nil || got.Count != 1 {
+					t.Fatalf("分段=%v: 应只解析首值: got=%v err=%v", split, got, err)
+				}
+			}
+		})
+	}
+}
+
+func TestDecodeOneDoesNotReadAfterFirstValue(t *testing.T) {
+	for _, input := range []string{`{"count":1}`, `[1]`, `"value" `, `42 `, `true `, `null `} {
+		t.Run(input, func(t *testing.T) {
+			// 单个标量保留分隔空白，避免将解析首值所需的读取误判为尾部检查。
+			reader := io.MultiReader(strings.NewReader(input), iotest.ErrReader(errors.New("不应额外读取 EOF")))
+			var got any
+			if err := DecodeOne(reader, &got); err != nil {
+				t.Fatalf("首值解析成功后不应继续读取: %v", err)
 			}
 		})
 	}
@@ -122,10 +143,6 @@ func TestDecodeOnePreservesReadErrors(t *testing.T) {
 		})
 	}
 	var got any
-	reader := io.MultiReader(strings.NewReader(`{"count":1}`), iotest.ErrReader(readErr))
-	if err := DecodeOne(reader, &got); !errors.Is(err, readErr) {
-		t.Fatalf("确认结束时读取错误丢失: %v", err)
-	}
 	if err := DecodeOne(&finalErrorReader{data: `{"count":1}`, err: io.EOF}, &got); err != nil {
 		t.Fatalf("有效 JSON 随 EOF 返回不应失败: %v", err)
 	}

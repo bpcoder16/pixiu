@@ -163,9 +163,8 @@ func TestIndexValidatesResponseShape(t *testing.T) {
 			wantErr:  true,
 		},
 		{
-			name:     "额外JSON",
+			name:     "忽略额外JSON",
 			response: `{"result":"created","_shards":{"total":1,"successful":1,"failed":0}} {}`,
-			wantErr:  true,
 		},
 		{
 			name:     "创建",
