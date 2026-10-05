@@ -51,6 +51,8 @@ type Endpoint struct {
 
 // Config 配置一个逻辑 ClickHouse 数据库及其日志行为。
 type Config struct {
+	// InitTimeout 限制全部端点连接、验活和版本探测的总耗时；零值默认 10 秒，负值无效。
+	InitTimeout time.Duration
 	// Name 是必填的逻辑库名，用作日志中的下游标识。
 	Name string
 	// Master 是必填的主库连接配置，MasterDB 使用它。
@@ -76,11 +78,17 @@ type preparedEndpoint struct {
 	pool    Pool
 }
 
-// New 创建并验活全部端点；初始化沿用驱动超时，失败时关闭已创建的连接池。
+// New 创建并验活全部端点；全部端点共用 InitTimeout 预算，失败时关闭已创建的连接池。
 // 客户端由调用方通过 Close 显式关闭，查询时再传入操作 context。
 func New(cfg Config) (client *Client, err error) {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return nil, errors.New("clickhousex: empty database name")
+	}
+	if cfg.InitTimeout < 0 {
+		return nil, errors.New("clickhousex: negative initialization timeout")
+	}
+	if cfg.InitTimeout == 0 {
+		cfg.InitTimeout = 10 * time.Second
 	}
 	if cfg.SlowThreshold < 0 {
 		return nil, errors.New("clickhousex: negative slow threshold")
@@ -101,8 +109,10 @@ func New(cfg Config) (client *Client, err error) {
 		}
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.InitTimeout)
+	defer cancel()
 	c := &Client{}
-	if err := gormcore.BuildCluster(context.Background(), &c.cluster, master, slaves, func(ctx context.Context, endpoint preparedEndpoint, role string) (*gorm.DB, *sql.DB, error) {
+	if err := gormcore.BuildCluster(ctx, &c.cluster, master, slaves, func(ctx context.Context, endpoint preparedEndpoint, role string) (*gorm.DB, *sql.DB, error) {
 		return open(ctx, cfg, endpoint, role)
 	}); err != nil {
 		return nil, err
@@ -165,7 +175,11 @@ func normalizePool(pool Pool) (Pool, error) {
 }
 
 func open(ctx context.Context, cfg Config, prepared preparedEndpoint, endpointType string) (*gorm.DB, *sql.DB, error) {
-	sqlDB := clickhouse.OpenDB(&prepared.options)
+	connector := clickhouse.Connector(&prepared.options)
+	if prepared.options.Protocol == clickhouse.Native {
+		connector = nativeConnector{Connector: connector, options: prepared.options}
+	}
+	sqlDB := sql.OpenDB(connector)
 	if err := gormcore.ConfigureAndPing(ctx, sqlDB, prepared.pool); err != nil {
 		return nil, nil, fmt.Errorf("clickhousex: ping endpoint %q: %w", prepared.name, err)
 	}

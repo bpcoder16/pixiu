@@ -116,6 +116,7 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		Password: "secret",
 	}
 	cases := []Config{
+		{Name: "timeout", Master: valid, InitTimeout: -time.Second},
 		{},
 		{
 			Name: "analytics",

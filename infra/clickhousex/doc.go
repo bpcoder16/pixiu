@@ -2,6 +2,7 @@
 // 配置、日志及 ClickHouse 写入语义见 docs/clickhousex-design.md。
 //
 // 创建入口只接收 Config，客户端由应用通过 Close 或 CloseAll 显式关闭。
+// InitTimeout 为全部主从端点共用的初始化超时，默认 10 秒；实际操作仍由请求 context 控制。
 // 应用启动时创建客户端，查询时传入请求 context；以下示例需导入
 // github.com/ClickHouse/clickhouse-go/v2 和
 // github.com/bpcoder16/pixiu/infra/clickhousex：
