@@ -2,6 +2,7 @@
 // 详细的配置、日志与关闭语义见 docs/mysqlx-design.md。
 //
 // 创建入口只接收 Config，客户端由应用通过 Close 或 CloseAll 显式关闭。
+// InitTimeout 为全部主从端点共用的初始化超时，默认 10 秒；实际操作仍由请求 context 控制。
 // 应用启动时创建客户端，查询时传入请求 context；以下示例需导入 context、
 // github.com/bpcoder16/pixiu/infra/mysqlx 和 gorm.io/gorm：
 //
@@ -56,7 +57,7 @@
 // 诊断消息按对应级别记录，不要求包含 SQL；LogSQL 只控制正常查询的 SQL 日志。
 // ctx 已调用 logit.WithStart 时，每次 GORM Trace 还会以 MySQL_<Name> 为前缀自动编号记录下游耗时，
 // 供业务调用 logit.InfoDuration 汇总；未调用 WithStart 时跳过。
-// 创建时使用内部 Background，连接、验活与版本查询沿用驱动超时；操作 context 只控制该次查询。
+// 创建时使用内部超时 context，连接、验活与版本探测共用 InitTimeout；完成后释放，业务查询不继承它。
 //
 // 单个逻辑下游可显式初始化默认客户端，省去每次按名称查询。cfg 已由应用构造：
 //

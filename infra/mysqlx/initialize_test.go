@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 )
 
 func TestVersionProbeUsesDriverReadTimeout(t *testing.T) {
-	endpoint := testVersionEndpoint(t, "8.0.36", true)
+	endpoint := testVersionEndpoint(t, "8.0.36", "version")
 	endpoint.driver.ReadTimeout = 100 * time.Millisecond
 	db, pool, err := open(context.Background(), Config{Name: "startup"}, endpoint, "master")
 	if pool != nil {
@@ -26,7 +27,7 @@ func TestVersionProbeUsesDriverReadTimeout(t *testing.T) {
 
 func TestVersionProbeKeepsDialectAndOperationContext(t *testing.T) {
 	const version = "10.5.12-MariaDB"
-	db, pool, err := open(context.Background(), Config{Name: "startup"}, testVersionEndpoint(t, version, false), "master")
+	db, pool, err := open(context.Background(), Config{Name: "startup"}, testVersionEndpoint(t, version, ""), "master")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +48,7 @@ func TestVersionProbeKeepsDialectAndOperationContext(t *testing.T) {
 	}
 }
 
-func testVersionEndpoint(t *testing.T, version string, stallVersion bool) preparedEndpoint {
+func testVersionEndpoint(t *testing.T, version string, stallAt string) preparedEndpoint {
 	t.Helper()
 	endpoint, err := prepare(Endpoint{
 		Host:        "localhost",
@@ -62,14 +63,14 @@ func testVersionEndpoint(t *testing.T, version string, stallVersion bool) prepar
 		client, server := net.Pipe()
 		t.Cleanup(func() { _ = client.Close() })
 		t.Cleanup(func() { _ = server.Close() })
-		go serveVersionProbe(server, version, stallVersion)
+		go serveVersionProbe(server, version, stallAt)
 		return client, nil
 	}
 	return endpoint
 }
 
 // 只模拟握手、建连设置、Ping 和版本查询；实际收发与取消仍由 MySQL 驱动完成。
-func serveVersionProbe(conn net.Conn, version string, stallVersion bool) {
+func serveVersionProbe(conn net.Conn, version string, stallAt string) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	writePacket := func(sequence byte, payload []byte) error {
@@ -108,15 +109,16 @@ func serveVersionProbe(conn net.Conn, version string, stallVersion bool) {
 		if err != nil || len(packet) == 0 || packet[0] == 1 {
 			return
 		}
-		if packet[0] != 3 || string(packet[1:]) != "SELECT VERSION()" {
+		isVersion := packet[0] == 3 && string(packet[1:]) == "SELECT VERSION()"
+		if stallAt == "ping" && packet[0] == 14 || stallAt == "version" && isVersion {
+			_, _ = io.Copy(io.Discard, conn)
+			return
+		}
+		if !isVersion {
 			if writePacket(1, ok) != nil {
 				return
 			}
 			continue
-		}
-		if stallVersion {
-			_, _ = io.Copy(io.Discard, conn)
-			return
 		}
 		field := []byte{3, 'd', 'e', 'f', 0, 0, 0, 9, 'V', 'E', 'R', 'S', 'I', 'O', 'N', '(', ')', 0,
 			12, 33, 0, 255, 0, 0, 0, 253, 0, 0, 0, 0, 0}
@@ -126,5 +128,73 @@ func serveVersionProbe(conn net.Conn, version string, stallVersion bool) {
 				return
 			}
 		}
+	}
+}
+
+func TestNewInitializationTimeout(t *testing.T) {
+	for _, stage := range []string{"handshake", "ping", "version"} {
+		t.Run(stage, func(t *testing.T) {
+			endpoint := testMySQLEndpoint(t, stage)
+			start := time.Now()
+			client, err := New(Config{
+				Name:        "timeout",
+				Master:      endpoint,
+				InitTimeout: 100 * time.Millisecond,
+			})
+			if client != nil {
+				_ = client.Close()
+			}
+			if client != nil || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("初始化 %s 未返回超时: client=%v err=%v", stage, client, err)
+			}
+			if elapsed := time.Since(start); elapsed > time.Second {
+				t.Fatalf("初始化超时未及时返回: %v", elapsed)
+			}
+		})
+	}
+}
+
+func TestNewReleasesInitializationContext(t *testing.T) {
+	client, err := New(Config{
+		Name:   "startup",
+		Master: testMySQLEndpoint(t, ""),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var version string
+	if err := client.MasterDB(context.Background()).Raw("SELECT VERSION()").Row().Scan(&version); err != nil || version != "10.5.12-MariaDB" {
+		t.Fatalf("初始化 context 取消后影响业务查询: version=%q err=%v", version, err)
+	}
+}
+
+func testMySQLEndpoint(t *testing.T, stallAt string) Endpoint {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if stallAt == "handshake" {
+			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+			_, _ = io.Copy(io.Discard, conn)
+			return
+		}
+		serveVersionProbe(conn, "10.5.12-MariaDB", stallAt)
+	}()
+	host, portText, _ := net.SplitHostPort(listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	return Endpoint{
+		Host:     host,
+		Port:     port,
+		Database: "test",
+		Username: "test",
 	}
 }

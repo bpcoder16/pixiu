@@ -53,6 +53,10 @@ func ConfigureAndPing(ctx context.Context, pool *sql.DB, cfg PoolConfig) error {
 	pool.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 	if err := pool.PingContext(ctx); err != nil {
 		_ = pool.Close()
+		// 部分驱动将 Ping 取消转换为 ErrBadConn，优先保留初始化超时的原因。
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return err
 	}
 	return nil

@@ -50,6 +50,8 @@ type Endpoint struct {
 
 // Config 配置一个逻辑 MySQL 数据库及其日志行为。
 type Config struct {
+	// InitTimeout 限制全部端点连接、验活和版本探测的总耗时；零值默认 10 秒，负值无效。
+	InitTimeout time.Duration
 	// Name 是必填的逻辑库名，用作日志中的下游标识。
 	Name string
 	// Master 是必填的主库连接配置，MasterDB 使用它。
@@ -77,11 +79,17 @@ type preparedEndpoint struct {
 	driver *mysqldriver.Config
 }
 
-// New 创建并验活全部端点；初始化沿用驱动超时，失败时关闭已创建的连接池。
+// New 创建并验活全部端点；全部端点共用 InitTimeout 预算，失败时关闭已创建的连接池。
 // 客户端由调用方通过 Close 显式关闭，查询时再传入操作 context。
 func New(cfg Config) (client *Client, err error) {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return nil, errors.New("mysqlx: empty database name")
+	}
+	if cfg.InitTimeout < 0 {
+		return nil, errors.New("mysqlx: negative initialization timeout")
+	}
+	if cfg.InitTimeout == 0 {
+		cfg.InitTimeout = 10 * time.Second
 	}
 	if cfg.SlowThreshold < 0 {
 		return nil, errors.New("mysqlx: negative slow threshold")
@@ -102,8 +110,10 @@ func New(cfg Config) (client *Client, err error) {
 		}
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.InitTimeout)
+	defer cancel()
 	c := &Client{}
-	if err := gormcore.BuildCluster(context.Background(), &c.cluster, master, slaves, func(ctx context.Context, endpoint preparedEndpoint, role string) (*gorm.DB, *sql.DB, error) {
+	if err := gormcore.BuildCluster(ctx, &c.cluster, master, slaves, func(ctx context.Context, endpoint preparedEndpoint, role string) (*gorm.DB, *sql.DB, error) {
 		return open(ctx, cfg, endpoint, role)
 	}); err != nil {
 		return nil, err
@@ -197,16 +207,30 @@ func open(ctx context.Context, cfg Config, prepared preparedEndpoint, endpointTy
 		return nil, nil, fmt.Errorf("mysqlx: ping endpoint %q: %w", prepared.name, err)
 	}
 
-	// 版本探测沿用驱动读取超时，由方言保留 MySQL、MariaDB 等版本兼容处理。
-	db, err := gormcore.Open(sqlDB, gormmysql.New(gormmysql.Config{
-		Conn:                      sqlDB,
+	// 方言使用 Background 查询版本；仅在初始化期间绑定内部超时，保留原有版本兼容处理。
+	dialect := gormmysql.New(gormmysql.Config{
+		Conn:                      initializationPool{DB: sqlDB, ctx: ctx},
 		DSNConfig:                 prepared.driver,
 		SkipInitializeWithVersion: false,
-	}), newTraceLogger(cfg, endpointType, prepared.name))
+	}).(*gormmysql.Dialector)
+	db, err := gormcore.Open(sqlDB, dialect, newTraceLogger(cfg, endpointType, prepared.name))
 	if err != nil {
 		return nil, nil, fmt.Errorf("mysqlx: initialize endpoint %q: %w", prepared.name, err)
 	}
+	// 初始化 context 会在 New 返回时取消，运行期必须恢复原连接池。
+	dialect.Conn = sqlDB
+	db.ConnPool = sqlDB
+	db.Statement.ConnPool = sqlDB
 	return db, sqlDB, nil
+}
+
+type initializationPool struct {
+	*sql.DB
+	ctx context.Context
+}
+
+func (p initializationPool) QueryRowContext(_ context.Context, query string, args ...any) *sql.Row {
+	return p.DB.QueryRowContext(p.ctx, query, args...)
 }
 
 // MasterDB 返回带 ctx 的主库会话。

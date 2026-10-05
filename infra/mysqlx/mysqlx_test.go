@@ -301,6 +301,7 @@ func TestTraceInfoAndParameterFilter(t *testing.T) {
 func TestNewRejectsInvalidConfiguration(t *testing.T) {
 	valid := Endpoint{Host: "127.0.0.1", Port: 3306, Database: "orders", Username: "root", Password: "secret"}
 	cases := []Config{
+		{Name: "timeout", Master: valid, InitTimeout: -time.Second},
 		{},
 		{Name: "orders", Master: Endpoint{Database: "orders", Username: "root", Password: "secret"}},
 		{Name: "orders", Master: Endpoint{Host: "127.0.0.1", Database: "orders", Username: "root", Password: "secret", Port: 65536}},
