@@ -1,11 +1,12 @@
 // Package clickhousex 提供基于 GORM 的 ClickHouse 连接池、显式主从选择和统一查询日志。
 // 配置、日志及 ClickHouse 写入语义见 docs/clickhousex-design.md。
 //
+// 创建入口只接收 Config，客户端由应用通过 Close 或 CloseAll 显式关闭。
 // 应用启动时创建客户端，查询时传入请求 context；以下示例需导入
 // github.com/ClickHouse/clickhouse-go/v2 和
 // github.com/bpcoder16/pixiu/infra/clickhousex：
 //
-//	client, err := clickhousex.New(ctx, clickhousex.Config{
+//	client, err := clickhousex.New(clickhousex.Config{
 //	    Name: "analytics",
 //	    LogSQL: true,
 //	    Master: clickhousex.Endpoint{
@@ -46,7 +47,7 @@
 //	if err := stack.Register(clickhousex.CloseAll); err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	if _, err := clickhousex.NewNamed(ctx, cfg); err != nil {
+//	if _, err := clickhousex.NewNamed(cfg); err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
 //	client := clickhousex.Named(cfg.Name)
@@ -63,7 +64,7 @@
 //
 // 单个逻辑下游可显式初始化默认客户端，省去每次按名称查询。cfg 已由应用构造：
 //
-//	if _, err := clickhousex.NewDefault(ctx, cfg); err != nil {
+//	if _, err := clickhousex.NewDefault(cfg); err != nil {
 //	    return err
 //	}
 //	return clickhousex.Default().SlaveDB(ctx).Find(&events).Error

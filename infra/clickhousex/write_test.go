@@ -109,7 +109,7 @@ func TestCreateSendsBatchAndReturnsCommitError(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			client, err := New(ctx, Config{
+			client, err := New(Config{
 				Name: "write-test",
 				Master: Endpoint{
 					Host:     host,

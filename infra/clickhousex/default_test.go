@@ -22,15 +22,12 @@ func TestDefaultRegistryAndFailedInitialization(t *testing.T) {
 		Default()
 	})
 	for _, name := range []string{"", " \t "} {
-		if client, err := NewDefault(ctx, Config{Name: name}); client != nil || err == nil || err.Error() != "clickhousex: empty database name" {
+		if client, err := NewDefault(Config{Name: name}); client != nil || err == nil || err.Error() != "clickhousex: empty database name" {
 			t.Fatalf("空名称 %q: client=%v err=%v", name, client, err)
 		}
 	}
 	name := t.Name()
-	if client, err := NewDefault(nil, Config{Name: name}); client != nil || err == nil || err.Error() != "clickhousex: nil context" {
-		t.Fatalf("nil context: client=%v err=%v", client, err)
-	}
-	if client, err := NewDefault(ctx, Config{Name: name}); client != nil || err == nil {
+	if client, err := NewDefault(Config{Name: name}); client != nil || err == nil {
 		t.Fatalf("无效配置被接受: client=%v err=%v", client, err)
 	}
 	assertNamedPanic(t, "clickhousex: default client is not registered", func() {
@@ -51,11 +48,11 @@ func TestDefaultRegistryAndFailedInitialization(t *testing.T) {
 		t.Fatal("默认与命名查询未返回同一实例")
 	}
 	for _, duplicateName := range []string{name, "rejected"} {
-		if got, err := NewDefault(ctx, Config{Name: duplicateName}); got != nil || err == nil || err.Error() != "clickhousex: default client is already registered" {
+		if got, err := NewDefault(Config{Name: duplicateName}); got != nil || err == nil || err.Error() != "clickhousex: default client is already registered" {
 			t.Fatalf("重复默认初始化 = %p, %v", got, err)
 		}
 	}
-	if _, err := NewNamed(ctx, Config{Name: name}); err == nil || err.Error() != fmt.Sprintf("clickhousex: client %q is already registered", name) {
+	if _, err := NewNamed(Config{Name: name}); err == nil || err.Error() != fmt.Sprintf("clickhousex: client %q is already registered", name) {
 		t.Fatalf("默认名称重复登记错误 = %v", err)
 	}
 	if err := CloseAll(); err != nil {
@@ -70,7 +67,7 @@ func TestDefaultRegistryAndFailedInitialization(t *testing.T) {
 	assertNamedPanic(t, "clickhousex: named clients closed", func() {
 		Named(name)
 	})
-	if got, err := NewDefault(ctx, Config{Name: "later"}); got != nil || err == nil || err.Error() != "clickhousex: named clients closed" {
+	if got, err := NewDefault(Config{Name: "later"}); got != nil || err == nil || err.Error() != "clickhousex: named clients closed" {
 		t.Fatalf("关闭后默认初始化 = %p, %v", got, err)
 	}
 }

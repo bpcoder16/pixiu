@@ -76,11 +76,9 @@ type preparedEndpoint struct {
 	pool    Pool
 }
 
-// New 创建全部端点并用 ctx 验活；失败时关闭已创建的连接池。
-func New(ctx context.Context, cfg Config) (client *Client, err error) {
-	if ctx == nil {
-		return nil, errors.New("clickhousex: nil context")
-	}
+// New 创建并验活全部端点；初始化沿用驱动超时，失败时关闭已创建的连接池。
+// 客户端由调用方通过 Close 显式关闭，查询时再传入操作 context。
+func New(cfg Config) (client *Client, err error) {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return nil, errors.New("clickhousex: empty database name")
 	}
@@ -104,7 +102,7 @@ func New(ctx context.Context, cfg Config) (client *Client, err error) {
 	}
 
 	c := &Client{}
-	if err := gormcore.BuildCluster(ctx, &c.cluster, master, slaves, func(ctx context.Context, endpoint preparedEndpoint, role string) (*gorm.DB, *sql.DB, error) {
+	if err := gormcore.BuildCluster(context.Background(), &c.cluster, master, slaves, func(ctx context.Context, endpoint preparedEndpoint, role string) (*gorm.DB, *sql.DB, error) {
 		return open(ctx, cfg, endpoint, role)
 	}); err != nil {
 		return nil, err
@@ -172,7 +170,7 @@ func open(ctx context.Context, cfg Config, prepared preparedEndpoint, endpointTy
 		return nil, nil, fmt.Errorf("clickhousex: ping endpoint %q: %w", prepared.name, err)
 	}
 
-	// 方言版本探测使用 Background；关闭后启动网络操作均受 ctx 控制。
+	// 跳过方言版本探测，初始化只执行驱动连接与验活。
 	// 保留默认事务：方言通过 Prepare/Exec 追加批次，驱动在 Commit 时才发送。
 	db, err := gormcore.Open(sqlDB, gormclickhouse.New(gormclickhouse.Config{
 		Conn:                      sqlDB,

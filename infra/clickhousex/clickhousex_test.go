@@ -105,8 +105,8 @@ func TestPrepareConnectionAndPool(t *testing.T) {
 	}
 }
 
-func TestNewRejectsInvalidConfigAndCancelledContext(t *testing.T) {
-	if _, err := New(context.Background(), Config{Name: " \t "}); err == nil || err.Error() != "clickhousex: empty database name" {
+func TestNewRejectsInvalidConfig(t *testing.T) {
+	if _, err := New(Config{Name: " \t "}); err == nil || err.Error() != "clickhousex: empty database name" {
 		t.Fatalf("仅含空白的逻辑库名未被拒绝: %v", err)
 	}
 	valid := Endpoint{
@@ -180,12 +180,12 @@ func TestNewRejectsInvalidConfigAndCancelledContext(t *testing.T) {
 		},
 	}
 	for _, cfg := range cases {
-		client, err := New(context.Background(), cfg)
+		client, err := New(cfg)
 		if err == nil || client != nil || strings.Contains(err.Error(), "secret") {
 			t.Fatalf("无效配置未正确拒绝或泄露密码: client=%v err=%v", client, err)
 		}
 	}
-	_, err := New(context.Background(), Config{
+	_, err := New(Config{
 		Name:   "analytics",
 		Master: valid,
 		Slaves: []Endpoint{
@@ -198,15 +198,6 @@ func TestNewRejectsInvalidConfigAndCancelledContext(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), `endpoint "slave-2"`) {
 		t.Fatalf("从库错误缺少端点序号: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	client, err := New(ctx, Config{
-		Name:   "analytics",
-		Master: valid,
-	})
-	if client != nil || !errors.Is(err, context.Canceled) {
-		t.Fatalf("启动未遵循 context: client=%v err=%v", client, err)
 	}
 }
 

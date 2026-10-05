@@ -88,14 +88,14 @@ func TestNamedRegistryAndLifecycleClose(t *testing.T) {
 }
 
 func TestNewNamedFailureDoesNotReserveName(t *testing.T) {
-	if _, err := NewNamed(context.Background(), Config{}); err == nil {
+	if _, err := NewNamed(Config{}); err == nil {
 		t.Fatal("空名称被接受")
 	}
-	if _, err := NewNamed(context.Background(), Config{Name: " \t "}); err == nil || err.Error() != "clickhousex: empty database name" {
+	if _, err := NewNamed(Config{Name: " \t "}); err == nil || err.Error() != "clickhousex: empty database name" {
 		t.Fatalf("仅含空白的逻辑库名未被拒绝: %v", err)
 	}
 	name := t.Name()
-	if _, err := NewNamed(context.Background(), Config{Name: name}); err == nil {
+	if _, err := NewNamed(Config{Name: name}); err == nil {
 		t.Fatal("无效端点配置被接受")
 	}
 	assertNamedPanic(t, fmt.Sprintf("clickhousex: client %q is not registered", name), func() {
