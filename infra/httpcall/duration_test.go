@@ -44,7 +44,7 @@ func TestRequestContextDoesNotRetainCompletedRequest(t *testing.T) {
 	t.Fatal("请求已完成且业务仅保留 context，但 Request 仍无法回收")
 }
 
-func TestRequestDurationResetsAfterCompletion(t *testing.T) {
+func TestRequestDurationIsolatedAcrossRequests(t *testing.T) {
 	for _, outcome := range []string{"success", "error", "panic", "retry", "muted"} {
 		t.Run(outcome, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -93,16 +93,22 @@ func TestRequestDurationResetsAfterCompletion(t *testing.T) {
 					t.Fatalf("调用结果不正确: err=%v panic=%v", err, recovered)
 				}
 
-				// 调用之间的空闲时间不属于第二次 HTTP 执行。
+				// 复用业务 context，每次执行使用新 Request；创建后的空闲时间不计入耗时。
+				second := client.Request(ctx)
 				time.Sleep(time.Second)
-				if _, err := req.Get("https://example.test/second"); err != nil {
+				if _, err := second.Get("https://example.test/second"); err != nil {
 					t.Fatal(err)
 				}
 				logit.InfoDuration(ctx, "request done")
 				logs := records(t, buf)
 				firstDuration := float64(5)
+				firstAttempts := 1
 				if outcome == "retry" {
 					firstDuration = 30
+					firstAttempts = 2
+				}
+				if req.Attempt != firstAttempts || second.Attempt != 1 {
+					t.Fatalf("新请求尝试次数不正确: first=%d second=%d", req.Attempt, second.Attempt)
 				}
 				if outcome == "muted" {
 					if len(logs) != 1 {
@@ -113,6 +119,10 @@ func TestRequestDurationResetsAfterCompletion(t *testing.T) {
 					logs[1][logit.DownstreamDurationMSKey] != float64(5) {
 					t.Fatalf("两次执行应独立计时: %v", logs)
 				}
+				if outcome != "muted" && (downstreamDetails(t, logs[0])["attempt"] != float64(firstAttempts) ||
+					downstreamDetails(t, logs[1])["attempt"] != float64(1)) {
+					t.Fatalf("结果日志尝试次数不正确: %v", logs)
+				}
 				summary := logs[len(logs)-1]
 				if summary["HttpCall_inventory_1_duration_ms"] != firstDuration ||
 					summary["HttpCall_inventory_2_duration_ms"] != float64(5) {
@@ -121,6 +131,49 @@ func TestRequestDurationResetsAfterCompletion(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestRequestDurationExcludesCurlPreparation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		buf := captureLogs(t)
+		attempts := 0
+		client := httpcall.New("inventory", httpcall.OptResty(func(r *resty.Client) {
+			r.SetRetryCount(1).
+				SetRetryWaitTime(20 * time.Millisecond).
+				SetRetryMaxWaitTime(20 * time.Millisecond)
+			r.OnBeforeRequest(func(*resty.Client, *resty.Request) error {
+				time.Sleep(20 * time.Millisecond)
+				return nil
+			})
+			r.SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				time.Sleep(5 * time.Millisecond)
+				attempts++
+				if attempts == 1 {
+					return nil, errors.New("temporary failure")
+				}
+				return response(req, http.StatusOK), nil
+			}))
+		}))
+		ctx := logit.WithStart(context.Background())
+		req := client.Request(ctx).SetDebug(true).EnableGenerateCurlOnDebug()
+		req.Method = http.MethodGet
+		req.URL = "https://example.test/items"
+		if req.GenerateCurlCommand() == "" {
+			t.Fatal("未生成 curl 命令")
+		}
+		time.Sleep(time.Second)
+		if _, err := req.Send(); err != nil {
+			t.Fatal(err)
+		}
+		logit.InfoDuration(ctx, "request done")
+		logs := records(t, buf)
+		// 两次前置回调与传输各 25ms，加一次 20ms 重试等待；curl 预处理不计入。
+		if attempts != 2 || len(logs) != 2 ||
+			logs[0][logit.DownstreamDurationMSKey] != float64(70) ||
+			logs[1]["HttpCall_inventory_1_duration_ms"] != float64(70) {
+			t.Fatalf("耗时应只包含实际执行及重试: attempts=%d logs=%v", attempts, logs)
+		}
+	})
 }
 
 func TestRequestDurationIsolatedFromInheritedContext(t *testing.T) {

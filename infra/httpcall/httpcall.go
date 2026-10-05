@@ -66,6 +66,7 @@ func New(name string, opts ...Option) *Client {
 func (c *Client) Resty() *resty.Client { return c.resty }
 
 // Request 创建带调用方 context 的 Resty 请求。业务使用返回值的 Get/Post/Put 等方法。
+// 每次调用必须创建新 Request；同一个 Request 不得重复或并发执行，自动重试由 Resty 管理。
 func (c *Client) Request(ctx context.Context) *resty.Request {
 	return c.resty.R().SetContext(ctx)
 }

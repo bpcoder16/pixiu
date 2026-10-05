@@ -409,6 +409,76 @@ func TestLogDetailsMissingResponseAndStreamingBody(t *testing.T) {
 	})
 }
 
+func TestRetryPreparationFailureLogsFixedURLAndCurrentDetails(t *testing.T) {
+	for _, outcome := range []string{"error", "panic"} {
+		t.Run(outcome, func(t *testing.T) {
+			buf := captureLogs(t)
+			failure := errors.New("prepare retry failed")
+			const target = "https://example.test/items?trace=1"
+			client := httpcall.New("inventory",
+				httpcall.OptLogDetails(true),
+				httpcall.OptResty(func(r *resty.Client) {
+					r.SetTimeout(0).
+						SetBaseURL("https://example.test").
+						SetRetryCount(1).
+						SetRetryWaitTime(time.Millisecond).
+						SetRetryMaxWaitTime(time.Millisecond)
+					r.OnBeforeRequest(func(_ *resty.Client, req *resty.Request) error {
+						if req.Attempt == 1 {
+							return nil
+						}
+						req.Header = http.Header{"X-Attempt": {"second"}}
+						if outcome == "panic" {
+							panic(failure)
+						}
+						return failure
+					})
+					r.SetTransport(roundTripFunc(func(*http.Request) (*http.Response, error) {
+						return nil, errors.New("temporary failure")
+					}))
+				}),
+			)
+			var recovered any
+			var err error
+			func() {
+				defer func() { recovered = recover() }()
+				_, err = client.Request(context.Background()).
+					SetQueryParam("trace", "1").
+					SetHeader("X-Attempt", "first").
+					SetBody("first body").
+					Post("/items")
+			}()
+			if outcome == "panic" {
+				if recovered != failure {
+					t.Fatalf("panic 未保留: %v", recovered)
+				}
+			} else if recovered != nil || !errors.Is(err, failure) {
+				t.Fatalf("准备失败未保留: err=%v panic=%v", err, recovered)
+			}
+			logs := records(t, buf)
+			if len(logs) != 1 || logs[0]["level"] != "ERROR" {
+				t.Fatalf("准备失败应恰有一条 Error 日志: %v", logs)
+			}
+			details := downstreamDetails(t, logs[0])
+			// 重试 URL 不变，准备失败时仍保留已构造地址中的 BaseURL 和查询参数。
+			if details["url"] != target || details["attempt"] != float64(2) {
+				t.Fatalf("重试准备失败应保留固定完整 URL: %v", details)
+			}
+			if details["request_body"] != "" || details["request_content_length"] != float64(0) {
+				t.Fatalf("准备失败不应输出上次尝试的请求详情: %v", details)
+			}
+			headers, ok := details["request_headers"].(map[string]any)
+			if !ok || len(headers) != 1 {
+				t.Fatalf("准备失败应只使用当前请求 Header: %v", details)
+			}
+			values, ok := headers["X-Attempt"].([]any)
+			if !ok || len(values) != 1 || values[0] != "second" {
+				t.Fatalf("准备失败未使用当前请求 Header: %v", headers)
+			}
+		})
+	}
+}
+
 func TestLogDetailsFinalURLAfterRedirect(t *testing.T) {
 	buf := captureLogs(t)
 	client := httpcall.New("inventory",

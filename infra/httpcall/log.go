@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"time"
-	"weak"
 
 	"github.com/bpcoder16/pixiu/logit"
 	"github.com/go-resty/resty/v2"
@@ -17,12 +16,6 @@ import (
 const downstreamHTTPMessage = "HttpCall"
 
 type startKey struct{}
-
-type requestStart struct {
-	// 只校验状态归属，避免派生 context 延长整个 Request 的生命周期。
-	request weak.Pointer[resty.Request]
-	started time.Time
-}
 
 // restyStderrLogger 保留 Resty 内部警告和错误，不输出调试日志。
 type restyStderrLogger struct{ name string }
@@ -59,17 +52,10 @@ func (c *Client) onPanic(req *resty.Request, err error) {
 	c.logError(req, err)
 }
 
-// 同一 Request 串行执行并复用状态；派生 context 的其他 Request 必须独立计时。
+// 每个 Request 只执行一次：首次尝试覆盖继承的起点，重试沿用，curl 预处理不计时。
 func (*Client) markStart(req *resty.Request) {
-	ctx := req.Context()
-	state, _ := ctx.Value(startKey{}).(*requestStart)
-	if state == nil || state.request.Value() != req {
-		state = &requestStart{request: weak.Make(req)}
-		req.SetContext(context.WithValue(ctx, startKey{}, state))
-	}
-	// 完成时会清空起点，只有同次执行的重试会沿用，包含重试等待。
-	if state.started.IsZero() {
-		state.started = time.Now()
+	if req.Attempt == 1 {
+		req.SetContext(context.WithValue(req.Context(), startKey{}, time.Now()))
 	}
 }
 
@@ -110,9 +96,11 @@ func (c *Client) logError(req *resty.Request, err error) {
 func (c *Client) recordDuration(req *resty.Request) time.Duration {
 	ctx := req.Context()
 	duration := time.Duration(0)
-	if state, ok := ctx.Value(startKey{}).(*requestStart); ok && state.request.Value() == req && !state.started.IsZero() {
-		duration = time.Since(state.started)
-		state.started = time.Time{}
+	// 执行前被拒绝的请求尚未写入起点，不能读取从父请求继承的时间。
+	if req.Attempt > 0 {
+		if started, ok := ctx.Value(startKey{}).(time.Time); ok {
+			duration = time.Since(started)
+		}
 	}
 	logit.AddDownstreamDurationAuto(ctx, c.durationPrefix, duration)
 	return duration
@@ -146,9 +134,12 @@ func (c *Client) log(req *resty.Request, level logit.Level, resp *resty.Response
 func appendHTTPDetails(details map[string]any, req *resty.Request, resp *resty.Response) {
 	requestHeaders := http.Header{}
 	requestContentLength := int64(0)
-	if req.RawRequest != nil {
+	requestBody := ""
+	// 无本轮响应时，RawRequest 可能仍属于上次重试或 curl 预处理。
+	if resp != nil && req.RawRequest != nil {
 		requestHeaders = req.RawRequest.Header.Clone()
 		requestContentLength = req.RawRequest.ContentLength
+		requestBody = requestBodyForLog(req)
 	} else if req.Header != nil {
 		requestHeaders = req.Header.Clone()
 	}
@@ -180,7 +171,7 @@ func appendHTTPDetails(details map[string]any, req *resty.Request, resp *resty.R
 
 	details["request_headers"] = requestHeaders
 	details["request_content_length"] = requestContentLength
-	details["request_body"] = requestBodyForLog(req)
+	details["request_body"] = requestBody
 
 	details["response_proto"] = proto
 	details["response_headers"] = responseHeaders
@@ -207,7 +198,7 @@ func requestBodyForLog(req *resty.Request) string {
 	return string(body)
 }
 
-// 已构造时取初始 HTTP 请求的 URL；构造前失败时取 Resty 请求中的原文。
+// 已构造时取初始 HTTP 请求的完整 URL；尚未构造时取请求配置中的地址。
 func requestURL(req *resty.Request) string {
 	if req.RawRequest != nil && req.RawRequest.URL != nil {
 		return req.RawRequest.URL.String()

@@ -55,6 +55,8 @@
 //	}
 //
 // Request(ctx) 返回 Resty 请求，也可直接调用 Get、Put、Patch、Delete 等方法。
+// 仅复用 Client；每次调用必须创建新 Request，每个 Request 只执行一次，
+// 不得重复或并发执行，也不应改写 Attempt；同次执行内的自动重试由 Resty 管理。
 // HTTP 4xx/5xx 遵循 Resty 语义，不自动返回 Go error，业务应检查响应状态。
 // 不配置 SetRetryCount 时默认不自动重试。OptResty 中可用 SetRetryCount、SetRetryWaitTime、
 // SetRetryMaxWaitTime 和 AddRetryCondition 配置重试次数、退避和条件。
@@ -68,18 +70,20 @@
 // 开启 Resty 重试后,整次调用可能超过单次尝试上限;需要总截止时间时为请求 context 设置超时。
 // 每次调用通过 logit 记录统一的 downstream_type、downstream_duration_ms、
 // downstream_id 和 downstream_details；details 固定包含 method、attempt、url、status、err，
-// 缺值时字符串为 ""、数字为 0；URL 使用完整地址，attempt 为实际尝试次数。
+// 缺值时字符串为 ""、数字为 0；attempt 为实际尝试次数。
+// URL 优先取已构造的 RawRequest.URL，否则取 req.URL；不兼容同次调用的重试 URL 变更。
 // OptLogRequests 默认开启；设为 false 时不输出上述 HttpCall 结果日志，
 // OptLogDetails 此时也不输出详细内容，Resty 自身的 stderr 诊断仍会保留。
 // ctx 已调用 logit.WithStart 时，每次 Execute 以 HttpCall_<name> 为前缀自动编号记录下游耗时，
 // 即使关闭结果日志也不受影响，供业务调用 logit.InfoDuration 汇总；未调用 WithStart 时跳过。
-// 每次执行独立计时，包含业务前置回调和重试等待；完成后重置起点，
-// 继承请求 context 的其他 HTTP 请求不会沿用该起点。并发调用应分别创建 Request。
-// 计时状态以弱引用识别 Request，保留请求 context 不会因此阻止 Request 被 GC 回收。
+// 首次尝试写入独立起点，包含业务前置回调和重试等待，继承 context 的新请求独立计时。
+// 创建请求和预生成 curl 不启动计时；执行前被拒绝的无效请求或 SRV 解析错误记零耗时。
+// context 仅保存时间值，不引用 Request，也不维护完成后重置的状态。
 // OptLogDetails 默认关闭；开启后还会记录双方 Header、可读取的 Body、最终 URL、
 // 响应状态文本、HTTP 协议和 Content-Length。不会读取业务接管的响应流；缺值用
 // 空对象、空字符串或 0，未知的 Content-Length 保留 -1。详细内容不脱敏或截断，
 // 可能包含凭据和大量数据，应保护日志存储与收集链路。
+// 没有本轮响应的准备失败或 panic 使用当前请求 Header，不记录旧 RawRequest 的 Header 和 Body。
 // 已有的 logit context 字段会随日志输出。
 // 需要按请求分流结果日志时，可先用 logit.WithLoggerName(ctx, name) 设置请求 context；
 // 非空名字使用已注册的命名 Logger，未注册或没有名字时使用默认 Logger。
