@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"time"
+	"weak"
 
 	"github.com/bpcoder16/pixiu/logit"
 	"github.com/go-resty/resty/v2"
@@ -16,6 +17,12 @@ import (
 const downstreamHTTPMessage = "HttpCall"
 
 type startKey struct{}
+
+type requestStart struct {
+	// 只校验状态归属，避免派生 context 延长整个 Request 的生命周期。
+	request weak.Pointer[resty.Request]
+	started time.Time
+}
 
 // restyStderrLogger 保留 Resty 内部警告和错误，不输出调试日志。
 type restyStderrLogger struct{ name string }
@@ -52,11 +59,17 @@ func (c *Client) onPanic(req *resty.Request, err error) {
 	c.logError(req, err)
 }
 
-// 首次执行时写入时间戳，后续重试沿用，因此耗时包含重试等待。
+// 同一 Request 串行执行并复用状态；派生 context 的其他 Request 必须独立计时。
 func (*Client) markStart(req *resty.Request) {
 	ctx := req.Context()
-	if ctx.Value(startKey{}) == nil {
-		req.SetContext(context.WithValue(ctx, startKey{}, time.Now()))
+	state, _ := ctx.Value(startKey{}).(*requestStart)
+	if state == nil || state.request.Value() != req {
+		state = &requestStart{request: weak.Make(req)}
+		req.SetContext(context.WithValue(ctx, startKey{}, state))
+	}
+	// 完成时会清空起点，只有同次执行的重试会沿用，包含重试等待。
+	if state.started.IsZero() {
+		state.started = time.Now()
 	}
 }
 
@@ -97,8 +110,9 @@ func (c *Client) logError(req *resty.Request, err error) {
 func (c *Client) recordDuration(req *resty.Request) time.Duration {
 	ctx := req.Context()
 	duration := time.Duration(0)
-	if started, ok := ctx.Value(startKey{}).(time.Time); ok {
-		duration = time.Since(started)
+	if state, ok := ctx.Value(startKey{}).(*requestStart); ok && state.request.Value() == req && !state.started.IsZero() {
+		duration = time.Since(state.started)
+		state.started = time.Time{}
 	}
 	logit.AddDownstreamDurationAuto(ctx, c.durationPrefix, duration)
 	return duration

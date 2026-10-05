@@ -73,6 +73,9 @@
 // OptLogDetails 此时也不输出详细内容，Resty 自身的 stderr 诊断仍会保留。
 // ctx 已调用 logit.WithStart 时，每次 Execute 以 HttpCall_<name> 为前缀自动编号记录下游耗时，
 // 即使关闭结果日志也不受影响，供业务调用 logit.InfoDuration 汇总；未调用 WithStart 时跳过。
+// 每次执行独立计时，包含业务前置回调和重试等待；完成后重置起点，
+// 继承请求 context 的其他 HTTP 请求不会沿用该起点。并发调用应分别创建 Request。
+// 计时状态以弱引用识别 Request，保留请求 context 不会因此阻止 Request 被 GC 回收。
 // OptLogDetails 默认关闭；开启后还会记录双方 Header、可读取的 Body、最终 URL、
 // 响应状态文本、HTTP 协议和 Content-Length。不会读取业务接管的响应流；缺值用
 // 空对象、空字符串或 0，未知的 Content-Length 保留 -1。详细内容不脱敏或截断，

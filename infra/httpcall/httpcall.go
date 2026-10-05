@@ -47,12 +47,13 @@ func New(name string, opts ...Option) *Client {
 		resty:          resty.New().SetTimeout(time.Minute).SetLogger(restyStderrLogger{name: name}),
 		logRequests:    true,
 	}
+	// 先启动计时，覆盖 OptResty 注册的前置回调及其错误或 panic 路径。
+	c.resty.OnBeforeRequest(c.onBeforeRequest)
 	for _, opt := range opts {
 		if opt != nil {
 			opt(c)
 		}
 	}
-	c.resty.OnBeforeRequest(c.onBeforeRequest)
 	c.resty.OnSuccess(c.onSuccess)
 	c.resty.OnError(c.onError)
 	c.resty.OnInvalid(c.onInvalid)
