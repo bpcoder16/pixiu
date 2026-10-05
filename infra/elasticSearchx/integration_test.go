@@ -29,7 +29,7 @@ func TestVersionFactoriesConnectAndRunCommonOperations(t *testing.T) {
 	t.Cleanup(func() { logit.SetDefault(oldLogger); _ = logit.Close(logger) })
 	factories := []struct {
 		major int
-		open  func(context.Context, elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+		open  func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
 	}{
 		{7, elasticSearchxv7.New}, {8, elasticSearchxv8.New}, {9, elasticSearchxv9.New},
 	}
@@ -69,11 +69,11 @@ func TestVersionFactoriesConnectAndRunCommonOperations(t *testing.T) {
 			} else {
 				cfg.Username, cfg.Password = "reader", "secret"
 			}
-			client, err := factory.open(context.Background(), cfg)
+			client, err := factory.open(cfg)
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
-			defer client.Close(context.Background())
+			defer client.Close()
 			count, err := client.Count(context.Background(), "products", map[string]any{"query": map[string]any{"match_all": map[string]any{}}})
 			if err != nil || count != 4 || requests < 2 {
 				t.Fatalf("Count: count=%d err=%v requests=%d", count, err, requests)
@@ -96,7 +96,7 @@ func TestVersionFactoriesPassLogOptionsAndPreserveResponse(t *testing.T) {
 	})
 	for _, factory := range []struct {
 		major int
-		open  func(context.Context, elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+		open  func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
 	}{
 		{7, elasticSearchxv7.New},
 		{8, elasticSearchxv8.New},
@@ -145,11 +145,11 @@ func TestVersionFactoriesPassLogOptionsAndPreserveResponse(t *testing.T) {
 			} {
 				buf.Reset()
 				ctx := logit.WithStart(context.Background())
-				client, err := factory.open(ctx, cfg, tt.opts...)
+				client, err := factory.open(cfg, tt.opts...)
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer client.Close(context.Background())
+				defer client.Close()
 				if buf.Len() != 0 {
 					t.Fatalf("%s 时启动验活仍输出日志: %s", tt.name, buf.String())
 				}
@@ -183,7 +183,7 @@ func TestVersionFactoriesPassLogOptionsAndPreserveResponse(t *testing.T) {
 func TestVersionFactoriesRespectConnectionLimit(t *testing.T) {
 	factories := []struct {
 		major int
-		open  func(context.Context, elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+		open  func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
 	}{
 		{7, elasticSearchxv7.New},
 		{8, elasticSearchxv8.New},
@@ -217,7 +217,7 @@ func TestVersionFactoriesRespectConnectionLimit(t *testing.T) {
 			defer server.Close()
 			// 先释放阻塞的请求，再等待服务端关闭，避免失败路径挂起。
 			defer release()
-			client, err := factory.open(context.Background(), elasticSearchx.Config{
+			client, err := factory.open(elasticSearchx.Config{
 				Name:            "search",
 				Addresses:       []string{server.URL},
 				MaxConnsPerHost: 1,
@@ -225,7 +225,7 @@ func TestVersionFactoriesRespectConnectionLimit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer client.Close(context.Background())
+			defer client.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			firstDone := make(chan error, 1)

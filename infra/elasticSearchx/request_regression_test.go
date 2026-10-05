@@ -264,7 +264,7 @@ func TestResponseAndTransportErrorClosesBody(t *testing.T) {
 				if createErr != nil {
 					t.Fatal(createErr)
 				}
-				_, err = Attach(context.Background(), cfg, 8, perform, nil, tr)
+				_, err = Attach(cfg, 8, perform, nil, tr)
 			} else {
 				c := newLoggingTestClient(t, perform)
 				if operation == "count" {
@@ -409,7 +409,7 @@ func TestStartupPreservesResponseCloseError(t *testing.T) {
 	}
 	closeErr := errors.New("response close failed")
 	body := &errorResponseBody{Reader: strings.NewReader(`{"version":{"number":"8.0.0"}}`), closeErr: closeErr}
-	c, err := Attach(context.Background(), cfg, 8, performerFunc(func(req *http.Request) (*http.Response, error) {
+	c, err := Attach(cfg, 8, performerFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: body}, nil
 	}), nil, tr)
 	if c != nil || !errors.Is(err, closeErr) || body.closed != 1 {
@@ -427,7 +427,7 @@ func TestStartupFailurePreservesCleanupError(t *testing.T) {
 		t.Fatal(err)
 	}
 	closeErr := errors.New("native close failed")
-	_, err = Attach(context.Background(), cfg, 8, performerFunc(func(req *http.Request) (*http.Response, error) {
+	_, err = Attach(cfg, 8, performerFunc(func(req *http.Request) (*http.Response, error) {
 		return jsonResponse(req, 200, `{"version":{"number":"9.0.0"}}`), nil
 	}), func(context.Context) error { return closeErr }, tr)
 	if !errors.Is(err, closeErr) || !strings.Contains(err.Error(), "server major mismatch") {
@@ -441,7 +441,7 @@ func TestClosedOperationsDoNotRecordDuration(t *testing.T) {
 		t.Fatal("关闭后仍发送请求")
 		return nil, nil
 	}, OptLogRequests(true))
-	if err := c.Close(context.Background()); err != nil {
+	if err := c.Close(); err != nil {
 		t.Fatal(err)
 	}
 	ctx := logit.WithStart(context.Background())

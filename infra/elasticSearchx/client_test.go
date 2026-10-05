@@ -49,6 +49,7 @@ func TestConfigRejectsUnsafeConnectionSettings(t *testing.T) {
 		{Name: "search", Addresses: []string{"https://example.test"}, Username: "user", Password: "pass", APIKey: "key"},
 		{Name: "search", Addresses: []string{"https://example.test"}, CACert: []byte("invalid")},
 		{Name: "search", Addresses: []string{"https://example.test"}, DialTimeout: -time.Second},
+		{Name: "search", Addresses: []string{"https://example.test"}, StartupTimeout: -time.Second},
 	} {
 		if _, err := NewTransport(cfg); err == nil {
 			t.Fatalf("NewTransport(%+v) 未拒绝无效配置", cfg)
@@ -174,7 +175,7 @@ func TestAttachVerifiesServerMajorAndCleansUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	closed := 0
-	client, err := Attach(context.Background(), cfg, 8, performerFunc(func(req *http.Request) (*http.Response, error) {
+	client, err := Attach(cfg, 8, performerFunc(func(req *http.Request) (*http.Response, error) {
 		if req.Method != http.MethodGet || req.URL.Path != "/" {
 			t.Errorf("验活请求错误: %s %s", req.Method, req.URL.Path)
 		}
@@ -207,7 +208,7 @@ func TestAttachRejectsInvalidHTTPResponsesAndCleansUp(t *testing.T) {
 			}
 			t.Cleanup(transport.CloseIdleConnections)
 			closed := 0
-			client, err := Attach(context.Background(), cfg, 8, performerFunc(func(*http.Request) (*http.Response, error) {
+			client, err := Attach(cfg, 8, performerFunc(func(*http.Request) (*http.Response, error) {
 				return tt.response, nil
 			}), func(context.Context) error {
 				closed++
@@ -220,50 +221,67 @@ func TestAttachRejectsInvalidHTTPResponsesAndCleansUp(t *testing.T) {
 	}
 }
 
-func TestAttachRejectsNilContextAndCloseIsIdempotent(t *testing.T) {
+func TestAttachOwnsStartupContextAndCloseIsIdempotent(t *testing.T) {
 	cfg := Config{Name: "search", Addresses: []string{"http://example.test:9200"}}
 	transport, err := NewTransport(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	closed := 0
+	var startupCtx context.Context
 	perform := performerFunc(func(req *http.Request) (*http.Response, error) {
+		startupCtx = req.Context()
+		deadline, ok := startupCtx.Deadline()
+		if remaining := time.Until(deadline); !ok || remaining <= 4*time.Second || remaining > 5*time.Second {
+			t.Errorf("默认验活期限错误: deadline=%v ok=%t", deadline, ok)
+		}
 		return jsonResponse(req, 200, `{"version":{"number":"7.17.10"}}`), nil
 	})
-	client, err := Attach(nil, cfg, 7, perform, func(context.Context) error { closed++; return nil }, transport)
-	if err == nil || client != nil || closed != 1 {
-		t.Fatalf("nil context 未清理: client=%v err=%v closed=%d", client, err, closed)
-	}
-	transport, err = NewTransport(cfg)
+	client, err := Attach(cfg, 7, perform, func(ctx context.Context) error {
+		if ctx.Err() != nil {
+			t.Errorf("关闭继承了已取消的验活 context: %v", ctx.Err())
+		}
+		closed++
+		return nil
+	}, transport)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err = Attach(context.Background(), cfg, 7, perform, func(context.Context) error { closed++; return nil }, transport)
-	if err != nil {
+	if !errors.Is(startupCtx.Err(), context.Canceled) {
+		t.Fatal("创建成功后未释放验活 context")
+	}
+	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := client.Close(context.Background()); err != nil || closed != 2 {
+	if err := client.Close(); err != nil || closed != 1 {
 		t.Fatalf("重复关闭: err=%v closed=%d", err, closed)
 	}
 }
 
-func TestAttachHonorsCanceledContextAndCleansUp(t *testing.T) {
-	cfg := Config{Name: "search", Addresses: []string{"http://example.test:9200"}}
+func TestAttachHonorsStartupTimeoutAndCleansUp(t *testing.T) {
+	cfg := Config{
+		Name:           "search",
+		Addresses:      []string{"http://example.test:9200"},
+		StartupTimeout: 20 * time.Millisecond,
+	}
 	transport, err := NewTransport(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
 	closed := 0
-	client, err := Attach(ctx, cfg, 7, performerFunc(func(req *http.Request) (*http.Response, error) {
+	closeErr := errors.New("close failed")
+	client, err := Attach(cfg, 7, performerFunc(func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
 		return nil, req.Context().Err()
-	}), func(context.Context) error { closed++; return nil }, transport)
-	if client != nil || !errors.Is(err, context.Canceled) || closed != 1 {
-		t.Fatalf("取消验活未释放资源: client=%v err=%v closed=%d", client, err, closed)
+	}), func(ctx context.Context) error {
+		if ctx.Err() != nil {
+			t.Errorf("清理使用了已超时的验活 context: %v", ctx.Err())
+		}
+		closed++
+		return closeErr
+	}, transport)
+	if client != nil || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, closeErr) || closed != 1 {
+		t.Fatalf("验活超时未保留错误或释放资源: client=%v err=%v closed=%d", client, err, closed)
 	}
 }
 

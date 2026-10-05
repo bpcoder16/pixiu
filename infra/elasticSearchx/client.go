@@ -36,6 +36,8 @@ type Config struct {
 	CACert []byte
 	// DialTimeout 可选，是建立连接的超时；零值使用 5 秒，请求总时长由 context 控制。
 	DialTimeout time.Duration
+	// StartupTimeout 可选，是启动验活的总超时；零值使用 5 秒，不影响后续操作。
+	StartupTimeout time.Duration
 	// MaxIdleConns 可选，是所有节点合计的空闲连接上限；零值继承默认 Transport。
 	MaxIdleConns int
 	// MaxIdleConnsPerHost 可选，是每节点空闲连接上限；零值使用 10。
@@ -106,7 +108,7 @@ func NewTransport(cfg Config) (*http.Transport, error) {
 	if cfg.Password != "" && cfg.Username == "" {
 		return nil, errors.New("elasticSearchx: password requires username")
 	}
-	if cfg.DialTimeout < 0 || cfg.SlowThreshold < 0 {
+	if cfg.DialTimeout < 0 || cfg.StartupTimeout < 0 || cfg.SlowThreshold < 0 {
 		return nil, errors.New("elasticSearchx: negative timeout")
 	}
 	if cfg.MaxIdleConns < 0 || cfg.MaxIdleConnsPerHost < 0 || cfg.MaxConnsPerHost < 0 || cfg.IdleConnTimeout < 0 {
@@ -165,9 +167,9 @@ func NewTransport(cfg Config) (*http.Transport, error) {
 	return transport, nil
 }
 
-// Attach 由版本适配包调用：绑定官方客户端并在启动 context 内验证服务端版本。
+// Attach 由版本适配包调用：绑定官方客户端并在内部启动期限内验证服务端版本。
 // 传入的 transport 由返回的 Client 接管；失败时也会关闭它。
-func Attach(ctx context.Context, cfg Config, major int, performer Performer, closeClient func(context.Context) error, transport *http.Transport, opts ...Option) (*Client, error) {
+func Attach(cfg Config, major int, performer Performer, closeClient func(context.Context) error, transport *http.Transport, opts ...Option) (*Client, error) {
 	if performer == nil || transport == nil {
 		return nil, errors.New("elasticSearchx: invalid client initialization")
 	}
@@ -188,11 +190,15 @@ func Attach(ctx context.Context, cfg Config, major int, performer Performer, clo
 			opt(c)
 		}
 	}
-	if ctx == nil {
-		return nil, errors.Join(errors.New("elasticSearchx: nil context"), c.Close(context.Background()))
+	timeout := cfg.StartupTimeout
+	if timeout == 0 {
+		timeout = 5 * time.Second
 	}
+	// 验活期限只约束初始化；释放它不会取消后续请求或关闭客户端。
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	if err := c.verify(ctx, major); err != nil {
-		return nil, errors.Join(err, c.Close(context.Background()))
+		return nil, errors.Join(err, c.Close())
 	}
 	return c, nil
 }
@@ -261,12 +267,13 @@ func (c *Client) perform(req *http.Request) (*http.Response, error) {
 }
 
 // Close 关闭客户端持有的资源；重复调用返回首次结果。停止请求后再调用。
-func (c *Client) Close(ctx context.Context) error {
+// 等待 SDK 资源收尾，不继承启动或业务请求的取消，也不额外设置关闭期限。
+func (c *Client) Close() error {
 	c.close.Do(func() {
 		// v7 没有 SDK Close，必须由共同层阻止后续重新建连。
 		c.closed.Store(true)
 		if c.closeClient != nil {
-			c.closeErr = c.closeClient(ctx)
+			c.closeErr = c.closeClient(context.Background())
 		}
 		if c.transport != nil {
 			c.transport.CloseIdleConnections()

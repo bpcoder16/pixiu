@@ -28,8 +28,8 @@ func TestVersionNamedAndDefaultFactoriesShareRegistry(t *testing.T) {
 	})
 	for _, factory := range []struct {
 		major      int
-		newNamed   func(context.Context, elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
-		newDefault func(context.Context, elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+		newNamed   func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+		newDefault func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
 	}{
 		{7, elasticSearchxv7.NewNamed, elasticSearchxv7.NewDefault},
 		{8, elasticSearchxv8.NewNamed, elasticSearchxv8.NewDefault},
@@ -60,11 +60,11 @@ func TestVersionNamedAndDefaultFactoriesShareRegistry(t *testing.T) {
 				Addresses: []string{server.URL},
 			}
 			ctx := context.Background()
-			if got, err := factory.newDefault(ctx, cfg, elasticSearchx.OptLogRequests(false)); got != nil || err == nil {
+			if got, err := factory.newDefault(cfg, elasticSearchx.OptLogRequests(false)); got != nil || err == nil {
 				t.Fatalf("默认启动失败未传播: client=%p err=%v", got, err)
 			}
 			rejectStartup.Store(false)
-			client, err := factory.newNamed(ctx, cfg, elasticSearchx.OptLogRequests(false))
+			client, err := factory.newNamed(cfg, elasticSearchx.OptLogRequests(false))
 			if err != nil {
 				t.Fatalf("默认初始化失败后，同名命名初始化失败: %v", err)
 			}
@@ -76,10 +76,10 @@ func TestVersionNamedAndDefaultFactoriesShareRegistry(t *testing.T) {
 			}
 			callsBeforeDuplicates := startupCalls.Load()
 			// 不同版本也共用名称空间，名称冲突必须在发送启动请求之前拒绝。
-			if got, err := elasticSearchxv7.NewNamed(ctx, cfg); got != nil || err == nil || err.Error() != fmt.Sprintf("elasticSearchx: client %q is already registered", cfg.Name) {
+			if got, err := elasticSearchxv7.NewNamed(cfg); got != nil || err == nil || err.Error() != fmt.Sprintf("elasticSearchx: client %q is already registered", cfg.Name) {
 				t.Fatalf("跨版本重复名称 = %p, %v", got, err)
 			}
-			if got, err := factory.newDefault(ctx, cfg); got != nil || err == nil || err.Error() != fmt.Sprintf("elasticSearchx: client %q is already registered", cfg.Name) {
+			if got, err := factory.newDefault(cfg); got != nil || err == nil || err.Error() != fmt.Sprintf("elasticSearchx: client %q is already registered", cfg.Name) {
 				t.Fatalf("默认名称冲突 = %p, %v", got, err)
 			}
 			if got := startupCalls.Load(); got != callsBeforeDuplicates {
@@ -87,7 +87,7 @@ func TestVersionNamedAndDefaultFactoriesShareRegistry(t *testing.T) {
 			}
 			if factory.major == 9 {
 				cfg.Name += "-default"
-				defaultClient, err := factory.newDefault(ctx, cfg, elasticSearchx.OptLogRequests(false))
+				defaultClient, err := factory.newDefault(cfg, elasticSearchx.OptLogRequests(false))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -95,7 +95,7 @@ func TestVersionNamedAndDefaultFactoriesShareRegistry(t *testing.T) {
 					t.Fatal("默认和命名查询未返回同一个版本客户端")
 				}
 				callsBeforeDuplicateDefault := startupCalls.Load()
-				if got, err := elasticSearchxv8.NewDefault(ctx, cfg); got != nil || err == nil || err.Error() != "elasticSearchx: default client is already registered" {
+				if got, err := elasticSearchxv8.NewDefault(cfg); got != nil || err == nil || err.Error() != "elasticSearchx: default client is already registered" {
 					t.Fatalf("跨版本重复默认初始化 = %p, %v", got, err)
 				}
 				if got := startupCalls.Load(); got != callsBeforeDuplicateDefault {
@@ -107,7 +107,7 @@ func TestVersionNamedAndDefaultFactoriesShareRegistry(t *testing.T) {
 	if err := stack.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := elasticSearchxv8.NewNamed(context.Background(), elasticSearchx.Config{Name: "later"}); got != nil || err == nil || err.Error() != "elasticSearchx: named clients closed" {
+	if got, err := elasticSearchxv8.NewNamed(elasticSearchx.Config{Name: "later"}); got != nil || err == nil || err.Error() != "elasticSearchx: named clients closed" {
 		t.Fatalf("关闭后仍执行版本初始化: client=%p err=%v", got, err)
 	}
 }

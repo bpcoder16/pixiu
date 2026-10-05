@@ -20,15 +20,12 @@ func TestNewDoesNotRetryEOF(t *testing.T) {
 		closeWithoutResponse(t, w)
 	}))
 	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	client, err := New(ctx, elasticSearchx.Config{
+	client, err := New(elasticSearchx.Config{
 		Name:      "search",
 		Addresses: []string{server.URL},
 	}, elasticSearchx.OptLogRequests(false))
 	if client != nil {
-		_ = client.Close(context.Background())
+		_ = client.Close()
 	}
 	if client != nil || !errors.Is(err, io.EOF) {
 		t.Fatalf("启动检查应返回 EOF: client=%v err=%v", client, err)
@@ -86,14 +83,14 @@ func TestOperationsDoNotRetryEOF(t *testing.T) {
 			defer server.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			client, err := New(ctx, elasticSearchx.Config{
+			client, err := New(elasticSearchx.Config{
 				Name:      "search",
 				Addresses: []string{server.URL},
 			}, elasticSearchx.OptLogRequests(false))
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer client.Close(context.Background())
+			defer client.Close()
 			switch tt.method {
 			case http.MethodGet:
 				_, err = client.Get(ctx, "products", "1")

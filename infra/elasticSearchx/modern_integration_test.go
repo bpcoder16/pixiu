@@ -24,7 +24,7 @@ import (
 
 var modernVersionFactories = []struct {
 	major int
-	open  func(context.Context, elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+	open  func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
 }{
 	{8, elasticSearchxv8.New},
 	{9, elasticSearchxv9.New},
@@ -98,12 +98,12 @@ func TestModernVersionFactoriesDoNotRetryEOF(t *testing.T) {
 					defer server.Close()
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
-					client, err := factory.open(ctx, elasticSearchx.Config{
+					client, err := factory.open(elasticSearchx.Config{
 						Name:      "search",
 						Addresses: []string{server.URL},
 					})
 					if client != nil {
-						defer client.Close(context.Background())
+						defer client.Close()
 					}
 					if tt.startup {
 						if client != nil {
@@ -153,7 +153,7 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 		"{\"update\":{\"_id\":\"5\"}}\n{\"doc\":{\"value\":5}}\n"
 	factories := []struct {
 		major int
-		open  func(context.Context, elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+		open  func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
 	}{
 		{7, elasticSearchxv7.New},
 		{8, elasticSearchxv8.New},
@@ -253,7 +253,7 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 						io.WriteString(w, tt.response)
 					}))
 					defer server.Close()
-					client, err := factory.open(context.Background(), elasticSearchx.Config{
+					client, err := factory.open(elasticSearchx.Config{
 						Name:          "catalog",
 						Addresses:     []string{server.URL},
 						SlowThreshold: time.Hour,
@@ -261,7 +261,7 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					defer client.Close(context.Background())
+					defer client.Close()
 					buf.Reset()
 					ctx := logit.WithStart(context.Background())
 					result, err := client.Bulk(ctx, "products", []elasticSearchx.BulkAction{
@@ -332,7 +332,7 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 func TestModernVersionFactoriesRejectStartupFailuresAndCloseConnections(t *testing.T) {
 	for _, factory := range modernVersionFactories {
 		t.Run(fmt.Sprint(factory.major), func(t *testing.T) {
-			for _, name := range []string{"主版本不符", "缺少产品头", "取消验活"} {
+			for _, name := range []string{"主版本不符", "缺少产品头", "验活超时"} {
 				t.Run(name, func(t *testing.T) {
 					started := make(chan struct{}, 1)
 					closed := make(chan struct{}, 1)
@@ -343,8 +343,8 @@ func TestModernVersionFactoriesRejectStartupFailuresAndCloseConnections(t *testi
 						if name != "缺少产品头" {
 							w.Header().Set("X-Elastic-Product", "Elasticsearch")
 						}
-						if name == "取消验活" {
-							// 返回部分响应并保持连接，覆盖验活尚未完成时的取消。
+						if name == "验活超时" {
+							// 返回部分响应并保持连接，覆盖响应读取阶段的启动超时。
 							io.WriteString(w, `{"version":{"number":"`)
 							w.(http.Flusher).Flush()
 							started <- struct{}{}
@@ -380,16 +380,16 @@ func TestModernVersionFactoriesRejectStartupFailuresAndCloseConnections(t *testi
 					}
 					done := make(chan startupResult, 1)
 					go func() {
-						client, err := factory.open(ctx, elasticSearchx.Config{
-							Name:      "search",
-							Addresses: []string{server.URL},
+						client, err := factory.open(elasticSearchx.Config{
+							Name:           "search",
+							Addresses:      []string{server.URL},
+							StartupTimeout: 100 * time.Millisecond,
 						})
 						done <- startupResult{client: client, err: err}
 					}()
-					if name == "取消验活" {
+					if name == "验活超时" {
 						select {
 						case <-started:
-							cancel()
 						case <-ctx.Done():
 							t.Fatal("等待验活响应超时")
 						}
@@ -401,7 +401,7 @@ func TestModernVersionFactoriesRejectStartupFailuresAndCloseConnections(t *testi
 						t.Fatal("初始化失败未及时返回")
 					}
 					if result.client != nil {
-						_ = result.client.Close(context.Background())
+						_ = result.client.Close()
 						t.Fatal("初始化失败仍返回了客户端")
 					}
 					if result.err == nil {
@@ -416,9 +416,9 @@ func TestModernVersionFactoriesRejectStartupFailuresAndCloseConnections(t *testi
 						if !strings.Contains(result.err.Error(), "server is not Elasticsearch") {
 							t.Fatalf("产品校验错误丢失: %v", result.err)
 						}
-					case "取消验活":
-						if !errors.Is(result.err, context.Canceled) {
-							t.Fatalf("context 取消错误丢失: %v", result.err)
+					case "验活超时":
+						if !errors.Is(result.err, context.DeadlineExceeded) {
+							t.Fatalf("启动超时错误丢失: %v", result.err)
 						}
 					}
 					select {

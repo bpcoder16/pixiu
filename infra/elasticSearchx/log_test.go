@@ -25,7 +25,7 @@ func newLoggingTestClient(t *testing.T, perform performerFunc, opts ...Option) *
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := Attach(context.Background(), cfg, 8, performerFunc(func(req *http.Request) (*http.Response, error) {
+	client, err := Attach(cfg, 8, performerFunc(func(req *http.Request) (*http.Response, error) {
 		if req.URL.Path == "/" {
 			return jsonResponse(req, 200, `{"version":{"number":"8.0.0"}}`), nil
 		}
@@ -34,7 +34,7 @@ func newLoggingTestClient(t *testing.T, perform performerFunc, opts ...Option) *
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = client.Close(context.Background()) })
+	t.Cleanup(func() { _ = client.Close() })
 	return client
 }
 
@@ -93,13 +93,13 @@ func TestStartupCheckDoesNotLogOrRecordDuration(t *testing.T) {
 				t.Fatal(err)
 			}
 			ctx := logit.WithStart(context.Background())
-			client, err := Attach(ctx, cfg, 8, performerFunc(func(req *http.Request) (*http.Response, error) {
+			client, err := Attach(cfg, 8, performerFunc(func(req *http.Request) (*http.Response, error) {
 				return jsonResponse(req, 200, `{"version":{"number":"8.0.0"}}`), nil
 			}), nil, transport, OptLogRequests(enabled), OptLogDetails(enabled))
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = client.Close(context.Background()) })
+			t.Cleanup(func() { _ = client.Close() })
 			if buf.Len() != 0 {
 				t.Fatalf("启动验活输出了请求日志: %s", buf.String())
 			}

@@ -17,7 +17,7 @@ import (
 func ResetNamedClientsForTest(t *testing.T) {
 	t.Helper()
 	previous := namedClients
-	registry := named.New[managedClient]("elasticSearchx")
+	registry := named.New[*Client]("elasticSearchx")
 	namedClients = registry
 	t.Cleanup(func() {
 		_ = registry.CloseAll()

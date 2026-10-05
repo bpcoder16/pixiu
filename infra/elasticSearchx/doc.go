@@ -6,6 +6,9 @@
 // Config 中只有 Name 和 Addresses 必填，其余字段均可省略。
 // 认证参数按服务端要求选择：APIKey 与 Username/Password 不能同时设置，
 // Password 非空时必须设置 Username。CACert 在需要信任额外 CA 时提供。
+// 创建入口不接收外部 ctx；StartupTimeout 控制内部验活总期限，零值默认 5 秒。
+// 验活 context 在创建返回时释放，后续操作仍使用各自传入的 ctx。
+// Client.Close() 显式关闭并等待 SDK 收尾，不设置关闭期限；调用前先停止业务请求。
 // 未设置的 DialTimeout 默认 5 秒，SlowThreshold 默认 200 毫秒；
 // 连接池零值保留默认设置，其中每节点最多保留 10 条空闲连接，其余继承默认 Transport。
 // 地址必须包含非空主机名；Transport 清除继承的 TLS 专用拨号器，统一执行拨号与证书验证。
@@ -35,9 +38,9 @@
 // Hits、Aggregations 和 Shards.Failures 保留原始 JSON，业务解析时应使用明确的字段类型
 // 或 json.Decoder.UseNumber 保持整数精度。
 //
-// 下例还需导入 context、errors、time、github.com/bpcoder16/pixiu/infra/elasticSearchx/v8：
+// 下例还需导入 errors、time、github.com/bpcoder16/pixiu/infra/elasticSearchx/v8：
 //
-//	client, err := v8.New(ctx, elasticSearchx.Config{
+//	client, err := v8.New(elasticSearchx.Config{
 //	    Name:                "catalog",                                    // 必填：实例名称
 //	    Addresses:           []string{"https://search.example.com:9200"},   // 必填：至少一个节点地址
 //	    APIKey:              apiKey,                                       // 可选：按服务端要求配置认证
@@ -53,7 +56,7 @@
 //	if err != nil {
 //	    return err
 //	}
-//	defer client.Close(context.Background()) // 应用停止请求后、日志关闭前调用
+//	defer client.Close() // 应用停止请求后、日志关闭前调用
 //	result, err := client.Search(ctx, "products", queryDSL)
 //	if err != nil {
 //	    // 本例拒绝所有错误，包括超时或分片失败产生的 PartialSearchError。
@@ -131,7 +134,7 @@
 // 运行期不再新增共享客户端，初始化不能与 CloseAll 并发，关闭后不得重新初始化。
 //
 // 以下样例结合 lifecycle 管理默认与命名客户端，另需导入 errors、logit、lifecycle、v8。
-// ctx 是启动 context，logger 是已创建并通过 logit.SetDefault 设置的日志实例：
+// ctx 是业务操作 context，logger 是已创建并通过 logit.SetDefault 设置的日志实例：
 //
 //	var stack lifecycle.Stack
 //	// Stack 逆序关闭：日志最先登记，最后关闭。
@@ -143,7 +146,7 @@
 //	if err := stack.Register(elasticSearchx.CloseAll); err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	_, err := v8.NewDefault(ctx, elasticSearchx.Config{
+//	_, err := v8.NewDefault(elasticSearchx.Config{
 //	    Name:      "catalog", // 必填：默认实例也需提供名称
 //	    Addresses: []string{"https://search.example.com:9200"}, // 必填
 //	    APIKey:    apiKey, // 可选：按服务端要求配置
@@ -151,7 +154,7 @@
 //	if err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	_, err = v8.NewNamed(ctx, elasticSearchx.Config{
+//	_, err = v8.NewNamed(elasticSearchx.Config{
 //	    Name:      "audit",
 //	    Addresses: []string{"https://audit-search.example.com:9200"},
 //	    APIKey:    apiKey,
@@ -171,8 +174,8 @@
 //	return stack.Close()
 //
 // 共享实例只登记一次 CloseAll，不再单独登记默认或命名实例的 Close。
-// CloseAll 使用 context.Background()，汇总关闭错误，重复调用复用首次结果。
-// 独立 New 创建的实例不归 CloseAll 管理，仍需自行关闭 Client.Close(ctx)。
+// CloseAll 调用各实例的 Close，汇总关闭错误，重复调用复用首次结果。
+// 独立 New 创建的实例不归 CloseAll 管理，仍需自行关闭 Client.Close()。
 //
 // OptLogRequests(true) 开启请求结果日志，OptLogRequests(false) 关闭结果及详情日志。
 // 单独设置 OptLogDetails(true) 不会开启请求结果日志。
