@@ -77,11 +77,9 @@ type preparedEndpoint struct {
 	driver *mysqldriver.Config
 }
 
-// New 创建全部端点并用 ctx 验活；失败时关闭已创建的连接池。
-func New(ctx context.Context, cfg Config) (client *Client, err error) {
-	if ctx == nil {
-		return nil, errors.New("mysqlx: nil context")
-	}
+// New 创建并验活全部端点；初始化沿用驱动超时，失败时关闭已创建的连接池。
+// 客户端由调用方通过 Close 显式关闭，查询时再传入操作 context。
+func New(cfg Config) (client *Client, err error) {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return nil, errors.New("mysqlx: empty database name")
 	}
@@ -105,7 +103,7 @@ func New(ctx context.Context, cfg Config) (client *Client, err error) {
 	}
 
 	c := &Client{}
-	if err := gormcore.BuildCluster(ctx, &c.cluster, master, slaves, func(ctx context.Context, endpoint preparedEndpoint, role string) (*gorm.DB, *sql.DB, error) {
+	if err := gormcore.BuildCluster(context.Background(), &c.cluster, master, slaves, func(ctx context.Context, endpoint preparedEndpoint, role string) (*gorm.DB, *sql.DB, error) {
 		return open(ctx, cfg, endpoint, role)
 	}); err != nil {
 		return nil, err
@@ -199,7 +197,7 @@ func open(ctx context.Context, cfg Config, prepared preparedEndpoint, endpointTy
 		return nil, nil, fmt.Errorf("mysqlx: ping endpoint %q: %w", prepared.name, err)
 	}
 
-	// GORM 的版本探测使用 Background，不受 New 的 ctx 截止时间约束。
+	// 版本探测沿用驱动读取超时，由方言保留 MySQL、MariaDB 等版本兼容处理。
 	db, err := gormcore.Open(sqlDB, gormmysql.New(gormmysql.Config{
 		Conn:                      sqlDB,
 		DSNConfig:                 prepared.driver,

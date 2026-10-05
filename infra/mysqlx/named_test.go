@@ -91,12 +91,12 @@ func TestNamedRegistryAndLifecycleClose(t *testing.T) {
 
 func TestNewNamedFailureDoesNotReserveName(t *testing.T) {
 	for _, name := range []string{"", " \t"} {
-		if client, err := NewNamed(context.Background(), Config{Name: name}); client != nil || err == nil || err.Error() != "mysqlx: empty database name" {
+		if client, err := NewNamed(Config{Name: name}); client != nil || err == nil || err.Error() != "mysqlx: empty database name" {
 			t.Fatalf("空名称 %q: client=%v err=%v", name, client, err)
 		}
 	}
 	name := t.Name()
-	if _, err := NewNamed(context.Background(), Config{Name: name}); err == nil {
+	if _, err := NewNamed(Config{Name: name}); err == nil {
 		t.Fatal("无效端点配置被接受")
 	}
 	assertNamedPanic(t, fmt.Sprintf("mysqlx: client %q is not registered", name), func() { Named(name) })

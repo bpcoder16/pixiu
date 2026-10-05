@@ -1,10 +1,11 @@
 // Package mysqlx 提供基于 GORM 的 MySQL 连接池、显式主从选择和统一查询日志。
 // 详细的配置、日志与关闭语义见 docs/mysqlx-design.md。
 //
+// 创建入口只接收 Config，客户端由应用通过 Close 或 CloseAll 显式关闭。
 // 应用启动时创建客户端，查询时传入请求 context；以下示例需导入 context、
 // github.com/bpcoder16/pixiu/infra/mysqlx 和 gorm.io/gorm：
 //
-//	client, err := mysqlx.New(ctx, mysqlx.Config{
+//	client, err := mysqlx.New(mysqlx.Config{
 //	    Name: "orders",
 //	    SessionTimeZone: "+08:00",
 //	    LogSQL: true, // 正常查询以 Info 输出 SQL；慢查询和错误始终输出 SQL
@@ -41,7 +42,7 @@
 //	if err := stack.Register(mysqlx.CloseAll); err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	_, err := mysqlx.NewNamed(ctx, cfg)
+//	_, err := mysqlx.NewNamed(cfg)
 //	if err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
@@ -55,11 +56,11 @@
 // 诊断消息按对应级别记录，不要求包含 SQL；LogSQL 只控制正常查询的 SQL 日志。
 // ctx 已调用 logit.WithStart 时，每次 GORM Trace 还会以 MySQL_<Name> 为前缀自动编号记录下游耗时，
 // 供业务调用 logit.InfoDuration 汇总；未调用 WithStart 时跳过。
-// New 的 Ping 遵循 ctx，GORM 的版本探测使用 Background，不受 ctx 截止时间约束。
+// 创建时使用内部 Background，连接、验活与版本查询沿用驱动超时；操作 context 只控制该次查询。
 //
 // 单个逻辑下游可显式初始化默认客户端，省去每次按名称查询。cfg 已由应用构造：
 //
-//	if _, err := mysqlx.NewDefault(ctx, cfg); err != nil {
+//	if _, err := mysqlx.NewDefault(cfg); err != nil {
 //	    return err
 //	}
 //	return mysqlx.Default().MasterDB(ctx).Create(&order).Error

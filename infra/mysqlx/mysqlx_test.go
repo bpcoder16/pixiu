@@ -310,7 +310,7 @@ func TestNewRejectsInvalidConfiguration(t *testing.T) {
 		{Name: "orders", Master: valid, Slaves: []Endpoint{{Host: "127.0.0.1", Username: "root"}}},
 	}
 	for _, cfg := range cases {
-		client, err := New(context.Background(), cfg)
+		client, err := New(cfg)
 		if err == nil || client != nil {
 			t.Fatalf("无效配置被接受: client=%v err=%v", client, err)
 		}
@@ -322,7 +322,7 @@ func TestNewRejectsInvalidConfiguration(t *testing.T) {
 
 func TestNewRejectsWhitespaceName(t *testing.T) {
 	for _, name := range []string{"", " \t"} {
-		client, err := New(context.Background(), Config{Name: name})
+		client, err := New(Config{Name: name})
 		if client != nil || err == nil || err.Error() != "mysqlx: empty database name" {
 			t.Fatalf("空名称 %q: client=%v err=%v", name, client, err)
 		}
@@ -331,24 +331,13 @@ func TestNewRejectsWhitespaceName(t *testing.T) {
 
 func TestNewLabelsEndpointsByRoleAndPosition(t *testing.T) {
 	valid := Endpoint{Host: "127.0.0.1", Database: "orders", Username: "root"}
-	_, err := New(context.Background(), Config{Name: "orders", Master: Endpoint{Database: "orders", Username: "root"}})
+	_, err := New(Config{Name: "orders", Master: Endpoint{Database: "orders", Username: "root"}})
 	if err == nil || !strings.Contains(err.Error(), `endpoint "master"`) {
 		t.Fatalf("主库配置错误缺少端点标识: %v", err)
 	}
-	_, err = New(context.Background(), Config{Name: "orders", Master: valid, Slaves: []Endpoint{valid, {Host: "127.0.0.1", Username: "root"}}})
+	_, err = New(Config{Name: "orders", Master: valid, Slaves: []Endpoint{valid, {Host: "127.0.0.1", Username: "root"}}})
 	if err == nil || !strings.Contains(err.Error(), `endpoint "slave-2"`) {
 		t.Fatalf("从库配置错误缺少端点序号: %v", err)
-	}
-}
-
-func TestNewHonorsCancelledContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	client, err := New(ctx, Config{Name: "orders", Master: Endpoint{
-		Host: "127.0.0.1", Port: 1, Database: "orders", Username: "root", Password: "secret",
-	}})
-	if client != nil || !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "secret") {
-		t.Fatalf("已取消启动: client=%v err=%v", client, err)
 	}
 }
 
@@ -394,7 +383,7 @@ func TestPrepareSessionTimeZone(t *testing.T) {
 		}
 	}
 	for _, zone := range []string{"+00:00'; DROP TABLE orders; --", "Asia/Shanghai\n", "UTC\\x"} {
-		_, err := New(context.Background(), Config{Name: "orders", SessionTimeZone: zone, Master: endpoint})
+		_, err := New(Config{Name: "orders", SessionTimeZone: zone, Master: endpoint})
 		if err == nil || !strings.Contains(err.Error(), "invalid session time zone") {
 			t.Fatalf("无效会话时区 %q 未在建连前拒绝: %v", zone, err)
 		}
