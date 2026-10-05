@@ -13,7 +13,7 @@ import (
 
 func ExampleNew() {
 	ctx := context.Background()
-	client, err := redisx.New(ctx, redisx.Config{
+	client, err := redisx.New(redisx.Config{
 		Name: "locks",
 		Options: redis.Options{
 			Addr:         "127.0.0.1:6379",

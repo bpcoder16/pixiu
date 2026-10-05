@@ -280,7 +280,7 @@ func mustNew(t *testing.T, client *redisx.Client, ttl ...time.Duration) *Locker 
 func newWireClient(t *testing.T, retries int, handle func([]string) string) *redisx.Client {
 	t.Helper()
 	var workers sync.WaitGroup
-	client, err := redisx.New(context.Background(), redisx.Config{
+	client, err := redisx.New(redisx.Config{
 		Name: t.Name(),
 		Options: redis.Options{
 			Addr:            "test",

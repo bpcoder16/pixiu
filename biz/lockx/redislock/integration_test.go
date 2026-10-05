@@ -22,9 +22,7 @@ func TestRedisIntegration(t *testing.T) {
 	}
 	newClient := func() *redisx.Client {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		client, err := redisx.New(ctx, redisx.Config{
+		client, err := redisx.New(redisx.Config{
 			Name: t.Name(),
 			Options: redis.Options{
 				Addr:         addr,

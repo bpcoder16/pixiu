@@ -5,7 +5,7 @@
 // github.com/bpcoder16/pixiu/infra/redisx、github.com/bpcoder16/pixiu/biz/lockx
 // 和 github.com/bpcoder16/pixiu/biz/lockx/redislock；ctx 由应用提供：
 //
-//	client, err := redisx.New(ctx, redisx.Config{
+//	client, err := redisx.New(redisx.Config{
 //	    Name: "locks",
 //	    Options: redis.Options{
 //	        Addr:         "127.0.0.1:6379",
