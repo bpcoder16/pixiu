@@ -1,10 +1,11 @@
 // Package pgsqlx 提供基于 GORM 的 PostgreSQL 连接池、显式主从选择和统一查询日志。
 // 详细的配置、日志与关闭语义见 docs/pgsqlx-design.md。
 //
+// 创建入口只接收 Config，客户端由应用通过 Close 或 CloseAll 显式关闭。
 // 应用启动时创建客户端，查询时传入请求 context；以下示例需导入 context、
 // github.com/bpcoder16/pixiu/infra/pgsqlx 和 gorm.io/gorm：
 //
-//	client, err := pgsqlx.New(ctx, pgsqlx.Config{
+//	client, err := pgsqlx.New(pgsqlx.Config{
 //	    Name: "orders",
 //	    SessionTimeZone: "UTC",
 //	    LogSQL: true,
@@ -47,7 +48,7 @@
 //	if err := stack.Register(pgsqlx.CloseAll); err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	_, err := pgsqlx.NewNamed(ctx, cfg)
+//	_, err := pgsqlx.NewNamed(cfg)
 //	if err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
@@ -60,12 +61,14 @@
 // MasterDB；其他可接受从库延迟的读取可使用 SlaveDB。GORM 的 Info、Warn、Error
 // 诊断消息按对应级别记录；LogSQL 只控制正常查询的 SQL 日志。
 // Charset 固定为 UTF8；Location 默认 Asia/Shanghai，只解释无时区 timestamp，不改变 timestamptz。
+// 初始化错误保留网络、TLS 和证书配置的具体原因，服务端错误保留 SQLSTATE；
+// 返回错误不携带完整连接 URI 或含凭据的驱动配置。
 // ctx 已调用 logit.WithStart 时，每次 GORM Trace 以 PostgreSQL_<Name> 为前缀自动编号记录下游耗时，
 // 供业务调用 logit.InfoDuration 汇总；直接调用底层 *sql.DB 不经过 Trace。
 //
 // 单个逻辑下游可显式初始化默认客户端，省去每次按名称查询。cfg 已由应用构造：
 //
-//	if _, err := pgsqlx.NewDefault(ctx, cfg); err != nil {
+//	if _, err := pgsqlx.NewDefault(cfg); err != nil {
 //	    return err
 //	}
 //	return pgsqlx.Default().MasterDB(ctx).Create(&order).Error

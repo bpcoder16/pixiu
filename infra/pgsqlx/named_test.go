@@ -91,14 +91,14 @@ func TestNamedRegistryAndLifecycleClose(t *testing.T) {
 }
 
 func TestNewNamedFailureDoesNotReserveName(t *testing.T) {
-	if _, err := NewNamed(context.Background(), Config{}); err == nil {
+	if _, err := NewNamed(Config{}); err == nil {
 		t.Fatal("空名称被接受")
 	}
-	if _, err := NewNamed(context.Background(), Config{Name: " \t "}); err == nil || !strings.Contains(err.Error(), "empty database name") {
+	if _, err := NewNamed(Config{Name: " \t "}); err == nil || !strings.Contains(err.Error(), "empty database name") {
 		t.Fatalf("全空白名称被接受: %v", err)
 	}
 	name := t.Name()
-	if _, err := NewNamed(context.Background(), Config{Name: name}); err == nil {
+	if _, err := NewNamed(Config{Name: name}); err == nil {
 		t.Fatal("无效端点配置被接受")
 	}
 	assertNamedPanic(t, fmt.Sprintf("pgsqlx: client %q is not registered", name), func() {

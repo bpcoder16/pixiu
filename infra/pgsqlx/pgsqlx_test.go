@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -218,19 +217,19 @@ func TestNewRejectsInvalidConfigurationWithoutSecrets(t *testing.T) {
 		{Name: "orders", Master: valid, SlowThreshold: -time.Millisecond},
 	}
 	for _, cfg := range cases {
-		client, err := New(context.Background(), cfg)
+		client, err := New(cfg)
 		if client != nil || err == nil || strings.Contains(err.Error(), "secret-marker") {
 			t.Fatalf("无效配置或密码泄露: client=%v err=%v", client, err)
 		}
 	}
-	if _, err := New(context.Background(), Config{Name: " \t "}); err == nil || !strings.Contains(err.Error(), "empty database name") {
+	if _, err := New(Config{Name: " \t "}); err == nil || !strings.Contains(err.Error(), "empty database name") {
 		t.Fatalf("全空白名称未按空名称拒绝: %v", err)
 	}
 }
 
 func TestNewLabelsEndpointsByRoleAndPosition(t *testing.T) {
 	valid := validEndpoint()
-	_, err := New(context.Background(), Config{
+	_, err := New(Config{
 		Name: "orders",
 		Master: Endpoint{
 			Database: "orders",
@@ -240,7 +239,7 @@ func TestNewLabelsEndpointsByRoleAndPosition(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `endpoint "master"`) {
 		t.Fatalf("主库配置错误缺少端点标识: %v", err)
 	}
-	_, err = New(context.Background(), Config{
+	_, err = New(Config{
 		Name:   "orders",
 		Master: valid,
 		Slaves: []Endpoint{
@@ -250,15 +249,6 @@ func TestNewLabelsEndpointsByRoleAndPosition(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), `endpoint "slave-2"`) {
 		t.Fatalf("从库配置错误缺少端点序号: %v", err)
-	}
-}
-
-func TestNewHonorsCancelledContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	client, err := New(ctx, Config{Name: "orders", Master: validEndpoint()})
-	if client != nil || !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "secret-marker") {
-		t.Fatalf("已取消启动: client=%v err=%v", client, err)
 	}
 }
 

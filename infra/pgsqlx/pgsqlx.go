@@ -84,11 +84,9 @@ type preparedEndpoint struct {
 	location *time.Location
 }
 
-// New 创建全部端点并用 ctx 验活；失败时关闭已创建的连接池。
-func New(ctx context.Context, cfg Config) (client *Client, err error) {
-	if ctx == nil {
-		return nil, errors.New("pgsqlx: nil context")
-	}
+// New 创建并验活全部端点；初始化沿用驱动超时，失败时关闭已创建的连接池。
+// 客户端由调用方通过 Close 显式关闭，查询时再传入操作 context。
+func New(cfg Config) (client *Client, err error) {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return nil, errors.New("pgsqlx: empty database name")
 	}
@@ -112,7 +110,7 @@ func New(ctx context.Context, cfg Config) (client *Client, err error) {
 	}
 
 	c := &Client{}
-	if err := gormcore.BuildCluster(ctx, &c.cluster, master, slaves, func(ctx context.Context, endpoint preparedEndpoint, role string) (*gorm.DB, *sql.DB, error) {
+	if err := gormcore.BuildCluster(context.Background(), &c.cluster, master, slaves, func(ctx context.Context, endpoint preparedEndpoint, role string) (*gorm.DB, *sql.DB, error) {
 		return open(ctx, cfg, endpoint, role)
 	}); err != nil {
 		return nil, err
@@ -175,7 +173,10 @@ func prepare(endpoint Endpoint, name, sessionTimeZone string, disableStatementCa
 	}
 	driver, err := pgx.ParseConfig(uri.String())
 	if err != nil {
-		// pgx 的解析错误可能包含连接 URI；不能将其传给调用方。
+		// 解析错误外层包含连接 URI，只输出不含该 URI 的底层原因。
+		if parseErr, ok := errors.AsType[*pgconn.ParseConfigError](err); ok && parseErr.Unwrap() != nil {
+			return preparedEndpoint{}, initializationError("configure", name, parseErr.Unwrap())
+		}
 		return preparedEndpoint{}, fmt.Errorf("pgsqlx: endpoint %q has invalid connection settings", name)
 	}
 	if endpoint.DialTimeout != 0 {
@@ -237,7 +238,7 @@ func open(ctx context.Context, cfg Config, prepared preparedEndpoint, endpointTy
 	return db, sqlDB, nil
 }
 
-// 初始化错误不包装可能包含密码或连接参数的驱动原文，仅保留安全的上下文错误和 SQLSTATE。
+// 不保留含凭据的驱动配置；context 和 SQLSTATE 维持原有语义，网络与 TLS 错误保留具体原因。
 func initializationError(stage, endpoint string, err error) error {
 	if errors.Is(err, context.Canceled) {
 		return fmt.Errorf("pgsqlx: %s endpoint %q: %w", stage, endpoint, context.Canceled)
@@ -248,7 +249,10 @@ func initializationError(stage, endpoint string, err error) error {
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		return fmt.Errorf("pgsqlx: %s endpoint %q: SQLSTATE %s", stage, endpoint, pgErr.SQLState())
 	}
-	return fmt.Errorf("pgsqlx: %s endpoint %q failed (%T)", stage, endpoint, err)
+	if connectErr, ok := errors.AsType[*pgconn.ConnectError](err); ok {
+		err = connectErr.Unwrap()
+	}
+	return fmt.Errorf("pgsqlx: %s endpoint %q: %s", stage, endpoint, err)
 }
 
 // MasterDB 返回带 ctx 的主库会话。
