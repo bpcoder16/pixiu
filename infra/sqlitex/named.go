@@ -1,7 +1,6 @@
 package sqlitex
 
 import (
-	"context"
 	"errors"
 	"strings"
 
@@ -13,12 +12,12 @@ var namedClients = named.New[*Client]("sqlitex")
 // NewNamed 创建并按 Config.Name 登记客户端。名称重复时不替换已有实例。
 // 启动阶段由调用方串行创建；初始化完成后可并发查询。
 // 初始化完成后不得再调用，所有创建返回后才开始查询，关闭须在初始化之后执行。
-func NewNamed(ctx context.Context, cfg Config) (*Client, error) {
+func NewNamed(cfg Config) (*Client, error) {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return nil, errors.New("sqlitex: empty database name")
 	}
 	return namedClients.Create(cfg.Name, func() (*Client, error) {
-		return New(ctx, cfg)
+		return New(cfg)
 	})
 }
 
@@ -29,12 +28,12 @@ func Named(name string) *Client {
 
 // NewDefault 创建默认客户端，同时按 Config.Name 登记；已有默认实例时返回错误。
 // Name 仍必填；创建失败可重试，初始化与关闭约束与 NewNamed 相同。
-func NewDefault(ctx context.Context, cfg Config) (*Client, error) {
+func NewDefault(cfg Config) (*Client, error) {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return nil, errors.New("sqlitex: empty database name")
 	}
 	return namedClients.CreateDefault(cfg.Name, func() (*Client, error) {
-		return New(ctx, cfg)
+		return New(cfg)
 	})
 }
 

@@ -22,12 +22,12 @@ func assertNamedPanic(t *testing.T, want string, lookup func()) {
 
 func TestNamedRegistryAndLifecycleClose(t *testing.T) {
 	ctx := context.Background()
-	first, err := New(ctx, Config{Name: "first", DSN: ":memory:"})
+	first, err := New(Config{Name: "first", DSN: ":memory:"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer first.Close()
-	second, err := New(ctx, Config{Name: "second", DSN: ":memory:"})
+	second, err := New(Config{Name: "second", DSN: ":memory:"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,14 +92,14 @@ func TestNewNamedRegistersAndRejectsDuplicate(t *testing.T) {
 	})
 	name := t.Name()
 	cfg := Config{Name: name, DSN: ":memory:"}
-	client, err := NewNamed(context.Background(), cfg)
+	client, err := NewNamed(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := Named(name); got != client {
 		t.Fatalf("命名客户端未登记: got=%p, want=%p", got, client)
 	}
-	if _, err := NewNamed(context.Background(), cfg); err == nil {
+	if _, err := NewNamed(cfg); err == nil {
 		t.Fatal("重复名称未被拒绝")
 	}
 	if got := Named(name); got != client {
@@ -109,12 +109,12 @@ func TestNewNamedRegistersAndRejectsDuplicate(t *testing.T) {
 
 func TestNewNamedFailureDoesNotReserveName(t *testing.T) {
 	for _, name := range []string{"", " "} {
-		if _, err := NewNamed(context.Background(), Config{Name: name, DSN: ":memory:"}); err == nil {
+		if _, err := NewNamed(Config{Name: name, DSN: ":memory:"}); err == nil {
 			t.Fatalf("空名称 %q 被接受", name)
 		}
 	}
 	name := t.Name()
-	if _, err := NewNamed(context.Background(), Config{Name: name}); err == nil {
+	if _, err := NewNamed(Config{Name: name}); err == nil {
 		t.Fatal("无效 DSN 配置被接受")
 	}
 	assertNamedPanic(t, fmt.Sprintf("sqlitex: client %q is not registered", name), func() {

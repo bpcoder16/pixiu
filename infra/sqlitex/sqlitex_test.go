@@ -78,20 +78,17 @@ func TestNewRejectsInvalidConfiguration(t *testing.T) {
 		{Name: "local", DSN: "file:sqlitex-test-shared?mode=memory&cache=shared", Pool: Pool{ConnMaxIdleTime: time.Second}},
 	}
 	for _, cfg := range cases {
-		client, err := New(context.Background(), cfg)
+		client, err := New(cfg)
 		if client != nil || err == nil {
 			t.Fatalf("无效配置被接受: cfg=%+v client=%v err=%v", cfg, client, err)
 		}
 	}
-	if _, err := New(context.Background(), Config{
+	if _, err := New(Config{
 		Name: "local",
 		DSN:  ":memory:",
 		Pool: Pool{MaxOpenConns: -1},
 	}); err == nil || err.Error() != "sqlitex: negative pool setting" {
 		t.Fatalf("连接池错误缺少模块前缀: %v", err)
-	}
-	if client, err := New(nil, Config{Name: "local", DSN: ":memory:"}); client != nil || err == nil {
-		t.Fatalf("nil context 被接受: client=%v err=%v", client, err)
 	}
 }
 
@@ -102,7 +99,7 @@ func TestNewRejectsDuplicateMemoryDSNParameters(t *testing.T) {
 		"file:sqlitex-duplicate-same?mode=memory&mode=memory&cache=shared",
 		"file:sqlitex-duplicate-vfs?vfs=unix&vfs=memdb",
 	} {
-		client, err := New(context.Background(), Config{
+		client, err := New(Config{
 			Name: "local",
 			DSN:  dsn,
 			Pool: Pool{
@@ -141,7 +138,7 @@ func TestNewProtectsMemDB(t *testing.T) {
 			want: "private in-memory database requires one open connection",
 		},
 	} {
-		client, err := New(context.Background(), tc.cfg)
+		client, err := New(tc.cfg)
 		if client != nil {
 			_ = client.Close()
 		}
@@ -153,7 +150,7 @@ func TestNewProtectsMemDB(t *testing.T) {
 
 func TestSharedMemDBUsesSameDatabase(t *testing.T) {
 	ctx := context.Background()
-	client, err := New(ctx, Config{
+	client, err := New(Config{
 		Name: "shared",
 		DSN:  "file:/sqlitex-test-memdb-allow?vfs=memdb",
 		Pool: Pool{MaxOpenConns: 2, MaxIdleConns: 2},
@@ -186,7 +183,7 @@ func TestSharedMemDBUsesSameDatabase(t *testing.T) {
 }
 
 func TestFilePoolLifetime(t *testing.T) {
-	client, err := New(context.Background(), Config{
+	client, err := New(Config{
 		Name: "local",
 		DSN:  testDSN(t),
 		Pool: Pool{
@@ -211,19 +208,35 @@ func TestFilePoolLifetime(t *testing.T) {
 	}
 }
 
-func TestNewCancelledContext(t *testing.T) {
+func TestOperationContextDoesNotCloseClient(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	client, err := New(ctx, Config{Name: "local", DSN: testDSN(t)})
-	if client != nil || !errors.Is(err, context.Canceled) {
-		t.Fatalf("已取消启动: client=%v err=%v", client, err)
+	client, err := New(Config{
+		Name: "local",
+		DSN:  testDSN(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.DB(ctx).Exec("SELECT 1").Error; !errors.Is(err, context.Canceled) {
+		t.Fatalf("操作未遵循 context 取消: %v", err)
+	}
+	if err := client.DB(context.Background()).Exec("SELECT 1").Error; err != nil {
+		t.Fatalf("操作 context 取消影响客户端生命周期: %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DB(context.Background()).Exec("SELECT 1").Error; err == nil {
+		t.Fatal("显式关闭后仍可执行查询")
 	}
 }
 
 func TestFileDatabaseLifecycleAndTransaction(t *testing.T) {
 	dsn := testDSN(t)
 	ctx := context.Background()
-	client, err := New(ctx, Config{Name: "local", DSN: dsn})
+	client, err := New(Config{Name: "local", DSN: dsn})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +267,7 @@ func TestFileDatabaseLifecycleAndTransaction(t *testing.T) {
 	if err := client.Close(); err != nil {
 		t.Fatalf("重复关闭: %v", err)
 	}
-	other, err := New(ctx, Config{Name: "local", DSN: dsn})
+	other, err := New(Config{Name: "local", DSN: dsn})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +282,7 @@ func TestFileDatabaseLifecycleAndTransaction(t *testing.T) {
 }
 
 func TestDSNOptionsApplyToEveryConnection(t *testing.T) {
-	client, err := New(context.Background(), Config{
+	client, err := New(Config{
 		Name: "local",
 		DSN:  testDSN(t),
 		Pool: Pool{MaxOpenConns: 2, MaxIdleConns: 2},
@@ -307,7 +320,7 @@ func TestDSNOptionsApplyToEveryConnection(t *testing.T) {
 func TestTypedOptionsApplyToEveryConnection(t *testing.T) {
 	ctx := context.Background()
 	foreignKeys := true
-	client, err := New(ctx, Config{
+	client, err := New(Config{
 		Name:        "local",
 		DSN:         testDSN(t) + "&_journal=DELETE&_sync=NORMAL&_fk=off&_timeout=100",
 		JournalMode: JournalModeWAL,
@@ -361,7 +374,7 @@ func TestTypedOptionsApplyToEveryConnection(t *testing.T) {
 
 func TestTypedOptionsCanDisableForeignKeys(t *testing.T) {
 	foreignKeys := false
-	client, err := New(context.Background(), Config{
+	client, err := New(Config{
 		Name:        "local",
 		DSN:         testDSN(t),
 		ForeignKeys: &foreignKeys,
@@ -435,7 +448,7 @@ func TestTypedOptionsRejectInvalidConfiguration(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			client, err := New(context.Background(), tc.cfg)
+			client, err := New(tc.cfg)
 			if client != nil || err == nil {
 				t.Fatalf("无效配置被接受: client=%v err=%v", client, err)
 			}
@@ -445,7 +458,7 @@ func TestTypedOptionsRejectInvalidConfiguration(t *testing.T) {
 
 func TestNamedSharedMemoryUsesOneDatabase(t *testing.T) {
 	ctx := context.Background()
-	client, err := New(ctx, Config{
+	client, err := New(Config{
 		Name: "memory",
 		DSN:  "file:sqlitex-test-shared?mode=memory&cache=shared",
 		Pool: Pool{
@@ -487,7 +500,7 @@ func TestNamedSharedMemoryUsesOneDatabase(t *testing.T) {
 }
 
 func TestDBRejectsNilContext(t *testing.T) {
-	client, err := New(context.Background(), Config{Name: "local", DSN: ":memory:"})
+	client, err := New(Config{Name: "local", DSN: ":memory:"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,7 +631,7 @@ func TestGORMDiagnosticsAndLogMode(t *testing.T) {
 
 func TestRealGORMQueryLoggingAndInterpolation(t *testing.T) {
 	buf, ctx := captureRecords(t)
-	client, err := New(ctx, Config{
+	client, err := New(Config{
 		Name:          "local",
 		DSN:           ":memory:",
 		LogSQL:        true,
@@ -664,7 +677,7 @@ func TestRealGORMQueryLoggingAndInterpolation(t *testing.T) {
 		t.Fatalf("真实 SQLite 查询缺少错误码: %v", details)
 	}
 	buf.Reset()
-	interpolated, err := New(ctx, Config{
+	interpolated, err := New(Config{
 		Name:           "local",
 		DSN:            ":memory:",
 		SlowThreshold:  time.Hour,

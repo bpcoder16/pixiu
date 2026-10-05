@@ -1,11 +1,12 @@
 // Package sqlitex 提供基于 GORM 的 SQLite 单库连接池和统一查询日志。
 // 配置、日志及关闭语义见 docs/sqlitex-design.md。
 //
+// 创建入口只接收 Config，客户端由应用通过 Close 或 CloseAll 显式关闭。
 // 应用启动时创建客户端，查询时传入请求 context；以下示例需导入
 // github.com/bpcoder16/pixiu/infra/sqlitex 和 time：
 //
 //	foreignKeys := true
-//	client, err := sqlitex.New(ctx, sqlitex.Config{
+//	client, err := sqlitex.New(sqlitex.Config{
 //	    Name:         "local",
 //	    DSN:          "file:/var/lib/app/local.db",
 //	    JournalMode:  sqlitex.JournalModeWAL,
@@ -39,7 +40,7 @@
 //	if err := stack.Register(sqlitex.CloseAll); err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	_, err := sqlitex.NewNamed(ctx, cfg)
+//	_, err := sqlitex.NewNamed(cfg)
 //	if err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
@@ -59,7 +60,7 @@
 //
 // 单个逻辑下游可显式初始化默认客户端，省去每次按名称查询。cfg 已由应用构造：
 //
-//	if _, err := sqlitex.NewDefault(ctx, cfg); err != nil {
+//	if _, err := sqlitex.NewDefault(cfg); err != nil {
 //	    return err
 //	}
 //	return sqlitex.Default().DB(ctx).Create(&record).Error

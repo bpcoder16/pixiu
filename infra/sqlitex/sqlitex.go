@@ -74,11 +74,9 @@ type Client struct {
 	closeErr error
 }
 
-// New 创建连接池并用 ctx 验活；失败时关闭已创建的连接池。
-func New(ctx context.Context, cfg Config) (*Client, error) {
-	if ctx == nil {
-		return nil, errors.New("sqlitex: nil context")
-	}
+// New 创建并验活连接池；失败时关闭已创建的连接池。
+// 客户端由调用方通过 Close 显式关闭，查询时再传入操作 context。
+func New(cfg Config) (*Client, error) {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return nil, errors.New("sqlitex: empty database name")
 	}
@@ -114,7 +112,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sqlitex: open database: %w", err)
 	}
-	if err := gormcore.ConfigureAndPing(ctx, pool, poolCfg); err != nil {
+	if err := gormcore.ConfigureAndPing(context.Background(), pool, poolCfg); err != nil {
 		return nil, fmt.Errorf("sqlitex: ping database %q: %w", cfg.Name, err)
 	}
 
