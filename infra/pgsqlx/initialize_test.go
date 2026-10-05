@@ -3,12 +3,16 @@ package pgsqlx
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgproto3"
 )
 
 func TestInitializationErrorKeepsConnectionCause(t *testing.T) {
@@ -46,6 +50,104 @@ func TestInitializationErrorKeepsConnectionCause(t *testing.T) {
 		if _, ok := errors.AsType[*pgconn.ConnectError](got); ok {
 			t.Fatal("返回错误链仍保留含凭据的连接配置")
 		}
+	}
+}
+
+func TestNewInitializationTimeout(t *testing.T) {
+	for _, stage := range []string{"handshake", "ping"} {
+		t.Run(stage, func(t *testing.T) {
+			start := time.Now()
+			client, err := New(Config{
+				Name:        "timeout",
+				Master:      testPostgresEndpoint(t, stage),
+				InitTimeout: 100 * time.Millisecond,
+			})
+			if client != nil {
+				_ = client.Close()
+			}
+			if client != nil || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("初始化 %s 未返回超时: client=%v err=%v", stage, client, err)
+			}
+			if elapsed := time.Since(start); elapsed > time.Second {
+				t.Fatalf("初始化超时未及时返回: %v", elapsed)
+			}
+		})
+	}
+}
+
+func TestNewReleasesInitializationContext(t *testing.T) {
+	client, err := New(Config{
+		Name:   "startup",
+		Master: testPostgresEndpoint(t, ""),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := client.MasterDB(ctx).Exec("-- ping").Error; !errors.Is(err, context.Canceled) {
+		t.Fatalf("业务查询未遵循 context: %v", err)
+	}
+	if err := client.MasterDB(context.Background()).Exec("-- ping").Error; err != nil {
+		t.Fatalf("初始化 context 取消后影响业务查询: %v", err)
+	}
+}
+
+func testPostgresEndpoint(t *testing.T, stallAt string) Endpoint {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		if stallAt == "handshake" {
+			_, _ = io.Copy(io.Discard, conn)
+			return
+		}
+		backend := pgproto3.NewBackend(conn, conn)
+		if _, err := backend.ReceiveStartupMessage(); err != nil {
+			return
+		}
+		backend.Send(&pgproto3.AuthenticationOk{})
+		backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+		if backend.Flush() != nil {
+			return
+		}
+		for {
+			msg, err := backend.Receive()
+			if err != nil {
+				return
+			}
+			if _, ok := msg.(*pgproto3.Query); !ok {
+				return
+			}
+			if stallAt == "ping" {
+				_, _ = io.Copy(io.Discard, conn)
+				return
+			}
+			backend.Send(&pgproto3.EmptyQueryResponse{})
+			backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+			if backend.Flush() != nil {
+				return
+			}
+		}
+	}()
+	host, portText, _ := net.SplitHostPort(listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	return Endpoint{
+		Host:     host,
+		Port:     port,
+		Database: "test",
+		Username: "test",
+		SSLMode:  "disable",
 	}
 }
 

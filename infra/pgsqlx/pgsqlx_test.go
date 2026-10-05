@@ -205,6 +205,7 @@ func TestPrepareRejectsUnsupportedCharsetAndLocation(t *testing.T) {
 func TestNewRejectsInvalidConfigurationWithoutSecrets(t *testing.T) {
 	valid := validEndpoint()
 	cases := []Config{
+		{Name: "timeout", Master: valid, InitTimeout: -time.Second},
 		{},
 		{Name: " \t "},
 		{Name: "orders", Master: Endpoint{Database: "orders", Username: "reader", Password: "secret-marker"}},
