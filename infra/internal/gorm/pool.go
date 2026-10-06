@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net"
 	"time"
 
 	gormlib "gorm.io/gorm"
@@ -46,17 +47,24 @@ func NormalizePool(pool, defaults PoolConfig) (PoolConfig, error) {
 }
 
 // ConfigureAndPing 设置池参数并验活；验活失败时关闭连接池。
+// context 错误优先；网络超时且初始化期限已到时统一返回 context.DeadlineExceeded。
 func ConfigureAndPing(ctx context.Context, pool *sql.DB, cfg PoolConfig) error {
 	pool.SetMaxOpenConns(cfg.MaxOpenConns)
 	pool.SetMaxIdleConns(cfg.MaxIdleConns)
 	pool.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 	pool.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 	if err := pool.PingContext(ctx); err != nil {
-		_ = pool.Close()
 		// 部分驱动将 Ping 取消转换为 ErrBadConn，优先保留初始化超时的原因。
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+		} else if timeoutErr, ok := errors.AsType[net.Error](err); ok && timeoutErr.Timeout() {
+			// socket deadline 可能先于 context 计时器生效，只归一化期限已到的网络超时。
+			if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+				err = context.DeadlineExceeded
+			}
 		}
+		// 先确定验活错误，再清理，避免关闭耗时使独立网络超时被误判为初始化超时。
+		_ = pool.Close()
 		return err
 	}
 	return nil

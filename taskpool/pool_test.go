@@ -87,8 +87,8 @@ func TestDefaultDrainTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.cfg.DrainTimeout != 15*time.Second {
-		t.Fatalf("DrainTimeout = %v, want 15s", p.cfg.DrainTimeout)
+	if p.cfg.DrainTimeout != 20*time.Second {
+		t.Fatalf("DrainTimeout = %v, want 20s", p.cfg.DrainTimeout)
 	}
 	if err := p.Shutdown(); err != nil {
 		t.Fatal(err)

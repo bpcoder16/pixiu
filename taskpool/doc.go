@@ -5,7 +5,7 @@
 // MaxRetries 为 0 到 100，表示首次失败后最多再尝试的次数，零值不重试。
 // 消费者会按积压在区间内自动扩缩容；失败重试固定间隔 1 秒，
 // SubmitTimeout 为 0 时默认 1 秒，IdleTimeout 为 0 时默认 5 分钟，
-// DrainTimeout 为 0 时默认 15 秒。
+// DrainTimeout 为 0 时默认 20 秒。
 //
 // 主协程创建独立任务池，并负责在退出时调用 Shutdown：
 //

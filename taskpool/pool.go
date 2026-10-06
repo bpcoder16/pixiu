@@ -24,7 +24,7 @@ const (
 	retryDelay           = time.Second
 	defaultSubmitTimeout = time.Second
 	defaultIdleTimeout   = 5 * time.Minute
-	defaultDrainTimeout  = 15 * time.Second
+	defaultDrainTimeout  = 20 * time.Second
 )
 
 type poolState uint8
@@ -51,7 +51,7 @@ type Config struct {
 	MaxRetries int
 	// IdleTimeout 为零时使用默认值。
 	IdleTimeout time.Duration
-	// DrainTimeout 限制首次 Shutdown 触发后的排空宽限时间；零值默认 15 秒。
+	// DrainTimeout 限制首次 Shutdown 触发后的排空宽限时间；零值默认 20 秒。
 	DrainTimeout time.Duration
 }
 
