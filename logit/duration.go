@@ -24,7 +24,13 @@ func WithStart(ctx context.Context) context.Context {
 	if durationFromContext(ctx) != nil {
 		return ctx
 	}
-	return context.WithValue(ctx, startKey{}, &durationState{
+	return NewDurationScope(ctx)
+}
+
+// NewDurationScope 创建独立起点和下游耗时表,保留 parent 的取消、期限及其他值。
+// 嵌套的独立工作使用此入口;普通派生仍用 WithStart 保留首次计时。
+func NewDurationScope(parent context.Context) context.Context {
+	return context.WithValue(parent, startKey{}, &durationState{
 		started:    time.Now(),
 		downstream: make(map[string]time.Duration),
 	})
