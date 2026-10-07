@@ -264,6 +264,7 @@ func (c *Client) installCallbacks(opts *nats.Options) {
 
 // Conn 返回原生连接；直接操作它不会获得封装层的追踪和结果日志。
 // 不得通过原生 setter 或修改 Opts 覆盖 Pixiu 管理的连接回调；可通过 StatusChanged 观察连接状态。
+// 退出时统一调用 Client.Close；自行关闭或排空原生连接后，不保证封装层的优雅关闭语义。
 func (c *Client) Conn() *nats.Conn { return c.nc }
 
 // JetStream 返回默认上下文；直接操作它不会获得封装层的结果日志。
@@ -274,6 +275,7 @@ func (c *Client) JetStream() jetstream.JetStream { return c.js }
 // 所有阶段共用 CloseTimeout 整体期限；DrainTimeout 仅用于底层连接 drain。
 // 关闭完成或超时后取消消息处理 ctx；不强制终止未响应取消的业务函数。
 // 调用方应先停生产者，最后关闭日志；不得在消费回调中调用 Close。
+// 调用方须保持托管订阅固定；自行 Unsubscribe/Drain 后，不保证排空及等待在途回调。
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() { c.closeErr = c.close() })
 	return c.closeErr

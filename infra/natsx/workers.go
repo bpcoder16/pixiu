@@ -3,6 +3,7 @@ package natsx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ type ConsumeConfig struct {
 // ConsumeWithWorkers 仅在启动阶段建立 Messages 迭代器并启动固定数量的 worker，成功后立即返回。
 // 不自动 ACK、NAK 或 Term；每条消息获得独立日志作用域和 Client 管理的 ctx。
 // 仅返回启动错误；消费句柄由 Client 内部登记和管理，不通过返回值提供。
+// Consumer 缓存配置的 MaxRequestExpires 须为零或不低于 SDK 默认 30 秒；运行期间保持相关限制不变。
 // Client.Close 统一排空，正常关闭完成或超时后取消消息 ctx；handler 内不得调用 Close。
 func (c *Client) ConsumeWithWorkers(consumer jetstream.Consumer, cfg ConsumeConfig, handler func(context.Context, jetstream.Msg)) error {
 	if consumer == nil || handler == nil {
@@ -41,6 +43,12 @@ func (c *Client) ConsumeWithWorkers(consumer jetstream.Consumer, cfg ConsumeConf
 	defer c.consumerMu.Unlock()
 	if c.closing.Load() {
 		return ErrClosed
+	}
+	if info := consumer.CachedInfo(); info != nil {
+		// 固定使用 SDK 默认拉取期限，在创建迭代器前拒绝不兼容的服务端限制。
+		if maxExpires := info.Config.MaxRequestExpires; maxExpires > 0 && maxExpires < jetstream.DefaultExpires {
+			return fmt.Errorf("natsx: consumer MaxRequestExpires must be zero or at least %s (got %s)", jetstream.DefaultExpires, maxExpires)
+		}
 	}
 	iterator, err := consumer.Messages(jetstream.PullMaxMessages(cfg.MaxMessages))
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -260,6 +261,49 @@ func TestConsumeWithWorkersCloseTimeoutStopsDispatch(t *testing.T) {
 	}
 	if started.Load() != 2 {
 		t.Fatalf("超时后仍启动预取任务: %d", started.Load())
+	}
+}
+
+func TestConsumeWithWorkersValidatesMaxRequestExpires(t *testing.T) {
+	for _, maxExpires := range []time.Duration{0, 10 * time.Second, jetstream.DefaultExpires - 1, jetstream.DefaultExpires, time.Minute} {
+		t.Run(maxExpires.String(), func(t *testing.T) {
+			captureLogs(t)
+			c, consumer := newWorkerTestClient(t, time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			config := consumer.CachedInfo().Config
+			config.MaxRequestExpires = maxExpires
+			consumer, err := c.JetStream().UpdateConsumer(ctx, "WORKERS", config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publishWorkerMessages(t, c, 1)
+			finished := make(chan error, 1)
+			subscriptions := c.Conn().NumSubscriptions()
+			err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(_ context.Context, msg jetstream.Msg) {
+				finished <- msg.Ack()
+			})
+			if maxExpires > 0 && maxExpires < jetstream.DefaultExpires {
+				if err == nil || !strings.Contains(err.Error(), "MaxRequestExpires") {
+					t.Fatalf("不兼容的拉取期限未在启动时拒绝: %v", err)
+				}
+				if got := c.Conn().NumSubscriptions(); got != subscriptions {
+					t.Fatalf("非法配置启动了拉取订阅: got=%d, want=%d", got, subscriptions)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-finished:
+				if err != nil {
+					t.Fatalf("消息 ACK 失败: %v", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("合法的拉取期限配置未能正常消费消息")
+			}
+		})
 	}
 }
 

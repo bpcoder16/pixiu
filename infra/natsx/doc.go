@@ -71,13 +71,17 @@
 // Subscribe、QueueSubscribe、ConsumeWithWorkers 只应在启动阶段调用，不能从消息回调中追加注册。
 // 调用成功后即可接收消息，handler 依赖的资源应预先就绪。
 // New、Subscribe、QueueSubscribe、ConsumeWithWorkers 均不接收外部 ctx，生命周期由 Client.Close 管理。
-// Core 原生句柄可 Drain/Unsubscribe；ConsumeWithWorkers 仅返回启动错误，内部句柄由 Client.Close 统一排空。
-// 提前停止的句柄保留到 Client.Close 时统一处理。
+// 托管订阅和消费均由 Client.Close 统一排空；ConsumeWithWorkers 仅返回启动错误。
+// 自行 Unsubscribe/Drain 托管句柄，或直接关闭、排空原生连接后，不保证封装层的优雅排空及在途回调等待。
 // 每条消息获得独立日志作用域的 ctx，由 Client 在关闭完成或超时后取消；
 // Close 排空期间 ctx 保持有效，仍允许回调发布和请求；回调内不得调用 Close。
 // Publish、Request、PublishJetStream 仍接收调用方 ctx，回调内可按需派生 WithTimeout。
 // ConsumeWithWorkers 使用 Messages 迭代器和固定 worker；ConsumeConfig.Workers 必须为正，
-// MaxMessages 为零时等于 Workers；不开放完整拉取选项，其余使用 SDK 默认值。
+// MaxMessages 为零时等于 Workers；不开放完整拉取选项。
+// 拉取期限固定使用 jetstream.DefaultExpires（当前为 30 秒）。启动时校验 Consumer.CachedInfo：
+// MaxRequestExpires 为零或不低于默认期限时允许，正值低于默认期限时在创建迭代器前报错。
+// 本模块不额外查询 Consumer 配置；调用方须传入当前配置，并在运行期间保持相关限制不变。
+// 其余拉取参数由 SDK 按默认规则设置。
 // ErrorHandler 在运行错误日志之后执行；心跳丢失后继续拉取，其他迭代器错误终止消费。
 // 不自动 ACK/NAK/Term，多 worker 不保证业务完成顺序。
 // ConsumeWithWorkers 的完整样例展示 Stream/Consumer 创建、显式 ACK、错误回调和关闭顺序。

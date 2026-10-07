@@ -105,7 +105,7 @@ func (c *Client) PublishJetStream(ctx context.Context, subject string, data []by
 }
 
 // Subscribe 仅在应用启动阶段创建 Core 普通订阅，每个匹配的订阅者都会收到消息。
-// 运行期间保持订阅关系固定，由 Client.Close 统一排空；原生句柄仍可 Drain/Unsubscribe。
+// 运行期间保持订阅关系固定，由 Client.Close 统一排空；自行 Drain/Unsubscribe 后不保证排空及在途回调等待。
 // handler 的 ctx 由 Client 管理，Close 排空期间保持有效，关闭完成或超时后取消。
 func (c *Client) Subscribe(subject string, handler func(context.Context, *nats.Msg)) (*nats.Subscription, error) {
 	return c.subscribe(subject, "", handler)
@@ -113,7 +113,7 @@ func (c *Client) Subscribe(subject string, handler func(context.Context, *nats.M
 
 // QueueSubscribe 仅在应用启动阶段创建 Core 队列订阅，queue 必须非空。
 // 同一队列组中每条消息只交给一个订阅者；运行期间保持订阅关系固定，由 Client.Close 统一排空。
-// 原生句柄仍可 Drain/Unsubscribe；handler 的 ctx 生命周期与 Subscribe 相同。
+// 自行 Drain/Unsubscribe 后不保证排空及在途回调等待；handler 的 ctx 生命周期与 Subscribe 相同。
 func (c *Client) QueueSubscribe(subject, queue string, handler func(context.Context, *nats.Msg)) (*nats.Subscription, error) {
 	if strings.TrimSpace(queue) == "" {
 		return nil, errors.New("natsx: empty queue")
