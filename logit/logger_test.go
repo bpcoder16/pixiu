@@ -867,7 +867,7 @@ func TestRequestResponseLargeBodies(t *testing.T) {
 	if m["password"] != "***" {
 		t.Errorf("mask failed: %v", m["password"])
 	}
-	if m["statusCode"] != float64(200) || m["userId"] != "u_10086" || m["logId"] == nil {
+	if m["statusCode"] != float64(200) || m["userId"] != "u_10086" || m[LogId] == nil {
 		t.Errorf("fields wrong: %v", m)
 	}
 }

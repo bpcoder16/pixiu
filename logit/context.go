@@ -63,6 +63,13 @@ func WithContext(ctx context.Context) context.Context {
 	return ctx
 }
 
+// NewContextScope 在保留 parent 取消与其他值的同时创建独立日志字段存储。
+// 消息等并发入口不能复用 parent 的可变字段存储，否则字段会跨消息累积。
+func NewContextScope(parent context.Context) context.Context {
+	ctx := context.WithValue(parent, ctxKeyMeta, newFieldStore())
+	return context.WithValue(ctx, ctxKeyFields, newFieldStore())
+}
+
 // AddField 向普通作用域添加字段(所有级别可见)。ctx 必须已经 WithContext,
 // 否则 panic——这是编程错误,应在首次测试时暴露。保留字段名也会 panic。
 func AddField(ctx context.Context, fields ...Field) {

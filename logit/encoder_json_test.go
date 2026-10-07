@@ -87,7 +87,7 @@ func TestJSONEncoderFullLine(t *testing.T) {
 	if m["level"] != "INFO" || m["uid"] != float64(42) || m["op"] != "login" || m["msg"] != "user login" {
 		t.Errorf("decoded fields: %v", m)
 	}
-	if _, ok := m["logId"]; !ok {
+	if _, ok := m[LogId]; !ok {
 		t.Error("logId from meta missing")
 	}
 }
@@ -285,11 +285,11 @@ func TestJSONEncoderOptionalLogID(t *testing.T) {
 func TestJSONEncoderLogIDFromAllSources(t *testing.T) {
 	buf := &bytes.Buffer{}
 	l := MustNew(OptEncoder(DefaultJSONEncoder), OptWriter(NewWriter(buf)))
-	l = l.With(Str("logId", "with"))
+	l = l.With(Str(LogId, "with"))
 	ctx := WithContext(context.Background())
-	AddMeta(ctx, Str("logId", "meta1"), Str("logId", "meta2"))
-	AddField(ctx, Str("logId", "context"))
-	l.Info(ctx, "ids", Str("logId", "call"))
+	AddMeta(ctx, Str(LogId, "meta1"), Str(LogId, "meta2"))
+	AddField(ctx, Str(LogId, "context"))
+	l.Info(ctx, "ids", Str(LogId, "call"))
 
 	line := buf.String()
 	remaining := line

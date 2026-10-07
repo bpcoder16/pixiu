@@ -612,9 +612,15 @@ func TestWaitReturnsSavedTimeoutAfterWorkersExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		close(release)
+		_ = p.Shutdown()
+		_ = p.Wait()
+	})
 	if err := p.Submit(context.Background(), "running", func(ctx context.Context) error {
 		close(started)
-		<-ctx.Done()
+		<-release
 		return ctx.Err()
 	}); err != nil {
 		t.Fatal(err)
@@ -630,6 +636,7 @@ func TestWaitReturnsSavedTimeoutAfterWorkersExit(t *testing.T) {
 	if !errors.Is(shutdownErr, context.DeadlineExceeded) {
 		t.Fatalf("Shutdown = %v, want deadline exceeded", shutdownErr)
 	}
+	release <- struct{}{}
 	if err := p.Wait(); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("停机 Wait = %v, want deadline exceeded", err)
 	}
@@ -672,34 +679,30 @@ func TestShutdownCancelsRetryWait(t *testing.T) {
 	}
 }
 
-func TestShutdownCancelsTasksWithoutWait(t *testing.T) {
+func TestShutdownAbandonsPendingWithoutCancelingRunningTask(t *testing.T) {
 	cfg := testConfig()
 	cfg.DrainTimeout = 20 * time.Millisecond
 	p, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := make(chan struct{})
-	canceled := make(chan struct{})
+	started := make(chan context.Context, 1)
 	release := make(chan struct{})
 	t.Cleanup(func() {
 		close(release)
 		_ = p.Shutdown()
 		_ = p.Wait()
 	})
+	var runningCalls atomic.Int32
 	if err := p.Submit(context.Background(), "running", func(ctx context.Context) error {
-		close(started)
-		select {
-		case <-ctx.Done():
-			close(canceled)
-			return ctx.Err()
-		case <-release:
-			return nil
-		}
+		runningCalls.Add(1)
+		started <- ctx
+		<-release
+		return errors.New("task failed after pool timeout")
 	}); err != nil {
 		t.Fatal(err)
 	}
-	<-started
+	taskCtx := <-started
 	var pendingCalls atomic.Int32
 	if err := p.Submit(context.Background(), "pending", func(context.Context) error {
 		pendingCalls.Add(1)
@@ -708,17 +711,16 @@ func TestShutdownCancelsTasksWithoutWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	shutdownErr := p.Shutdown()
-	select {
-	case <-canceled:
-	case <-time.After(3 * time.Second):
-		t.Fatal("未调用 Wait 时，Shutdown 超时没有取消任务")
+	if p.ctx.Err() != context.Canceled || taskCtx.Done() != nil || taskCtx.Err() != nil || context.Cause(taskCtx) != nil {
+		t.Fatal("池控制 context 与任务 context 的取消边界错误")
 	}
 	if !errors.Is(shutdownErr, context.DeadlineExceeded) || !strings.Contains(shutdownErr.Error(), "unfinished=2") {
 		t.Fatalf("Shutdown = %v, want timeout with two unfinished tasks", shutdownErr)
 	}
-	// 不调用 Wait，任务也会自行完成退出；测试只观察最终统计。
+	release <- struct{}{}
+	// 不调用 Wait，回调结束后 worker 也应退出，且不能发起新的重试。
 	waitUntil(t, func() bool { return p.Stats().Workers == 0 })
-	if got := p.Stats(); pendingCalls.Load() != 0 || got.Abandoned != 1 || got.Failed != 1 || got.Workers != 0 {
+	if got := p.Stats(); runningCalls.Load() != 1 || pendingCalls.Load() != 0 || got.Abandoned != 1 || got.Failed != 1 || got.Workers != 0 {
 		t.Fatalf("自动中止后 calls=%d Stats=%+v", pendingCalls.Load(), got)
 	}
 }
@@ -742,14 +744,9 @@ func TestShutdownTimeoutThenWaitForCleanup(t *testing.T) {
 			}()
 			if err := p.Submit(context.Background(), "cleanup", func(ctx context.Context) error {
 				close(started)
-				// 清理过程可能晚于取消完成，等待方必须能确认真正退出。
-				select {
-				case <-ctx.Done():
-				case <-release:
-					return nil
-				}
+				// 池超时不会取消回调，Wait 必须等待业务实际结束。
 				<-release
-				return ctx.Err()
+				return errors.New("cleanup failed")
 			}); err != nil {
 				t.Fatal(err)
 			}

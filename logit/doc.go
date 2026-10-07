@@ -3,15 +3,21 @@
 //
 // 日常使用(不需要轮转时只需 import logit 一个包):
 //
-//	ctx = logit.WithContext(ctx)                    // 入口初始化日志字段
+//	ctx = logit.WithContextLogID(ctx)               // 入口初始化字段并生成链路 ID
 //	ctx = logit.WithStart(ctx)                      // 记录请求起点
-//	logit.AddMeta(ctx, logit.Str("logId", logit.NewLogID())) // 按需添加链路 ID
+//	msgCtx := logit.NewContextScope(ctx)             // 并发消息各用独立字段存储
+//	msgCtx = logit.NewDurationScope(msgCtx)          // 独立计时,不继承父请求耗时表
 //	logit.AddField(ctx, logit.Str("uid", "42"))    // 请求级字段
 //	logit.Info(ctx, "user login", logit.Int("uid", 42))
 //	logit.AddDownstreamDurationAuto(ctx, "mysql", 12*time.Millisecond) // 自动生成 mysql_1
 //	logit.InfoDuration(ctx, "request done")       // 自动追加 mysql_1、self 和 total 耗时
 //	svc := logit.With(logit.Str("mod", "Order")) // 模块级子 Logger
 //	svc.Error(ctx, "create failed", logit.Err(err))
+//
+// WithContextLogID 每次调用都会追加新的 ID，只在入口调用一次；后续直接传递 ctx。
+// 无需 ID 时仍使用 WithContext；已有 ID 时初始化后调用
+// AddMeta(ctx, Str(LogId, id))。LogIDFromContext 读取 meta 中最后一个非空字符串 LogId，
+// 不从普通字段或调用点字段读取，不改变日志重复字段的输出规则。
 //
 // 基础功能模块可用 AddDownstreamDurationAuto 自动编号并记录下游耗时；ctx 没有
 // WithStart 时跳过，不要求未启用耗时统计的调用方额外初始化 context。

@@ -34,7 +34,7 @@ const (
 	stateOpen poolState = iota
 	// stateDraining 停止接收新任务，继续执行已接收任务。
 	stateDraining
-	// stateAborted 放弃排队任务，并取消运行中任务的 context。
+	// stateAborted 放弃排队任务并停止重试，已运行的回调自行结束。
 	stateAborted
 )
 
@@ -76,13 +76,14 @@ type Stats struct {
 type task struct {
 	name string
 	fn   func(context.Context) error
+	ctx  context.Context
 }
 
 // Pool 执行已接收的进程内任务。创建方负责在退出前调用 Shutdown。
 type Pool struct {
 	// cfg 是已填入默认超时值的实例配置。
 	cfg Config
-	// ctx 由池管理，传给任务执行并通知 Shutdown 结束等待。
+	// ctx 控制池排空和重试，并通知 Shutdown 结束等待，不传给业务回调。
 	ctx context.Context
 	// cancel 在中止排空或所有 worker 退出时取消 ctx，同时唤醒 Shutdown。
 	cancel context.CancelFunc
@@ -129,7 +130,7 @@ func New(cfg Config) (*Pool, error) {
 	if cfg.DrainTimeout == 0 {
 		cfg.DrainTimeout = defaultDrainTimeout
 	}
-	// 任务执行 context 由池统一取消，开始排空时仍允许已接收任务正常执行。
+	// 池的控制 context 与回调 context 分离，排空期间继续执行已接收任务。
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &Pool{
 		cfg:     cfg,
@@ -148,7 +149,9 @@ func New(cfg Config) (*Pool, error) {
 	return p, nil
 }
 
-// Submit 等待队列空位并接收任务；ctx 和 SubmitTimeout 只控制提交过程，不控制任务执行。
+// Submit 等待队列空位并接收任务；ctx 的取消、截止时间和 SubmitTimeout 只控制提交过程。
+// 任务创建独立日志作用域并复用或补生成 logId；同一任务重试复用该作用域。
+// 回调不继承提交方或池的取消；其他值按引用保留，调用方须保证其并发安全。
 // 获取锁与等待空位共享超时预算；锁等待不可中断，可能在取得锁后才返回超时。
 func (p *Pool) Submit(ctx context.Context, name string, fn func(context.Context) error) error {
 	if ctx == nil || name == "" || fn == nil {
@@ -167,7 +170,11 @@ func (p *Pool) Submit(ctx context.Context, name string, fn func(context.Context)
 			return err
 		}
 		if p.stats.Pending < p.cfg.QueueSize {
-			p.queue[p.tail] = task{name: name, fn: fn}
+			p.queue[p.tail] = task{
+				name: name,
+				fn:   fn,
+				ctx:  newTaskContext(ctx),
+			}
 			p.tail = (p.tail + 1) % len(p.queue)
 			p.stats.Pending++
 			p.stats.Accepted++
@@ -285,7 +292,7 @@ func (p *Pool) execute(item task) {
 	attempts := p.cfg.MaxRetries + 1
 	succeeded := false
 	for attempt := 1; attempt <= attempts; attempt++ {
-		err, stack := invoke(ctx, item.fn)
+		err, stack := invoke(item.ctx, item.fn)
 		if err == nil {
 			succeeded = true
 			break
@@ -351,7 +358,7 @@ func (p *Pool) shutdownResult() error {
 }
 
 // Shutdown 开始排空并等待全部 worker 退出或宽限到期；允许重复或并发调用。
-// 超时会自动取消任务，但不保证任务已经退出；需要确认收尾时继续调用 Wait。
+// 超时会放弃排队任务并停止重试，不取消运行中的回调；需要确认收尾时继续调用 Wait。
 func (p *Pool) Shutdown() error {
 	p.beginDrain()
 	<-p.ctx.Done()

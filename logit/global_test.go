@@ -67,7 +67,7 @@ func capture(t *testing.T) *bytes.Buffer {
 func TestFacadeBasic(t *testing.T) {
 	buf := capture(t)
 	ctx := logit.WithContext(context.Background())
-	logit.AddMeta(ctx, logit.Str("logId", logit.NewLogID()))
+	logit.AddMeta(ctx, logit.Str(logit.LogId, logit.NewLogID()))
 
 	logit.Info(ctx, "user login", logit.Int("uid", 42))
 	logit.Error(ctx, "query failed", logit.Str("mod", "Order"))
@@ -369,7 +369,7 @@ func TestFacadeLogIDChain(t *testing.T) {
 	buf := capture(t)
 	ctx := logit.WithContext(context.Background())
 	id := logit.NewLogID()
-	logit.AddMeta(ctx, logit.Str("logId", id))
+	logit.AddMeta(ctx, logit.Str(logit.LogId, id))
 
 	// 标准库派生的 context 应携带同一 logId。
 	child, cancel := context.WithCancel(ctx)
@@ -513,7 +513,7 @@ func TestDirectConstruction(t *testing.T) {
 		logit.OptFilterKeys("token"),
 	)
 	ctx := logit.WithContext(context.Background())
-	logit.AddMeta(ctx, logit.Str("logId", logit.NewLogID()))
+	logit.AddMeta(ctx, logit.Str(logit.LogId, logit.NewLogID()))
 	logger.Info(ctx, "direct", logit.Str("token", "secret"))
 	if strings.Contains(buf.String(), "secret") {
 		t.Errorf("filter failed: %q", buf.String())

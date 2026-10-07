@@ -25,7 +25,7 @@ func collectCtxFieldValues(ctx context.Context, lineLevel Level) []string {
 
 func newTestContextWithLogID() context.Context {
 	ctx := WithContext(context.Background())
-	AddMeta(ctx, Str("logId", NewLogID()))
+	AddMeta(ctx, Str(LogId, NewLogID()))
 	return ctx
 }
 
@@ -35,6 +35,38 @@ func TestWithContextIdempotent(t *testing.T) {
 	ctx2 := WithContext(ctx)
 	if findStore(ctx2, ctxKeyFields) != s1 {
 		t.Error("WithContext should reuse existing store")
+	}
+}
+
+func TestNewContextScopeKeepsParentCancellationAndSeparatesFields(t *testing.T) {
+	type key struct{}
+	parent, cancel := context.WithCancel(context.WithValue(context.Background(), key{}, "keep"))
+	defer cancel()
+	parent = WithContext(parent)
+	AddMeta(parent, Str(LogId, "parent"))
+	AddField(parent, Str("stage", "parent"))
+
+	first := NewContextScope(parent)
+	second := NewContextScope(parent)
+	AddMeta(first, Str(LogId, "first"))
+	AddField(first, Str("stage", "first"))
+	AddMeta(second, Str(LogId, "second"))
+
+	if got := strings.Join(collectCtxFieldValues(parent, InfoLevel), ","); got != "logId=parent,stage=parent" {
+		t.Fatalf("父级字段被修改: %q", got)
+	}
+	if got := strings.Join(collectCtxFieldValues(first, InfoLevel), ","); got != "logId=first,stage=first" {
+		t.Fatalf("第一个作用域字段: %q", got)
+	}
+	if got := strings.Join(collectCtxFieldValues(second, InfoLevel), ","); got != "logId=second" {
+		t.Fatalf("第二个作用域字段: %q", got)
+	}
+	if got := first.Value(key{}); got != "keep" {
+		t.Fatalf("父级 context 值丢失: %v", got)
+	}
+	cancel()
+	if first.Err() != context.Canceled || second.Err() != context.Canceled {
+		t.Fatal("派生作用域未继承父级取消")
 	}
 }
 
@@ -76,7 +108,7 @@ func TestDuplicateFieldVisibility(t *testing.T) {
 
 func TestLogIDAllowedAsDebugField(t *testing.T) {
 	ctx := WithContext(context.Background())
-	AddDebugField(ctx, Str("logId", "debug-only"))
+	AddDebugField(ctx, Str(LogId, "debug-only"))
 
 	if got := collectCtxFields(ctx, InfoLevel); len(got) != 0 {
 		t.Errorf("info fields = %v, want none", got)
@@ -98,7 +130,7 @@ func TestEachVisibleMetaBeforeFields(t *testing.T) {
 
 func TestFieldsSharedAcrossDerivedContext(t *testing.T) {
 	ctx := WithContext(context.Background())
-	AddMeta(ctx, Str("logId", "L1"))
+	AddMeta(ctx, Str(LogId, "L1"))
 	AddField(ctx, Str("stage", "parent"))
 
 	child, cancel := context.WithCancel(ctx)

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bpcoder16/pixiu/taskpool"
+	"github.com/bpcoder16/pixiu/infra/taskpool"
 )
 
 func globalTestConfig() taskpool.Config {
@@ -199,11 +199,6 @@ func TestGlobalShutdownTimeoutAndWaitForCleanup(t *testing.T) {
 	})
 	if err := taskpool.Submit(context.Background(), "cleanup", func(ctx context.Context) error {
 		close(started)
-		select {
-		case <-ctx.Done():
-		case <-release:
-			return nil
-		}
 		<-release
 		return ctx.Err()
 	}); err != nil {

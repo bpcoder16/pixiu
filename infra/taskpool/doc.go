@@ -1,4 +1,5 @@
-// Package taskpool 提供本地异步任务池，支持按实例使用或注册为进程级默认池，零第三方依赖。
+// Package taskpool 提供本地异步任务池，依赖 logit 创建独立日志作用域并关联 logId。
+// 导入路径为 github.com/bpcoder16/pixiu/infra/taskpool，支持实例及进程级默认池。
 // 设计与边界见 docs/taskpool-design.md。
 //
 // 初始化时设置等待队列容量、消费者区间和失败重试次数；
@@ -24,15 +25,33 @@
 // 获取锁与等待队列空位共享预算；即使队列有空位，检查时已超时也会拒绝提交。
 // 内部锁等待不可中断，函数可能在取得锁后才返回超时；requestCtx 可以更早取消提交。
 // SubmitTimeout 为 0 时默认 1 秒，正值按配置使用，不设 100ms 下限。
-// 成功接收的任务使用任务池提供的 taskCtx 执行，不会因请求结束或
-// Shutdown 开始排空而立刻中断。
+// 成功接收的任务以 WithoutCancel(requestCtx) 为父 context 创建独立日志作用域，
+// 只复制 meta 中的 logId，缺失或为空时主动生成；任务及重试复用该作用域和 ID。
+// 父级、不同任务的普通与 meta 日志字段互不影响；其他 context 值仍按引用保留。
+// taskCtx 不继承请求或池的截止时间与取消，Done 为 nil；池自身另用 p.ctx 控制排空和重试。
+// 业务需要执行时限时，在回调内自行派生 WithTimeout：
 // 示例中的 requestCtx 和 sendNotice 由应用提供：
 //
 //	if err := pool.Submit(requestCtx, "send-notice", func(taskCtx context.Context) error {
-//	    return sendNotice(taskCtx) // 业务函数应响应 taskCtx 取消
+//	    workCtx, cancel := context.WithTimeout(taskCtx, 3*time.Second)
+//	    defer cancel()
+//	    return sendNotice(workCtx)
 //	}); err != nil {
 //	    return err
 //	}
+//
+// 使用 logit 时，入口调用一次 logit.WithContextLogID 即可让任务日志沿用链路 ID：
+//
+//	requestCtx = logit.WithContextLogID(requestCtx)
+//	if err := pool.Submit(requestCtx, "send-notice", func(taskCtx context.Context) error {
+//	    logit.Info(taskCtx, "sending notice")
+//	    return sendNotice(taskCtx)
+//	}); err != nil {
+//	    return err
+//	}
+//
+// 任务池直接依赖 logit；入口没有初始化日志字段时也可提交，任务会自行生成 ID。
+// 其他共享值由调用方保证并发安全，并允许其存活到任务结束。
 //
 // 应用自行处理停机信号，先停止上游提交，再调用 Shutdown 获取限时关闭结果。
 // 任务池只通过 Shutdown 发起关闭；宽限倒计时从首次调用开始，不因后续调用而重置。
@@ -92,8 +111,8 @@
 //	return stack.Close()
 //
 // 任务没有这类依赖时，省略 client.Close 的注册即可。
-// Shutdown 发起的 DrainTimeout 到期会放弃排队任务并取消执行 context，不依赖调用 Wait。
-// Go 无法强制终止不响应取消的函数，这种任务会让 Wait 一直等待；
+// Shutdown 发起的 DrainTimeout 到期会放弃排队任务并停止重试，不依赖调用 Wait。
+// 正在执行的回调不会被取消；回调一直不返回时，Wait 也会一直等待。
 // 只收到 Shutdown 的超时结果时，不能立即关闭任务仍在使用的 client。
 // 如果还有日志资源，应先登记日志关闭函数，使其最后关闭。
 //
