@@ -139,6 +139,7 @@ func (l *Locker) Lock(ctx context.Context, key string) (lockx.Lock, error) {
 // TryLock 进行一次带 TTL 的原子获取，不排队、不重试、不自动续租。
 // 竞争失败返回 nil、false、nil；结果不确定或本地租期预算耗尽时返回错误。
 // key 原样使用，配置的 TTL 向上取整到毫秒；租期不从返回时重新起算。
+// 已确认成功但因取消或超时无法交付时，使用独立的 1 秒预算尽力释放。
 func (l *Locker) TryLock(ctx context.Context, key string) (lockx.Lock, bool, error) {
 	start := time.Now()
 	if l == nil || l.client == nil {
@@ -168,6 +169,17 @@ func (l *Locker) TryLock(ctx context.Context, key string) (lockx.Lock, bool, err
 	}
 	// 包括网络及日志耗时；晚到的成功不能交付为仍可使用的锁。
 	if ctxErr := lockctx.Err(attemptCtx); ctxErr != nil {
+		if err == nil && result == "OK" {
+			// 上层拿不到句柄，必须在此按本次身份清理，并脱离已失效的获取预算。
+			unlockCtx, unlockCancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			defer unlockCancel()
+			held := lock{
+				client: l.client,
+				key:    key,
+				token:  token,
+			}
+			ctxErr = errors.Join(ctxErr, held.Unlock(unlockCtx))
+		}
 		return nil, false, fmt.Errorf("redislock: try lock: %w", ctxErr)
 	}
 	if errors.Is(err, redis.Nil) {
