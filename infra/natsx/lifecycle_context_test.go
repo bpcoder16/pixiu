@@ -68,7 +68,7 @@ func TestHandlerContextOwnedByClient(t *testing.T) {
 						t.Fatal(err)
 					}
 					cancelSetup()
-					_, err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(ctx context.Context, _ jetstream.Msg) {
+					err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(ctx context.Context, _ jetstream.Msg) {
 						handler(ctx)
 					})
 					if err != nil {

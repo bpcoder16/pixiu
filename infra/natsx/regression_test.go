@@ -98,7 +98,7 @@ func TestCloseAllowsCallbackOperations(t *testing.T) {
 					result <- work(msgCtx)
 				})
 			} else {
-				_, err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(msgCtx context.Context, msg jetstream.Msg) {
+				err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(msgCtx context.Context, msg jetstream.Msg) {
 					result <- errors.Join(work(msgCtx), msg.Ack())
 				})
 			}
@@ -125,7 +125,7 @@ func TestCloseAllowsCallbackOperations(t *testing.T) {
 			if _, err := c.Subscribe("review.new", func(context.Context, *nats.Msg) {}); !errors.Is(err, ErrClosed) {
 				t.Fatalf("关闭期间仍允许新订阅: %v", err)
 			}
-			if _, err := c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(context.Context, jetstream.Msg) {}); !errors.Is(err, ErrClosed) {
+			if err := c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(context.Context, jetstream.Msg) {}); !errors.Is(err, ErrClosed) {
 				t.Fatalf("关闭期间仍允许新消费: %v", err)
 			}
 			release <- struct{}{}
@@ -449,10 +449,11 @@ func TestConsumeWithWorkersRuntimeErrorLogsAndCallback(t *testing.T) {
 					called <- err
 				}
 			}
-			handle, err := c.ConsumeWithWorkers(consumer, cfg, func(context.Context, jetstream.Msg) {})
+			err = c.ConsumeWithWorkers(consumer, cfg, func(context.Context, jetstream.Msg) {})
 			if err != nil {
 				t.Fatal(err)
 			}
+			handle := lastWorkerHandle(t, c)
 			if err := c.Conn().Flush(); err != nil {
 				t.Fatal(err)
 			}

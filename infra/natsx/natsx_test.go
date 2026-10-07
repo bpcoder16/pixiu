@@ -577,7 +577,7 @@ func TestJetStreamPublishConsumeAndCloseWaits(t *testing.T) {
 	}
 	entered := make(chan string, 1)
 	release := make(chan struct{})
-	_, err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(msgCtx context.Context, msg jetstream.Msg) {
 		id, _ := logit.LogIDFromContext(msgCtx)
 		entered <- id
 		<-release
@@ -735,10 +735,11 @@ func TestCloseAfterConsumerStopped(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			handle, err := c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(context.Context, jetstream.Msg) {})
+			err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(context.Context, jetstream.Msg) {})
 			if err != nil {
 				t.Fatal(err)
 			}
+			handle := lastWorkerHandle(t, c)
 			if mode == "stop" {
 				handle.Stop()
 			} else {
@@ -781,7 +782,7 @@ func TestConsumeDoesNotAutoAck(t *testing.T) {
 	}
 	delivered := make(chan int32, 2)
 	var count atomic.Int32
-	handle, err := c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(_ context.Context, msg jetstream.Msg) {
+	err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(_ context.Context, msg jetstream.Msg) {
 		current := count.Add(1)
 		if current == 2 {
 			_ = msg.Ack()
@@ -791,6 +792,7 @@ func TestConsumeDoesNotAutoAck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handle := lastWorkerHandle(t, c)
 	defer handle.Stop()
 	if _, err := c.PublishJetStream(ctx, "redeliver.work", nil, "redeliver-event"); err != nil {
 		t.Fatal(err)

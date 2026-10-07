@@ -82,12 +82,12 @@ func ExampleClient_ConsumeWithWorkers() {
 	}
 	cancelSetup()
 	// 启动固定数量的 worker；成功后即可执行回调，依赖资源需预先就绪。
-	handle, err := client.ConsumeWithWorkers(consumer, natsx.ConsumeConfig{
+	err = client.ConsumeWithWorkers(consumer, natsx.ConsumeConfig{
 		Workers:     5,
 		MaxMessages: 5,
 		ErrorHandler: func(_ jetstream.ConsumeContext, err error) {
 			// 模块已记录错误；应用可按需告警或通知主协程退出，不在这里调用 Close。
-			if errors.Is(err, jetstream.ErrConsumerDeleted) {
+			if !errors.Is(err, jetstream.ErrNoHeartbeat) {
 				stopSignals()
 			}
 		},
@@ -103,11 +103,7 @@ func ExampleClient_ConsumeWithWorkers() {
 		return
 	}
 	// 运行阶段：保持消费关系固定，处理消息并等待停机信号。
-	select {
-	case <-stop.Done():
-	case <-handle.Closed():
-		// 消费提前终止时结束服务，交给应用的重启策略处理。
-	}
+	<-stop.Done()
 	// 关闭阶段：若还运行着外部生产者，先停止并等待，再返回执行 client.Close。
 	// Client.Close 排空消费并取消消息处理 ctx；日志由应用在最后关闭。
 }

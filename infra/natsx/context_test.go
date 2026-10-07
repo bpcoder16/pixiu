@@ -52,7 +52,7 @@ func TestPublishLogIDUsesContextAndPropagatesHeader(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(ctx context.Context, msg jetstream.Msg) {
+				if err := c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(ctx context.Context, msg jetstream.Msg) {
 					record(ctx, msg.Headers())
 					if err := msg.Ack(); err != nil {
 						t.Error(err)

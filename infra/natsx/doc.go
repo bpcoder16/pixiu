@@ -71,7 +71,7 @@
 // Subscribe、QueueSubscribe、ConsumeWithWorkers 只应在启动阶段调用，不能从消息回调中追加注册。
 // 调用成功后即可接收消息，handler 依赖的资源应预先就绪。
 // New、Subscribe、QueueSubscribe、ConsumeWithWorkers 均不接收外部 ctx，生命周期由 Client.Close 管理。
-// Core 原生句柄可 Drain/Unsubscribe；worker 消费句柄可 Drain/Stop，Closed 等待全部 worker 完成。
+// Core 原生句柄可 Drain/Unsubscribe；ConsumeWithWorkers 仅返回启动错误，内部句柄由 Client.Close 统一排空。
 // 提前停止的句柄保留到 Client.Close 时统一处理。
 // 每条消息获得独立日志作用域的 ctx，由 Client 在关闭完成或超时后取消；
 // Close 排空期间 ctx 保持有效，仍允许回调发布和请求；回调内不得调用 Close。

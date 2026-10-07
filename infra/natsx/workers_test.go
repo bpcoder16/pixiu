@@ -44,6 +44,17 @@ func newWorkerTestClient(t *testing.T, closeTimeout time.Duration) (*Client, jet
 	return c, consumer
 }
 
+// 内部句柄用于验证排空、停止和完成通知，不由公开启动接口返回。
+func lastWorkerHandle(t *testing.T, c *Client) jetstream.ConsumeContext {
+	t.Helper()
+	c.consumerMu.Lock()
+	defer c.consumerMu.Unlock()
+	if len(c.consumers) == 0 {
+		t.Fatal("启动消费后未登记内部句柄")
+	}
+	return c.consumers[len(c.consumers)-1]
+}
+
 func publishWorkerMessages(t *testing.T, c *Client, count int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -89,7 +100,7 @@ func TestConsumeWithWorkersBoundsConcurrencyAndDrains(t *testing.T) {
 	unblock := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(unblock)
 	var active, completed atomic.Int32
-	handle, err := c.ConsumeWithWorkers(consumer, ConsumeConfig{
+	err := c.ConsumeWithWorkers(consumer, ConsumeConfig{
 		Workers:     workers,
 		MaxMessages: total,
 	}, func(ctx context.Context, msg jetstream.Msg) {
@@ -116,6 +127,7 @@ func TestConsumeWithWorkersBoundsConcurrencyAndDrains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handle := lastWorkerHandle(t, c)
 	for range workers {
 		select {
 		case <-entered:
@@ -171,7 +183,7 @@ func TestConsumeWithWorkersStopWaitsAndDiscardsBufferedMessages(t *testing.T) {
 	unblock := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(unblock)
 	var completed atomic.Int32
-	handle, err := c.ConsumeWithWorkers(consumer, ConsumeConfig{
+	err := c.ConsumeWithWorkers(consumer, ConsumeConfig{
 		Workers:     2,
 		MaxMessages: 4,
 	}, func(ctx context.Context, msg jetstream.Msg) {
@@ -188,6 +200,7 @@ func TestConsumeWithWorkersStopWaitsAndDiscardsBufferedMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handle := lastWorkerHandle(t, c)
 	for range 2 {
 		select {
 		case <-entered:
@@ -218,7 +231,7 @@ func TestConsumeWithWorkersCloseTimeoutStopsDispatch(t *testing.T) {
 	publishWorkerMessages(t, c, 6)
 	entered := make(chan struct{}, 6)
 	var started atomic.Int32
-	handle, err := c.ConsumeWithWorkers(consumer, ConsumeConfig{
+	err := c.ConsumeWithWorkers(consumer, ConsumeConfig{
 		Workers:     2,
 		MaxMessages: 4,
 	}, func(ctx context.Context, _ jetstream.Msg) {
@@ -229,6 +242,7 @@ func TestConsumeWithWorkersCloseTimeoutStopsDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handle := lastWorkerHandle(t, c)
 	for range 2 {
 		select {
 		case <-entered:
@@ -265,8 +279,8 @@ func TestConsumeWithWorkersRejectsInvalidArguments(t *testing.T) {
 		{"negative prefetch", consumer, ConsumeConfig{Workers: 1, MaxMessages: -1}, handler},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if handle, err := c.ConsumeWithWorkers(tc.consumer, tc.config, tc.handler); err == nil || handle != nil {
-				t.Fatalf("非法配置未拒绝: handle=%v, err=%v", handle, err)
+			if err := c.ConsumeWithWorkers(tc.consumer, tc.config, tc.handler); err == nil {
+				t.Fatal("非法配置未拒绝")
 			}
 		})
 	}
@@ -299,7 +313,7 @@ func TestConsumeWithWorkersContinuesAfterMissingHeartbeat(t *testing.T) {
 	captureLogs(t)
 	c, consumer := newWorkerTestClient(t, time.Second)
 	called := make(chan error, 2)
-	handle, err := c.ConsumeWithWorkers(workerErrorConsumer{
+	err := c.ConsumeWithWorkers(workerErrorConsumer{
 		Consumer: consumer,
 		iterator: &workerErrorIterator{errors: []error{
 			jetstream.ErrNoHeartbeat,
@@ -314,6 +328,7 @@ func TestConsumeWithWorkersContinuesAfterMissingHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handle := lastWorkerHandle(t, c)
 	select {
 	case <-handle.Closed():
 	case <-time.After(time.Second):
