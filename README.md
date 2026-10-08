@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/pixiu-logo.png" width="240" alt="貔貅 Pixiu 吉祥物：青玉色瑞兽，暖金瑞角与卷尾">
+  <img src="assets/pixiu-logo.png" width="160" alt="貔貅 Pixiu 吉祥物：青玉色瑞兽，暖金瑞角与卷尾">
 </p>
 
 <h1 align="center">貔貅 · Pixiu</h1>
