@@ -4,6 +4,10 @@ import "testing"
 
 func TestNewNamedSharesInstance(t *testing.T) {
 	name := t.Name()
+	t.Cleanup(func() {
+		namedCaches.Delete(name)
+		namedCaches.Delete(name + "-other")
+	})
 	created, err := NewNamed(name, Config[string, int]{Capacity: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +38,9 @@ func TestNewNamedSharesInstance(t *testing.T) {
 
 func TestNamedRejectsInvalidAndDuplicateRegistration(t *testing.T) {
 	name := t.Name()
+	t.Cleanup(func() {
+		namedCaches.Delete(name)
+	})
 	if _, err := NewNamed("", Config[string, int]{Capacity: 1}); err == nil {
 		t.Fatal("empty name was accepted")
 	}
@@ -70,6 +77,9 @@ func TestNamedRejectsInvalidAndDuplicateRegistration(t *testing.T) {
 func TestNewNamedConcurrentRegistration(t *testing.T) {
 	const workers = 12
 	name := t.Name()
+	t.Cleanup(func() {
+		namedCaches.Delete(name)
+	})
 	type result struct {
 		cache *Cache[string, int]
 		err   error
