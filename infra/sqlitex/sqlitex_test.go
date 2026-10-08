@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,6 +114,141 @@ func TestNewRejectsDuplicateMemoryDSNParameters(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "duplicate DSN parameter") {
 			t.Fatalf("重复内存库参数未被拒绝: dsn=%q err=%v", dsn, err)
 		}
+	}
+}
+
+func TestNewProtectsEscapedMemoryDSN(t *testing.T) {
+	for _, dsn := range []string{"file:%3Amemory%3A", "file:%3amemory%3a"} {
+		for _, tc := range []struct {
+			name    string
+			pool    Pool
+			journal JournalMode
+			want    string
+		}{
+			{
+				name: "multiple connections",
+				pool: Pool{MaxOpenConns: 2},
+				want: "private in-memory database requires one open connection",
+			},
+			{
+				name: "connection lifetime",
+				pool: Pool{ConnMaxLifetime: time.Second},
+				want: "in-memory database cannot recycle connections",
+			},
+			{
+				name: "connection idle time",
+				pool: Pool{ConnMaxIdleTime: time.Second},
+				want: "in-memory database cannot recycle connections",
+			},
+			{
+				name:    "WAL",
+				journal: JournalModeWAL,
+				want:    "WAL requires a file database",
+			},
+		} {
+			t.Run(dsn+"/"+tc.name, func(t *testing.T) {
+				client, err := New(Config{
+					Name:        "escaped-memory",
+					DSN:         dsn,
+					Pool:        tc.pool,
+					JournalMode: tc.journal,
+				})
+				if client != nil {
+					_ = client.Close()
+				}
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("转义内存库配置未被拒绝: err=%v, want %q", err, tc.want)
+				}
+			})
+		}
+	}
+}
+
+func TestEscapedSharedMemoryUsesSameDatabase(t *testing.T) {
+	for _, dsn := range []string{
+		"file:%3Amemory%3A?cache=shared",
+		"file:%2Fsqlitex-escaped-memdb?vfs=memdb",
+	} {
+		t.Run(dsn, func(t *testing.T) {
+			ctx := context.Background()
+			client, err := New(Config{
+				Name: "escaped-shared",
+				DSN:  dsn,
+				Pool: Pool{
+					MaxOpenConns: 2,
+					MaxIdleConns: 2,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			pool, err := client.DB(ctx).DB()
+			if err != nil {
+				t.Fatal(err)
+			}
+			first, err := pool.Conn(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer first.Close()
+			second, err := pool.Conn(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer second.Close()
+			if _, err := first.ExecContext(ctx, "CREATE TABLE escaped_t(v INTEGER)"); err != nil {
+				t.Fatal(err)
+			}
+			var count int
+			if err := second.QueryRowContext(ctx, "SELECT COUNT(*) FROM escaped_t").Scan(&count); err != nil {
+				t.Fatalf("转义内存库的两条连接未共享数据: %v", err)
+			}
+		})
+	}
+}
+
+func TestEscapedFileDSNPreservesPath(t *testing.T) {
+	for _, useURI := range []bool{false, true} {
+		t.Run(fmt.Sprintf("URI=%t", useURI), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "%3Amemory%3A.db")
+			dsn := path
+			if useURI {
+				uri := url.URL{Scheme: "file", Path: path}
+				dsn = uri.String()
+			}
+			client, err := New(Config{
+				Name: "escaped-file",
+				DSN:  dsn,
+				Pool: Pool{
+					MaxOpenConns:    2,
+					ConnMaxLifetime: time.Minute,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			if err := client.DB(context.Background()).Exec("CREATE TABLE file_t(v INTEGER)").Error; err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("文件路径被额外解码: %v", err)
+			}
+		})
+	}
+}
+
+func TestNewRejectsInvalidURIPath(t *testing.T) {
+	client, err := New(Config{
+		Name: "invalid-uri",
+		DSN:  "file:%zz",
+	})
+	if client != nil {
+		_ = client.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "invalid DSN path") {
+		t.Fatalf("无效 URI 路径未被拒绝: %v", err)
 	}
 }
 

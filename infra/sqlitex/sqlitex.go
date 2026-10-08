@@ -195,14 +195,19 @@ func classifyMemoryDSN(dsn string) (memory, private bool, err error) {
 	if name == ":memory:" {
 		return true, true, nil
 	}
-	if name != "file::memory:" && !strings.HasPrefix(name, "file:") {
+	if !strings.HasPrefix(name, "file:") {
 		return false, false, nil
+	}
+	// SQLite 按解码后的 URI 路径识别内存库；仅用于分类，不改写传给驱动的 DSN。
+	path, err := url.PathUnescape(strings.TrimPrefix(name, "file:"))
+	if err != nil {
+		return false, false, fmt.Errorf("sqlitex: invalid DSN path: %w", err)
 	}
 	if query.Get("vfs") == "memdb" {
 		// memdb VFS 的名称以 / 开头时，物理连接共享同一内存库。
-		return true, !strings.HasPrefix(strings.TrimPrefix(name, "file:"), "/"), nil
+		return true, !strings.HasPrefix(path, "/"), nil
 	}
-	if name == "file::memory:" || query.Get("mode") == "memory" {
+	if path == ":memory:" || query.Get("mode") == "memory" {
 		return true, query.Get("cache") != "shared", nil
 	}
 	return false, false, nil
