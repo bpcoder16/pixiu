@@ -316,6 +316,46 @@ func TestStartOnce(t *testing.T) {
 	}
 }
 
+func TestRunStateErrorBeforeListen(t *testing.T) {
+	t.Run("固定端口重复启动", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := ln.Addr().String()
+		if err := ln.Close(); err != nil {
+			t.Fatal(err)
+		}
+		s, _, served := startTestServer(t, Config{Addr: addr}, http.NotFoundHandler())
+		if err := s.Run(); !errors.Is(err, ErrStarted) {
+			t.Fatalf("固定端口重复 Run: %v, 期望 ErrStarted", err)
+		}
+		if err := s.Shutdown(); err != nil {
+			t.Fatal(err)
+		}
+		if err := awaitResult(t, served); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("关闭后地址被占用", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+		s, err := New(Config{Addr: ln.Addr().String()}, http.NotFoundHandler())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Shutdown(); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Run(); !errors.Is(err, ErrClosed) {
+			t.Fatalf("关闭后 Run: %v, 期望 ErrClosed", err)
+		}
+	})
+}
+
 func TestRunConcurrentShutdown(t *testing.T) {
 	for range 30 {
 		s, err := New(Config{Addr: "127.0.0.1:0"}, http.NotFoundHandler())
@@ -338,7 +378,9 @@ func TestRunConcurrentShutdown(t *testing.T) {
 
 func startTestServer(t *testing.T, cfg Config, handler http.Handler) (*Server, string, <-chan error) {
 	t.Helper()
-	cfg.Addr = "127.0.0.1:0"
+	if cfg.Addr == "" {
+		cfg.Addr = "127.0.0.1:0"
+	}
 	s, err := New(cfg, handler)
 	if err != nil {
 		t.Fatal(err)

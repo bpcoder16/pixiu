@@ -130,6 +130,16 @@ func (s *Server) serve(listener net.Listener) error {
 
 // Run 监听配置地址并阻塞运行,由另一个 goroutine 调用 Shutdown 发起关闭。
 func (s *Server) Run() error {
+	// 先返回已确定的生命周期错误,避免被监听错误掩盖;监听后仍需检查并发状态变更。
+	s.mu.Lock()
+	closing, started := s.closing, s.started
+	s.mu.Unlock()
+	if closing {
+		return ErrClosed
+	}
+	if started {
+		return ErrStarted
+	}
 	ln, err := net.Listen("tcp", s.config.Addr)
 	if err != nil {
 		return fmt.Errorf("httpserver: listen: %w", err)
