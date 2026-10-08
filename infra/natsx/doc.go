@@ -80,6 +80,7 @@
 // MaxMessages 为零时等于 Workers；不开放完整拉取选项。
 // 拉取期限固定使用 jetstream.DefaultExpires（当前为 30 秒）。启动时校验 Consumer.CachedInfo：
 // MaxRequestExpires 为零或不低于默认期限时允许，正值低于默认期限时在创建迭代器前报错。
+// MaxRequestBatch 为零或不低于有效 MaxMessages 时允许，超限时在创建迭代器前报错，不自动缩小预取数量。
 // 本模块不额外查询 Consumer 配置；调用方须传入当前配置，并在运行期间保持相关限制不变。
 // 其余拉取参数由 SDK 按默认规则设置。
 // ErrorHandler 在运行错误日志之后执行；心跳丢失后继续拉取，其他迭代器错误终止消费。

@@ -17,6 +17,7 @@ type ConsumeConfig struct {
 	// Workers 必须为正数，限制同时执行的 handler 数；handler 须支持并发调用。
 	Workers int
 	// MaxMessages 是 SDK 预取上限，不含已经交给 worker 的消息；零值等于 Workers，负值无效。
+	// 有效值不得超过 Consumer 配置的非零 MaxRequestBatch。
 	// 服务端 MaxAckPending 和 ACK 等待期限仍由业务 ConsumerConfig 决定。
 	MaxMessages int
 	// ErrorHandler 在模块记录消费运行错误后同步调用；nil 时仅记录日志。
@@ -27,7 +28,8 @@ type ConsumeConfig struct {
 // ConsumeWithWorkers 仅在启动阶段建立 Messages 迭代器并启动固定数量的 worker，成功后立即返回。
 // 不自动 ACK、NAK 或 Term；每条消息获得独立日志作用域和 Client 管理的 ctx。
 // 仅返回启动错误；消费句柄由 Client 内部登记和管理，不通过返回值提供。
-// Consumer 缓存配置的 MaxRequestExpires 须为零或不低于 SDK 默认 30 秒；运行期间保持相关限制不变。
+// Consumer 缓存配置的 MaxRequestExpires 须为零或不低于 SDK 默认 30 秒，
+// MaxRequestBatch 须为零或不低于有效 MaxMessages；运行期间保持相关限制不变。
 // Client.Close 统一排空，正常关闭完成或超时后取消消息 ctx；handler 内不得调用 Close。
 func (c *Client) ConsumeWithWorkers(consumer jetstream.Consumer, cfg ConsumeConfig, handler func(context.Context, jetstream.Msg)) error {
 	if consumer == nil || handler == nil {
@@ -48,6 +50,10 @@ func (c *Client) ConsumeWithWorkers(consumer jetstream.Consumer, cfg ConsumeConf
 		// 固定使用 SDK 默认拉取期限，在创建迭代器前拒绝不兼容的服务端限制。
 		if maxExpires := info.Config.MaxRequestExpires; maxExpires > 0 && maxExpires < jetstream.DefaultExpires {
 			return fmt.Errorf("natsx: consumer MaxRequestExpires must be zero or at least %s (got %s)", jetstream.DefaultExpires, maxExpires)
+		}
+		// 超限拉取的服务端拒绝不会直接由 Next 返回，须在启动前报错，避免消费空转。
+		if maxBatch := info.Config.MaxRequestBatch; maxBatch > 0 && cfg.MaxMessages > maxBatch {
+			return fmt.Errorf("natsx: MaxMessages (%d) exceeds consumer MaxRequestBatch (%d)", cfg.MaxMessages, maxBatch)
 		}
 	}
 	iterator, err := consumer.Messages(jetstream.PullMaxMessages(cfg.MaxMessages))

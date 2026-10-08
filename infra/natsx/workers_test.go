@@ -307,6 +307,93 @@ func TestConsumeWithWorkersValidatesMaxRequestExpires(t *testing.T) {
 	}
 }
 
+func TestConsumeWithWorkersValidatesMaxRequestBatch(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		maxBatch    int
+		workers     int
+		maxMessages int
+		wantError   string
+	}{
+		{
+			name:    "unlimited",
+			workers: 2,
+		},
+		{
+			name:        "below limit with more workers",
+			maxBatch:    2,
+			workers:     3,
+			maxMessages: 1,
+		},
+		{
+			name:        "at limit",
+			maxBatch:    2,
+			workers:     3,
+			maxMessages: 2,
+		},
+		{
+			name:     "default at limit",
+			maxBatch: 2,
+			workers:  2,
+		},
+		{
+			name:        "explicit above limit",
+			maxBatch:    1,
+			workers:     1,
+			maxMessages: 2,
+			wantError:   "MaxMessages (2) exceeds consumer MaxRequestBatch (1)",
+		},
+		{
+			name:      "default above limit",
+			maxBatch:  1,
+			workers:   2,
+			wantError: "MaxMessages (2) exceeds consumer MaxRequestBatch (1)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			captureLogs(t)
+			c, consumer := newWorkerTestClient(t, time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			config := consumer.CachedInfo().Config
+			config.MaxRequestBatch = tc.maxBatch
+			consumer, err := c.JetStream().UpdateConsumer(ctx, "WORKERS", config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publishWorkerMessages(t, c, 1)
+			finished := make(chan error, 1)
+			subscriptions := c.Conn().NumSubscriptions()
+			err = c.ConsumeWithWorkers(consumer, ConsumeConfig{
+				Workers:     tc.workers,
+				MaxMessages: tc.maxMessages,
+			}, func(_ context.Context, msg jetstream.Msg) {
+				finished <- msg.Ack()
+			})
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("超出批量上限未在启动时拒绝: %v", err)
+				}
+				if got := c.Conn().NumSubscriptions(); got != subscriptions {
+					t.Fatalf("非法配置启动了拉取订阅: got=%d, want=%d", got, subscriptions)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-finished:
+				if err != nil {
+					t.Fatalf("消息 ACK 失败: %v", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("合法的批量配置未能正常消费消息")
+			}
+		})
+	}
+}
+
 func TestConsumeWithWorkersRejectsInvalidArguments(t *testing.T) {
 	c, consumer := newWorkerTestClient(t, time.Second)
 	handler := func(context.Context, jetstream.Msg) {}
