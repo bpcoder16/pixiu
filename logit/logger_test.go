@@ -75,6 +75,47 @@ func TestLoggerLevelFilter(t *testing.T) {
 	}
 }
 
+func TestLoggerReleasesPooledFieldReferences(t *testing.T) {
+	for _, panicDuringEncoding := range []bool{false, true} {
+		t.Run(fmt.Sprintf("panic=%t", panicDuringEncoding), func(t *testing.T) {
+			l, _ := newTestLogger(t)
+			var states []*lineState
+			// 捕获实际分配的记录，避免依赖 sync.Pool 必须返回同一个对象。
+			l.(*coreLogger).pool.New = func() any {
+				state := &lineState{}
+				states = append(states, state)
+				return state
+			}
+			ctx := WithContext(context.Background())
+			AddMeta(ctx, Str("meta", "request"))
+			AddField(ctx, Any("payload", map[string]string{"body": "value"}))
+			func() {
+				defer func() {
+					r := recover()
+					if panicDuringEncoding && r != "encode failed" || !panicDuringEncoding && r != nil {
+						t.Fatalf("编码 panic = %v", r)
+					}
+				}()
+				l.Info(ctx, "record", Defer("lazy", func() Field {
+					if panicDuringEncoding {
+						panic("encode failed")
+					}
+					return Str("lazy", "resolved")
+				}))
+			}()
+			// 后续字段较少的日志也不能留下前一次记录的尾部引用。
+			l.Info(context.Background(), "smaller record", Int("n", 1))
+			for _, state := range states {
+				for i, field := range state.order[:cap(state.order)] {
+					if field.Key != "" || field.str != "" || field.val != nil {
+						t.Errorf("记录结束后第 %d 个字段仍持有引用", i)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestLoggerFieldOrderAndDuplicateKeys(t *testing.T) {
 	l, buf := newTestLogger(t)
 	l = l.With(Str("uid", "with"))

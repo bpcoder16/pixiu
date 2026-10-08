@@ -177,7 +177,11 @@ func (l *coreLogger) Output(ctx context.Context, level Level, callDepth int, msg
 	}
 	ls.buf = ls.buf[:0]
 	ls.order = ls.order[:0]
-	defer l.pool.Put(ls)
+	defer func() {
+		// 归还前释放请求字段引用；编码或写入 panic 时也不能留在池中。
+		clear(ls.order)
+		l.pool.Put(ls)
+	}()
 
 	if l.caller {
 		// 只对内置具体类型走快速路径。嵌入内置编码器的自定义类型可能重写
