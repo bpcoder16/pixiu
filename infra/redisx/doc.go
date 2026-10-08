@@ -85,6 +85,8 @@
 // ctx 已调用 logit.WithStart 时，每次业务命令或批量执行会以 Redis_<Name> 为前缀自动编号记录下游耗时，
 // 供业务调用 logit.InfoDuration 汇总；此登记不受 LogCommands 和日志级别限制。
 // 未调用 WithStart 时跳过；初始化 Ping 和连接握手命令不计入。
+// CLIENT 仅过滤 SETNAME、SETINFO、MAINT_NOTIFICATIONS 握手子命令（不区分大小写）；
+// LIST、UNBLOCK 等其他子命令正常参与单命令及批量日志和耗时登记。
 //
 // 单个逻辑下游可显式初始化默认客户端，省去每次按名称查询。cfg 和业务 ctx 由应用提供：
 //

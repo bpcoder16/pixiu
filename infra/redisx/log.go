@@ -37,7 +37,7 @@ func (*loggerHook) DialHook(next redis.DialHook) redis.DialHook { return next }
 func (h *loggerHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
 		name := cmd.Name()
-		if ctx.Value(startupPingKey{}) != nil || isInternalCommand(name) {
+		if ctx.Value(startupPingKey{}) != nil || isInternalCommand(cmd) {
 			return next(ctx, cmd)
 		}
 		begin := time.Now()
@@ -63,13 +63,31 @@ func (h *loggerHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.P
 	}
 }
 
-func isInternalCommand(name string) bool {
-	switch strings.ToLower(name) {
-	case "hello", "auth", "client", "select", "readonly":
+// isInternalCommand 识别无需独立记录日志和耗时的连接握手命令。
+// 按命令名及 CLIENT 子命令名匹配，不区分大小写；业务显式调用同名握手命令也会被过滤。
+func isInternalCommand(cmd redis.Cmder) bool {
+	switch strings.ToLower(cmd.Name()) {
+	case "hello", "auth", "select", "readonly":
 		return true
-	default:
-		return false
+	case "client":
+		args := cmd.Args()
+		if len(args) < 2 {
+			return false
+		}
+		var subcommand string
+		switch arg := args[1].(type) {
+		case string:
+			subcommand = arg
+		case []byte:
+			subcommand = string(arg)
+		}
+		// 只过滤驱动使用的握手子命令，保留 LIST、UNBLOCK 等业务命令的观测。
+		switch strings.ToLower(subcommand) {
+		case "setname", "setinfo", "maint_notifications":
+			return true
+		}
 	}
+	return false
 }
 
 func allInternal(cmds []redis.Cmder) bool {
@@ -77,7 +95,7 @@ func allInternal(cmds []redis.Cmder) bool {
 		return true
 	}
 	for _, cmd := range cmds {
-		if !isInternalCommand(cmd.Name()) {
+		if !isInternalCommand(cmd) {
 			return false
 		}
 	}
@@ -165,7 +183,7 @@ func (h *loggerHook) logBatch(ctx context.Context, elapsed time.Duration, cmds [
 	commands := make([]map[string]any, 0, end-start)
 	for _, cmd := range cmds[start:end] {
 		// 混合批量中也不能把 AUTH 等握手命令的参数写入日志。
-		if isInternalCommand(cmd.Name()) {
+		if isInternalCommand(cmd) {
 			continue
 		}
 		commands = append(commands, map[string]any{

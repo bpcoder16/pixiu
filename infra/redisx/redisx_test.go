@@ -320,12 +320,111 @@ func TestHookMissSlowAndInternalCommands(t *testing.T) {
 	}
 
 	buf.Reset()
-	for _, name := range []string{"HELLO", "AUTH", "CLIENT"} {
-		internal := redis.NewStatusCmd(ctx, name, "secret")
+	for _, args := range [][]any{
+		{"HELLO", "secret"},
+		{"AUTH", "secret"},
+		{"CLIENT", "sEtNaMe", "secret"},
+		{"CLIENT", []byte("SeTiNfO"), "LIB-NAME", "secret"},
+		{"CLIENT", "MAINT_NOTIFICATIONS", "on"},
+	} {
+		internal := redis.NewStatusCmd(ctx, args...)
 		_ = hook.ProcessHook(func(context.Context, redis.Cmder) error { return errors.New("secret") })(ctx, internal)
 	}
 	if buf.Len() != 0 {
 		t.Fatalf("内部握手命令不应记录: %q", buf.String())
+	}
+}
+
+func TestClientListLogsAndRecordsDuration(t *testing.T) {
+	var buf bytes.Buffer
+	useLogger(t, &buf, logit.DebugLevel)
+	client := newWireClient(t, true, func(string) string { return "+OK\r\n" })
+	ctx := logit.WithStart(context.Background())
+	if err := client.Client().ClientList(ctx).Err(); err != nil {
+		t.Fatal(err)
+	}
+	record := onlyRecord(t, &buf)
+	details := record["downstream_details"].(map[string]any)
+	args, ok := details["args"].([]any)
+	if record["level"] != "DEBUG" || details["command"] != "client" ||
+		!ok || len(args) != 1 || args[0] != "list" {
+		t.Fatalf("CLIENT LIST 未正常记录: %v", record)
+	}
+	buf.Reset()
+	logit.InfoDuration(ctx, "request done")
+	if _, ok := onlyRecord(t, &buf)["Redis_cache_1_duration_ms"]; !ok {
+		t.Fatal("CLIENT LIST 未登记耗时")
+	}
+}
+
+func TestHookClientUnblockLogsErrorAndSlow(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(strconv.FormatBool(fail), func(t *testing.T) {
+			var buf bytes.Buffer
+			useLogger(t, &buf, logit.DebugLevel)
+			ctx := logit.WithStart(context.Background())
+			hook := newLoggerHook("cache", time.Nanosecond, false)
+			var commandErr error
+			wantLevel := "WARN"
+			if fail {
+				commandErr = errors.New("private-error")
+				wantLevel = "ERROR"
+			}
+			cmd := redis.NewIntCmd(ctx, "CLIENT", "UNBLOCK", 42)
+			got := hook.ProcessHook(func(context.Context, redis.Cmder) error {
+				time.Sleep(time.Millisecond)
+				return commandErr
+			})(ctx, cmd)
+			if !errors.Is(got, commandErr) {
+				t.Fatalf("业务命令返回值改变: %v", got)
+			}
+			if record := onlyRecord(t, &buf); record["level"] != wantLevel {
+				t.Fatalf("CLIENT UNBLOCK 日志级别错误: %v", record)
+			}
+			buf.Reset()
+			logit.InfoDuration(ctx, "request done")
+			if _, ok := onlyRecord(t, &buf)["Redis_cache_1_duration_ms"]; !ok {
+				t.Fatal("CLIENT UNBLOCK 未登记耗时")
+			}
+		})
+	}
+}
+
+func TestHookClientPipelineFiltersOnlyHandshake(t *testing.T) {
+	var buf bytes.Buffer
+	useLogger(t, &buf, logit.DebugLevel)
+	ctx := logit.WithStart(context.Background())
+	hook := newLoggerHook("cache", time.Hour, true)
+	cmds := []redis.Cmder{
+		redis.NewStatusCmd(ctx, "CLIENT", "SETNAME", "private-name"),
+		redis.NewStatusCmd(ctx, "CLIENT", "SETINFO", "LIB-NAME", "private-library"),
+		redis.NewStatusCmd(ctx, "CLIENT", "MAINT_NOTIFICATIONS", "on"),
+		redis.NewStringCmd(ctx, "CLIENT", "LIST"),
+	}
+	if err := hook.ProcessPipelineHook(func(context.Context, []redis.Cmder) error {
+		return nil
+	})(ctx, cmds); err != nil {
+		t.Fatal(err)
+	}
+	details := onlyRecord(t, &buf)["downstream_details"].(map[string]any)
+	commands, ok := details["commands"].([]any)
+	if !ok || len(commands) != 1 {
+		t.Fatalf("混合批量未只保留业务 CLIENT 命令: %v", details)
+	}
+	business := commands[0].(map[string]any)
+	args := business["args"].([]any)
+	if business["command"] != "client" || len(args) != 1 || args[0] != "LIST" ||
+		strings.Contains(buf.String(), "private-") {
+		t.Fatalf("CLIENT 批量参数过滤错误: %v", details)
+	}
+	buf.Reset()
+	logit.InfoDuration(ctx, "request done")
+	record := onlyRecord(t, &buf)
+	if _, ok := record["Redis_cache_1_duration_ms"]; !ok {
+		t.Fatal("CLIENT 批量未登记耗时")
+	}
+	if _, ok := record["Redis_cache_2_duration_ms"]; ok {
+		t.Fatal("CLIENT 批量重复登记耗时")
 	}
 }
 
@@ -570,7 +669,9 @@ func TestHookSkipsDurationForStartupAndInternalCommands(t *testing.T) {
 	}
 	internal := []redis.Cmder{
 		redis.NewStatusCmd(ctx, "HELLO"),
-		redis.NewStatusCmd(ctx, "CLIENT"),
+		redis.NewStatusCmd(ctx, "CLIENT", "SETNAME", "secret"),
+		redis.NewStatusCmd(ctx, "CLIENT", "SETINFO", "LIB-NAME", "secret"),
+		redis.NewStatusCmd(ctx, "CLIENT", "MAINT_NOTIFICATIONS", "on"),
 	}
 	if err := hook.ProcessPipelineHook(func(context.Context, []redis.Cmder) error {
 		return nil
