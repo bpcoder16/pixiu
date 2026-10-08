@@ -178,49 +178,6 @@ func TestTraceHeaderPropagation(t *testing.T) {
 	}
 }
 
-func TestCORS(t *testing.T) {
-	if _, err := CORS(CORSConfig{
-		AllowedOrigins:   []string{"*"},
-		AllowCredentials: true,
-	}); err == nil {
-		t.Fatal("接受通配凭据")
-	}
-	cors, err := CORS(CORSConfig{
-		AllowedOrigins:   []string{"https://example.com"},
-		AllowedMethods:   []string{"POST"},
-		AllowedHeaders:   []string{"X-Token"},
-		AllowCredentials: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := New(Config{
-		DisableAccessLog: true,
-		Middlewares:      []gin.HandlerFunc{cors},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.POST("/", func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	})
-	req := httptest.NewRequest("OPTIONS", "/", nil)
-	req.Header.Set("Origin", "https://example.com")
-	req.Header.Set("Access-Control-Request-Method", "POST")
-	req.Header.Set("Access-Control-Request-Headers", "X-Token")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != 204 || !strings.Contains(w.Header().Get("Vary"), "Origin") || w.Header().Get("Access-Control-Allow-Credentials") != "true" {
-		t.Fatalf("预检: %v", w)
-	}
-	req.Header.Set("Access-Control-Request-Headers", "X-Other")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != 403 {
-		t.Fatal(w.Code)
-	}
-}
-
 func TestAbortHandlerAndObserverIsolation(t *testing.T) {
 	var result RequestResult
 	r, err := New(Config{

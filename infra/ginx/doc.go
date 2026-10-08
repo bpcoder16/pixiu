@@ -1,4 +1,4 @@
-// Package ginx 提供独立 Gin Engine、请求日志、Recovery 和可选 CORS。
+// Package ginx 提供独立 Gin Engine、请求日志和 Recovery。
 //
 // 以下示例需导入 github.com/gin-gonic/gin 和 github.com/bpcoder16/pixiu/infra/ginx：
 //
