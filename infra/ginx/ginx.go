@@ -75,7 +75,7 @@ type RequestResult struct {
 type panicKey struct{}
 type abortKey struct{}
 
-// New 创建独立 Engine,不改变 Gin 全局模式、Validator 或注册管理端点。
+// New 创建独立 Engine,默认关闭自动重定向,不改变 Gin 全局模式、Validator 或注册管理端点。
 func New(cfg Config) (*gin.Engine, error) {
 	for _, middleware := range cfg.Middlewares {
 		if middleware == nil {
@@ -83,6 +83,9 @@ func New(cfg Config) (*gin.Engine, error) {
 		}
 	}
 	r := gin.New()
+	// Gin 自动重定向在中间件之前返回;默认让不匹配路径进入可观测的 404 流程。
+	r.RedirectTrailingSlash = false
+	r.RedirectFixedPath = false
 	if err := r.SetTrustedProxies(append([]string(nil), cfg.TrustedProxies...)); err != nil {
 		return nil, err
 	}
@@ -133,6 +136,7 @@ func (w *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 func observe(cfg Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		started := time.Now()
+		initialStatus := c.Writer.Status()
 		writer := &responseWriter{ResponseWriter: c.Writer}
 		var request *requestInfo
 		// 按入口状态控制本次访问日志,中途启用 Info 不补记。
@@ -178,6 +182,21 @@ func observe(cfg Config) gin.HandlerFunc {
 			}
 		}()
 		c.Next()
+		// Gin 在中间件退出后才补写默认 404/405;提前完成相同回退,让结果包含完整响应。
+		// 保留业务已写出的响应及状态变更;中断重新 panic 时不会执行到这里。
+		if !c.Writer.Written() && c.Writer.Status() == initialStatus {
+			var body string
+			switch initialStatus {
+			case http.StatusNotFound:
+				body = "404 page not found"
+			case http.StatusMethodNotAllowed:
+				body = "405 method not allowed"
+			default:
+				return
+			}
+			c.Header("Content-Type", gin.MIMEPlain)
+			_, _ = c.Writer.Write([]byte(body))
+		}
 	}
 }
 

@@ -17,6 +17,9 @@
 //	// router 实现 http.Handler,交给应用选用的 HTTP 服务端。
 //
 // New 不修改 Gin 全局模式或 Validator,不自动注册管理端点。
+// 默认关闭自动重定向,尾斜杠不匹配按 404 处理;默认 404/405 在结果采集前写出完整正文。
+// 需要可观测的重定向时可在显式路由中调用 c.Redirect。
+// 自行重新开启 Gin 自动重定向会绕过内置中间件,不产生访问日志、Observe 或日志 ID 响应头。
 // 通过 TraceHeader(PIXIU-Log-Id)接收并回写日志 ID;非空值原样使用,缺失或为空时生成。
 // 访问日志统一使用 logit.InfoDuration,不随状态码改变 Info 级别。
 // LogRequestInfo、LogResponseInfo 默认关闭,分别追加 request_info、response_info 详情;
