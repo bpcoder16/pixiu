@@ -126,6 +126,7 @@ func main() {
 
 | 包 | 能力 | 主要依赖 |
 | --- | --- | --- |
+| [`infra/configx`](infra/configx/doc.go) | YAML / TOML / JSON 结构体配置加载、全局命名获取与零值兜底 | Viper |
 | [`infra/httpcall`](infra/httpcall/doc.go) | 可复用 HTTP 下游客户端、结果日志、请求级耗时 | Resty v2、logit |
 | [`infra/httpserver`](infra/httpserver/doc.go) | 标准 `http.Handler` 服务端、监听、限时关闭 | 标准库 |
 | [`infra/ginx`](infra/ginx/doc.go) | 独立 Gin Engine、请求日志作用域、访问日志与 Recovery | Gin、logit |
