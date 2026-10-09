@@ -5,9 +5,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
+
+func jsonNumberHook(next mapstructure.DecodeHookFunc) mapstructure.DecodeHookFunc {
+	return func(from, to reflect.Value) (any, error) {
+		if number, ok := from.Interface().(json.Number); ok {
+			// json.Number 底层是 string，但不能隐式映射为字符串字段。
+			if to.Kind() == reflect.String && to.Type() != from.Type() {
+				return nil, fmt.Errorf("cannot decode JSON number as %v", to.Type())
+			}
+			// 默认字符串 hook 会断言 string；数字绕过它们，由 mapstructure 解析。
+			return number, nil
+		}
+		return mapstructure.DecodeHookExec(next, from, to)
+	}
+}
 
 // fileDecoders 保存完整源数据用于严格映射，JSON 额外保留数字精度。
 type fileDecoders struct {

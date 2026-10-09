@@ -1,6 +1,7 @@
 package configx
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -76,8 +77,11 @@ func TestLoadFormats(t *testing.T) {
 
 func TestLoadRejectsWeakTypeConversions(t *testing.T) {
 	type typedConfig struct {
-		Port    int  `mapstructure:"port"`
-		Enabled bool `mapstructure:"enabled"`
+		Port    int      `mapstructure:"port"`
+		Enabled bool     `mapstructure:"enabled"`
+		Name    string   `mapstructure:"name"`
+		Alias   *string  `mapstructure:"alias"`
+		Origins []string `mapstructure:"origins"`
 	}
 	formats := []struct {
 		ext     string
@@ -96,6 +100,11 @@ func TestLoadRejectsWeakTypeConversions(t *testing.T) {
 		{"string-to-bool", "enabled", `"true"`},
 		{"bool-to-int", "port", "true"},
 		{"int-to-bool", "enabled", "1"},
+		{"int-to-string", "name", "123"},
+		{"float-to-string", "name", "1.25"},
+		{"int-to-string-pointer", "alias", "123"},
+		{"int-to-slice", "origins", "123"},
+		{"int-in-string-slice", "origins", "[123]"},
 	}
 	for _, format := range formats {
 		for _, tc := range cases {
@@ -111,6 +120,27 @@ func TestLoadRejectsWeakTypeConversions(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestLoadJSONNumericDurations(t *testing.T) {
+	type durationConfig struct {
+		Timeout time.Duration   `mapstructure:"timeout"`
+		Retry   *time.Duration  `mapstructure:"retry"`
+		Delays  []time.Duration `mapstructure:"delays"`
+	}
+	name := configName(t)
+	file := configFile(t, ".json", `{"timeout":1000000000,"retry":2000000000,"delays":[3000000000,"4s"]}`)
+	if err := Load[durationConfig](name, file); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Get[durationConfig](name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Timeout != time.Second || got.Retry == nil || *got.Retry != 2*time.Second ||
+		!reflect.DeepEqual(got.Delays, []time.Duration{3 * time.Second, 4 * time.Second}) {
+		t.Fatalf("数字时长应按纳秒解析，字符串时长应保留原有行为: %+v", got)
 	}
 }
 
@@ -325,16 +355,17 @@ func TestConcurrentLoadPublishesOneCompleteConfig(t *testing.T) {
 
 func TestLoadJSONPreservesIntegerPrecision(t *testing.T) {
 	type numbers struct {
-		ID uint64 `mapstructure:"id"`
+		ID  uint64      `mapstructure:"id"`
+		Raw json.Number `mapstructure:"raw"`
 	}
 	for _, id := range []uint64{9007199254740993, 18446744073709551615} {
 		t.Run(fmt.Sprint(id), func(t *testing.T) {
 			name := configName(t)
-			if err := Load[numbers](name, configFile(t, ".json", fmt.Sprintf(`{"id":%d}`, id))); err != nil {
+			if err := Load[numbers](name, configFile(t, ".json", fmt.Sprintf(`{"id":%d,"raw":%d}`, id, id))); err != nil {
 				t.Fatal(err)
 			}
 			got, err := Get[numbers](name)
-			if err != nil || got.ID != id {
+			if err != nil || got.ID != id || got.Raw.String() != fmt.Sprint(id) {
 				t.Fatalf("整数精度丢失: %+v, %v", got, err)
 			}
 		})

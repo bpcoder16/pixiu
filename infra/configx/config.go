@@ -57,7 +57,7 @@ func Load[T any](name, filePath string) error {
 				}
 				return data, nil
 			},
-			dc.DecodeHook,
+			jsonNumberHook(dc.DecodeHook),
 		)
 	}); err != nil {
 		return fmt.Errorf("configx: decode config %q from %q: %w", name, filePath, err)
