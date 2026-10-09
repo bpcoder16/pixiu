@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/bpcoder16/pixiu/rotatefile"
@@ -34,7 +35,10 @@ func TestHookStderrCapturesWrites(t *testing.T) {
 	if err := HookStderr(NewWriter(w)); err != nil {
 		t.Fatal(err)
 	}
-	fmt.Fprintln(os.Stderr, "captured via hook")
+	// -json 模式会把 os.Stderr 绑定到 os.Stdout，直接写 fd 2 才能验证 stderr 劫持。
+	if _, err := syscall.Write(2, []byte("captured via hook\n")); err != nil {
+		t.Fatal(err)
+	}
 
 	// 先恢复再读:fd 2 归还原始 stderr,管道写端仅剩 w,关闭后 ReadAll 得到 EOF
 	if err := restoreFd(saved, 2); err != nil {
@@ -136,11 +140,18 @@ func TestHookWithPlainFile(t *testing.T) {
 		for _, stream := range []struct {
 			name string
 			fd   int
-			file *os.File
 			hook func(Writer) error
 		}{
-			{"stdout", 1, os.Stdout, HookStdout},
-			{"stderr", 2, os.Stderr, HookStderr},
+			{
+				name: "stdout",
+				fd:   1,
+				hook: HookStdout,
+			},
+			{
+				name: "stderr",
+				fd:   2,
+				hook: HookStderr,
+			},
 		} {
 			t.Run(constructor+"/"+stream.name, func(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "std.log")
@@ -176,7 +187,8 @@ func TestHookWithPlainFile(t *testing.T) {
 					if err := stream.hook(w); err != nil {
 						t.Fatal(err)
 					}
-					if _, err := fmt.Fprintln(stream.file, "captured plain file"); err != nil {
+					// 写入被 Hook 重定向的真实 fd，不依赖测试框架对标准流变量的绑定。
+					if _, err := syscall.Write(stream.fd, []byte("captured plain file\n")); err != nil {
 						t.Fatal(err)
 					}
 				}()
