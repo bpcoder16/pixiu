@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="go.mod"><img src="https://img.shields.io/badge/Go-1.27.1%2B-00ADD8?logo=go&logoColor=white" alt="Go 1.27.1+"></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/Go-1.27.2%2B-00ADD8?logo=go&logoColor=white" alt="Go 1.27.2+"></a>
   <a href="https://pkg.go.dev/github.com/bpcoder16/pixiu"><img src="https://pkg.go.dev/badge/github.com/bpcoder16/pixiu.svg" alt="Go Reference"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" alt="许可证 Apache-2.0"></a>
 </p>
@@ -42,7 +42,7 @@
 
 ## 安装
 
-当前 [go.mod](go.mod) 要求 **Go 1.27.1 或更高版本**。
+当前 [go.mod](go.mod) 要求 **Go 1.27.2 或更高版本**。
 
 在已有 Go module 的项目中安装需要的包：
 
