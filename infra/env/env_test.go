@@ -105,30 +105,25 @@ func TestInitUsesProvidedLocalIP(t *testing.T) {
 	}
 }
 
-func TestInitDetectsLocalIPv4(t *testing.T) {
+func TestInitDetectsLocalIP(t *testing.T) {
 	isolateEnvironment(t)
 	cfg := testConfig(t)
 	cfg.LocalIP = ""
 	want, detectErr := netx.LocalIPv4()
-	err := Init(cfg)
 	if detectErr != nil {
-		if err == nil || !strings.Contains(err.Error(), "localIP") {
-			t.Fatalf("查询失败应报告 localIP 错误: %v", err)
-		}
-		if value := panicValue(func() { LocalIP() }); value == nil {
-			t.Fatal("查询失败不应发布环境")
-		}
-		if err := Init(testConfig(t)); err != nil {
-			t.Fatalf("指定 IP 后应允许重新初始化: %v", err)
-		}
-		return
+		want, detectErr = netx.LocalIPv6()
 	}
-	if err != nil {
-		t.Fatal(err)
+	if err := Init(cfg); err != nil {
+		t.Fatalf("可选 IP 的查询结果不应阻止初始化: %v", err)
 	}
 	got := LocalIP()
-	if got != want || net.ParseIP(got).To4() == nil {
-		t.Fatalf("应使用 netx 查询的 IPv4: got %q, want %q", got, want)
+	if detectErr != nil {
+		if got != "" {
+			t.Fatalf("IPv4 和 IPv6 查询均失败应保留空 IP: got %q", got)
+		}
+		t.Logf("IP 查询失败，环境仍成功发布: %v", detectErr)
+	} else if got != want || net.ParseIP(got) == nil {
+		t.Fatalf("应优先使用 IPv4，失败后使用 IPv6: got %q, want %q", got, want)
 	}
 	if cfg.LocalIP != "" {
 		t.Fatal("补齐 IP 不应修改调用方配置")
@@ -202,7 +197,7 @@ func TestInitRejectsUnavailableWorkingDirectory(t *testing.T) {
 }
 
 func TestInitRejectsInvalidConfigDirectory(t *testing.T) {
-	for _, name := range []string{"missing", "file", "unreadable", "unsearchable"} {
+	for _, name := range []string{"missing", "file"} {
 		t.Run(name, func(t *testing.T) {
 			isolateEnvironment(t)
 			cfg := testConfig(t)
@@ -216,23 +211,6 @@ func TestInitRejectsInvalidConfigDirectory(t *testing.T) {
 				if err := os.WriteFile(cfg.ConfigDirPath, []byte("env: {}"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-			default:
-				if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-					t.Skip("当前环境无法通过 Unix 权限位限制目录访问")
-				}
-				mode := os.FileMode(0o300)
-				if name == "unsearchable" {
-					mode = 0o600
-				}
-				t.Cleanup(func() {
-					if err := os.Chmod(cfg.ConfigDirPath, 0o700); err != nil {
-						t.Error(err)
-					}
-				})
-				if err := os.Chmod(cfg.ConfigDirPath, mode); err != nil {
-					t.Fatal(err)
-				}
-				wantError = os.ErrPermission
 			}
 			err := Init(cfg)
 			if err == nil || !strings.Contains(err.Error(), "configDirPath") {
@@ -246,6 +224,57 @@ func TestInitRejectsInvalidConfigDirectory(t *testing.T) {
 			}
 			if err := Init(testConfig(t)); err != nil {
 				t.Fatalf("修正目录后应允许重新初始化: %v", err)
+			}
+		})
+	}
+}
+
+func TestInitRequiresConfigDirectoryReadAndSearchPermission(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("当前环境无法通过 Unix 权限位限制目录访问")
+	}
+	for _, tc := range []struct {
+		name    string
+		mode    os.FileMode
+		wantErr bool
+	}{
+		{"unreadable", 0o300, true},
+		{"unsearchable", 0o600, true},
+		{"read-and-search-only", 0o500, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnvironment(t)
+			cfg := testConfig(t)
+			// 只校验目录自身权限，不要求目录可写或其中每个文件可读。
+			if err := os.WriteFile(filepath.Join(cfg.ConfigDirPath, "app.yaml"), []byte("env: {}"), 0o000); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := os.Chmod(cfg.ConfigDirPath, 0o700); err != nil {
+					t.Error(err)
+				}
+			})
+			if err := os.Chmod(cfg.ConfigDirPath, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			err := Init(cfg)
+			if tc.wantErr {
+				if !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), "configDirPath") {
+					t.Fatalf("缺少目录读取或遍历权限应返回权限错误: %v", err)
+				}
+				if value := panicValue(func() { ConfigDirPath() }); value == nil {
+					t.Fatal("目录权限校验失败不应发布环境")
+				}
+				if err := os.Chmod(cfg.ConfigDirPath, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				err = Init(cfg)
+			}
+			if err != nil {
+				t.Fatalf("目录可读、可遍历时应允许初始化: %v", err)
+			}
+			if ConfigDirPath() != cfg.ConfigDirPath {
+				t.Fatal("配置目录应原样保存")
 			}
 		})
 	}

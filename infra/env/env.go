@@ -23,9 +23,9 @@ var defaultEnv atomic.Pointer[environment]
 var ErrAlreadyInitialized = errors.New("env: environment is already initialized")
 
 // Init 校验配置并一次性发布进程环境，供 HTTP、命令行等启动入口复用。
-// ConfigDirPath 必须为已存在且可读、可遍历的绝对目录，校验后原样保存。
-// 不清理路径，不检查文件自身权限。失败不改变已有环境。
-// LocalIP 非空时校验格式，空值通过 netx 查询本机 IPv4；查询失败返回错误。
+// ConfigDirPath 必须为已存在且当前进程可列举、可遍历的绝对目录，校验后原样保存。
+// 不清理路径，不要求目录可写，不递归检查子目录或文件内容读取权限。失败不改变已有环境。
+// LocalIP 非空时校验格式，空值通过 netx 先查询本机 IPv4，失败后查询 IPv6；均失败时保持为空。
 // RootDirPath 自动保存 Init 时的工作目录绝对路径；获取失败返回错误。
 // 并发调用仅一次成功；成功后再次调用返回 ErrAlreadyInitialized。不修改 time.Local。
 func Init(cfg Config) error {
@@ -76,7 +76,7 @@ func TimeLocation() *time.Location { return currentEnv().location }
 // ConfigDirPath 返回初始化时传入的配置目录原值；环境尚未初始化时 panic。
 func ConfigDirPath() string { return currentEnv().configDirPath }
 
-// LocalIP 返回初始化时指定或查询得到的 IP 快照；环境尚未初始化时 panic。
+// LocalIP 返回初始化时指定或查询得到的 IP 快照；IPv4、IPv6 查询均失败时为空，环境尚未初始化时 panic。
 func LocalIP() string { return currentEnv().localIP }
 
 // RootDirPath 返回 Init 时的工作目录绝对路径快照；环境尚未初始化时 panic。
