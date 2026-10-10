@@ -226,7 +226,7 @@ func TestCommandRespectsContextDeadline(t *testing.T) {
 
 func TestHookLogsCommandResultsAndArgs(t *testing.T) {
 	var buf bytes.Buffer
-	useLogger(t, &buf, logit.DebugLevel)
+	useLogger(t, &buf, logit.InfoLevel)
 	ctx := context.Background()
 	cmd := redis.NewStringCmd(ctx, "GET", "private-key")
 	cmd.SetVal("private-value")
@@ -235,7 +235,7 @@ func TestHookLogsCommandResultsAndArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := onlyRecord(t, &buf)
-	if record["level"] != "DEBUG" ||
+	if record["level"] != "INFO" ||
 		record["msg"] != "Redis" ||
 		record["downstream_type"] != "Redis" ||
 		record["downstream_id"] != "cache" {
@@ -292,7 +292,7 @@ func TestHookLogsCommandResultsAndArgs(t *testing.T) {
 
 func TestHookMissSlowAndInternalCommands(t *testing.T) {
 	var buf bytes.Buffer
-	useLogger(t, &buf, logit.DebugLevel)
+	useLogger(t, &buf, logit.InfoLevel)
 	ctx := context.Background()
 	cmd := redis.NewStringCmd(ctx, "GET", "key")
 	hook := newLoggerHook("cache", time.Hour, true)
@@ -301,7 +301,7 @@ func TestHookMissSlowAndInternalCommands(t *testing.T) {
 		t.Fatalf("未命中语义改变: %v", got)
 	}
 	record := onlyRecord(t, &buf)
-	if record["level"] != "DEBUG" || record["downstream_details"].(map[string]any)["status"] != "miss" {
+	if record["level"] != "INFO" || record["downstream_details"].(map[string]any)["status"] != "miss" {
 		t.Fatalf("未命中应是正常结果: %v", record)
 	}
 
@@ -346,7 +346,7 @@ func TestClientListLogsAndRecordsDuration(t *testing.T) {
 	record := onlyRecord(t, &buf)
 	details := record["downstream_details"].(map[string]any)
 	args, ok := details["args"].([]any)
-	if record["level"] != "DEBUG" || details["command"] != "client" ||
+	if record["level"] != "INFO" || details["command"] != "client" ||
 		!ok || len(args) != 1 || args[0] != "list" {
 		t.Fatalf("CLIENT LIST 未正常记录: %v", record)
 	}
@@ -477,7 +477,7 @@ func TestHookPipelineReportsLaterErrorAndTxCount(t *testing.T) {
 
 func TestHookPipelineLogsBusinessCommands(t *testing.T) {
 	var buf bytes.Buffer
-	useLogger(t, &buf, logit.DebugLevel)
+	useLogger(t, &buf, logit.InfoLevel)
 	ctx := context.Background()
 	get := redis.NewStringCmd(ctx, "GET", "private-key")
 	get.SetVal("private-result")
@@ -492,7 +492,7 @@ func TestHookPipelineLogsBusinessCommands(t *testing.T) {
 	record := onlyRecord(t, &buf)
 	details := record["downstream_details"].(map[string]any)
 	commands, ok := details["commands"].([]any)
-	if record["level"] != "DEBUG" || !ok || len(commands) != 2 {
+	if record["level"] != "INFO" || !ok || len(commands) != 2 {
 		t.Fatalf("批量请求参数缺失: %v", details)
 	}
 	first := commands[0].(map[string]any)
@@ -560,7 +560,7 @@ func TestHookRoutesByContextName(t *testing.T) {
 
 func TestHookRecordsDurationWithoutCommandLog(t *testing.T) {
 	var buf bytes.Buffer
-	useLogger(t, &buf, logit.InfoLevel)
+	useLogger(t, &buf, logit.WarnLevel)
 	ctx := logit.WithStart(context.Background())
 	cmd := redis.NewStringCmd(ctx, "GET", "key")
 
@@ -587,6 +587,8 @@ func TestHookRecordsDurationWithoutCommandLog(t *testing.T) {
 		t.Fatalf("正常命令不应输出日志: %q", buf.String())
 	}
 
+	// 恢复 Info 级别输出汇总，验证开关关闭或级别过滤均不影响耗时登记。
+	useLogger(t, &buf, logit.InfoLevel)
 	logit.InfoDuration(ctx, "request done")
 	record := onlyRecord(t, &buf)
 	for _, key := range []string{

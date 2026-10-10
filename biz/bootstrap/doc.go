@@ -1,4 +1,4 @@
-// Package bootstrap 提供日志和 MySQL 多实例的通用初始化入口，供项目自己的 bootstrap
+// Package bootstrap 提供日志、MySQL 和 Redis 多实例的通用初始化入口，供项目自己的 bootstrap
 // 声明资源后调用，再执行业务服务装配。设计见 docs/bootstrap-design.md。
 //
 // 应用负责加载配置、创建资源关闭栈，并在初始化前登记关闭流程：
@@ -12,6 +12,7 @@
 //	}()
 //	bootstrap.MustRegisterMySQL("orders", true)
 //	bootstrap.MustRegisterMySQL("reports", false)
+//	bootstrap.MustRegisterRedis("orders", true)
 //	bootstrap.MustBaseInit(&config.AppConfig, &resources)
 //	logit.Info(context.Background(), "application initialized")
 //
@@ -40,6 +41,21 @@
 // 各实例的 InitTimeout 独立生效，构造使用 mysqlx 内部超时，业务查询使用自己的 context。
 // 首个实例创建前只登记一次 mysqlx.CloseAll，不再逐个登记 Client.Close；
 // 部分创建失败的连接由 mysqlx 清理，此前已完成的实例由应用栈统一关闭。
+//
+// Redis 使用 MustRegisterRedis(name, isDefault) 声明，与 MySQL 独立判重，允许同名。
+// MySQL 初始化后，读取配置目录下的 redis.<name>.yaml，先严格解析、校验全部 Redis 文件，
+// 再按声明顺序创建并 Ping 验活；未声明时不初始化或关闭 Redis 模块。
+// 模板见 conf.example/redis.example.yaml；首版使用单节点 TCP，文件不接受 name、isDefault。
+// host、port、username、password、db、驱动超时、maxRetries、pool 和日志开关由文件提供。
+// host 必填，port 零值默认 6379，db 非负；pool.size 对应 PoolSize，
+// pool.maxActiveConns 限制该池连接数。其余连接参数零值沿用 go-redis 语义。
+// 时间使用带单位字符串，负值无效；maxRetries 的 -1 禁用命令重试，0 使用驱动默认重试。
+// 初始化没有 initTimeout 总预算，沿用 redisx 的驱动超时与重试；业务命令传入自己的 context。
+// logCommands 默认 false，只关闭正常命令的 Info 日志，慢调用和错误日志仍包含请求参数。
+// redisx.Default().Client() 与 redisx.Named(name).Client() 获取同一默认客户端。
+// 创建首个实例前只登记一次 redisx.CloseAll，单个失败实例由 redisx 立即清理；
+// 此前成功的 Redis、MySQL 与日志交给应用资源栈关闭，不重复登记单个客户端 Close。
+// 关闭前先停止并等待业务任务及订阅退出，再逆序关闭项目资源、Redis、MySQL 与日志。
 //
 // 日志固定使用 rotatefile，format 必须显式设置为 text/json；默认启动目录下的 log 目录、每小时轮转、
 // 每个分流文件保留 48 个实际文件。config.Log 可配置 format、caller、dir 目录、names、rotate。

@@ -18,7 +18,7 @@ type Config struct {
 	Options redis.Options
 	// SlowThreshold 是慢命令阈值；零值默认 200 毫秒，负数无效。
 	SlowThreshold time.Duration
-	// LogCommands 控制是否记录正常命令的 Debug 日志；所有已输出的业务命令日志
+	// LogCommands 控制是否记录正常命令的 Info 日志；所有已输出的业务命令日志
 	// 均附加完整请求参数，可能包含 key、值和凭据。
 	LogCommands bool
 }

@@ -204,7 +204,7 @@ func (h *loggerHook) level(ctx context.Context, elapsed time.Duration, status st
 	case elapsed > h.slowThreshold:
 		level = logit.WarnLevel
 	case h.logCommands:
-		level = logit.DebugLevel
+		level = logit.InfoLevel
 	default:
 		return 0, false
 	}

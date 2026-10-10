@@ -77,7 +77,7 @@
 // TCP 地址，并设置 TLSConfig，不应将 Network 设为 "tls"。redisx 要求 Addr 非空。
 // SlowThreshold 为 0 时默认 200 毫秒，负数无效。
 // MaxRetries 为 0 时驱动默认重试 3 次，为 -1 时禁用重试；非幂等操作应显式选择。
-// 默认只记录失败与慢调用；LogCommands 开启后正常命令也以 Debug 输出。
+// 默认只记录失败与慢调用；LogCommands 开启后正常命令也以 Info 输出。
 // 所有已输出的业务命令日志均附加完整请求参数，可能包含 key、值和凭据。
 // 日志保留 error_type 分类，并以 error_code 输出白名单内的 Redis 错误码，
 // 其他情况为空字符串；不包含命令返回值或原始错误文本。底层客户端供业务使用全部命令、

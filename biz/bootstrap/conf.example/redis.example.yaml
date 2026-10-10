@@ -1,0 +1,36 @@
+# 复制为 app.yaml 同目录下的 redis.<name>.yaml，并填写部署连接信息。
+# bootstrap 通过 MustRegisterRedis(name, isDefault) 声明实例，文件不包含 name 或 isDefault。
+# 首版为单节点 TCP；host 不包含端口，IPv6 不加方括号。port 零值默认 6379。
+host: "127.0.0.1"
+port: 6379
+username: ""
+password: ""
+db: 0
+
+# 时间使用带单位字符串，负值无效；零值沿用 go-redis 默认值。
+# 初始化没有独立的 initTimeout 总预算，由驱动超时及重试控制。
+dialTimeout: "3s"
+readTimeout: "3s"
+writeTimeout: "3s"
+# -1 禁用命令重试；省略或 0 使用驱动默认 3 次重试。
+# 计数、锁、发布和非幂等脚本应明确选择重试策略。
+maxRetries: -1
+
+pool:
+  # PoolSize 基础大小；MaxActiveConns 限制该池分配的连接数（0 不限制）。
+  # 连接数字段非负，零值沿用驱动语义；这些参数按实例、连接池生效。
+  size: 100
+  maxActiveConns: 0
+  minIdleConns: 10
+  maxIdleConns: 20
+  # 按当前 readTimeout 显式设置驱动默认等待时间：3s + 1s。
+  timeout: "4s"
+  connMaxIdleTime: "30m"
+  # 0 不按连接存活时间回收。
+  connMaxLifetime: "0s"
+
+# 零值默认 200ms。
+slowThreshold: "200ms"
+# 默认 false，仅控制正常命令的 Info 日志。
+# 慢调用和错误日志仍会输出；所有已输出的业务命令日志均包含请求参数。
+logCommands: true
