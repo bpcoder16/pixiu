@@ -1,4 +1,4 @@
-package elasticSearchx
+package elasticsearchx
 
 import (
 	"errors"
@@ -7,7 +7,7 @@ import (
 	"github.com/bpcoder16/pixiu/infra/internal/named"
 )
 
-var namedClients = named.New[*Client]("elasticSearchx")
+var namedClients = named.New[*Client]("elasticsearchx")
 
 // RegisterNamed 供版本适配包调用：检查名称后构造并登记客户端。
 // 业务使用 v7/v8/v9.NewNamed；build 须返回新建且独占的实例，失败时自行清理资源。
@@ -24,7 +24,7 @@ func RegisterDefault(name string, build func() (*Client, error)) (*Client, error
 
 func registerClient(name string, build func() (*Client, error), asDefault bool) (*Client, error) {
 	if strings.TrimSpace(name) == "" {
-		return nil, errors.New("elasticSearchx: empty client name")
+		return nil, errors.New("elasticsearchx: empty client name")
 	}
 	create := namedClients.Create
 	if asDefault {

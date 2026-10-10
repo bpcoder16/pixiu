@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,11 +15,12 @@ import (
 
 type bootstrapRedisServer struct {
 	port      int
+	listener  net.Listener
 	connected atomic.Bool
 	closed    chan struct{}
 }
 
-// 仅模拟单连接握手、Ping 和 Get，配置、超时与关闭仍经过真实 go-redis 驱动。
+// 模拟多连接握手、Ping 和 Get，支持模板中的预建空闲连接池。
 func newBootstrapRedisServer(t *testing.T, value, pingReply string) *bootstrapRedisServer {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -26,8 +28,9 @@ func newBootstrapRedisServer(t *testing.T, value, pingReply string) *bootstrapRe
 		t.Fatal(err)
 	}
 	server := &bootstrapRedisServer{
-		port:   listener.Addr().(*net.TCPAddr).Port,
-		closed: make(chan struct{}),
+		port:     listener.Addr().(*net.TCPAddr).Port,
+		listener: listener,
+		closed:   make(chan struct{}),
 	}
 	stop := make(chan struct{})
 	t.Cleanup(func() {
@@ -39,46 +42,30 @@ func newBootstrapRedisServer(t *testing.T, value, pingReply string) *bootstrapRe
 	deadline := time.Now().Add(10 * time.Second)
 	go func() {
 		defer close(server.closed)
-		conn, err := listener.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		_ = conn.SetDeadline(deadline)
-		server.connected.Store(true)
-		go func() {
-			select {
-			case <-stop:
-				_ = conn.Close()
-			case <-server.closed:
-			}
-		}()
-		reader := bufio.NewReader(conn)
+		var connections sync.WaitGroup
+		defer connections.Wait()
 		for {
-			args, err := readBootstrapRedisCommand(reader)
+			conn, err := listener.Accept()
 			if err != nil {
 				return
 			}
-			reply := "+OK\r\n"
-			switch strings.ToUpper(args[0]) {
-			case "HELLO":
-				reply = "-ERR unknown command 'HELLO'\r\n"
-			case "PING":
-				if pingReply == "" {
-					// 不返回响应，用真实 socket deadline 验证初始化失败时的回收。
-					_, _ = io.Copy(io.Discard, conn)
-					return
-				}
-				reply = pingReply
-			case "GET":
-				reply = fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
-				if len(args) > 1 && args[1] == "missing" {
-					reply = "$-1\r\n"
-				}
-			}
-			if _, err := io.WriteString(conn, reply); err != nil {
-				return
-			}
+			server.connected.Store(true)
+			connections.Add(1)
+			go func() {
+				defer connections.Done()
+				defer conn.Close()
+				_ = conn.SetDeadline(deadline)
+				done := make(chan struct{})
+				defer close(done)
+				go func() {
+					select {
+					case <-stop:
+						_ = conn.Close()
+					case <-done:
+					}
+				}()
+				serveBootstrapRedis(conn, value, pingReply)
+			}()
 		}
 	}()
 	return server
@@ -86,10 +73,42 @@ func newBootstrapRedisServer(t *testing.T, value, pingReply string) *bootstrapRe
 
 func (s *bootstrapRedisServer) requireClosed(t *testing.T) {
 	t.Helper()
+	// 停止接收新连接，但不主动关闭现有连接，以验证客户端完整释放连接池。
+	_ = s.listener.Close()
 	select {
 	case <-s.closed:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Redis 测试连接未关闭")
+	}
+}
+
+func serveBootstrapRedis(conn net.Conn, value, pingReply string) {
+	reader := bufio.NewReader(conn)
+	for {
+		args, err := readBootstrapRedisCommand(reader)
+		if err != nil {
+			return
+		}
+		reply := "+OK\r\n"
+		switch strings.ToUpper(args[0]) {
+		case "HELLO":
+			reply = "-ERR unknown command 'HELLO'\r\n"
+		case "PING":
+			if pingReply == "" {
+				// 不返回响应，用真实 socket deadline 验证初始化失败时的回收。
+				_, _ = io.Copy(io.Discard, conn)
+				return
+			}
+			reply = pingReply
+		case "GET":
+			reply = fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
+			if len(args) > 1 && args[1] == "missing" {
+				reply = "$-1\r\n"
+			}
+		}
+		if _, err := io.WriteString(conn, reply); err != nil {
+			return
+		}
 	}
 }
 

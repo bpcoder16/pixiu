@@ -1,4 +1,4 @@
-package elasticSearchx_test
+package elasticsearchx_test
 
 import (
 	"bytes"
@@ -15,19 +15,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bpcoder16/pixiu/infra/elasticSearchx"
-	elasticSearchxv7 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v7"
-	elasticSearchxv8 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v8"
-	elasticSearchxv9 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v9"
+	"github.com/bpcoder16/pixiu/infra/elasticsearchx"
+	elasticsearchxv7 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v7"
+	elasticsearchxv8 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v8"
+	elasticsearchxv9 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v9"
 	"github.com/bpcoder16/pixiu/logit"
 )
 
 var modernVersionFactories = []struct {
 	major int
-	open  func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+	open  func(elasticsearchx.Config, ...elasticsearchx.Option) (*elasticsearchx.Client, error)
 }{
-	{8, elasticSearchxv8.New},
-	{9, elasticSearchxv9.New},
+	{8, elasticsearchxv8.New},
+	{9, elasticsearchxv9.New},
 }
 
 func TestModernVersionFactoriesDoNotRetryEOF(t *testing.T) {
@@ -98,7 +98,7 @@ func TestModernVersionFactoriesDoNotRetryEOF(t *testing.T) {
 					defer server.Close()
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
-					client, err := factory.open(elasticSearchx.Config{
+					client, err := factory.open(elasticsearchx.Config{
 						Name:      "search",
 						Addresses: []string{server.URL},
 					})
@@ -121,8 +121,8 @@ func TestModernVersionFactoriesDoNotRetryEOF(t *testing.T) {
 						case "Index":
 							err = client.Index(ctx, "products", "1", map[string]any{"value": 1})
 						case "Bulk":
-							_, err = client.Bulk(ctx, "products", []elasticSearchx.BulkAction{
-								elasticSearchx.NewBulkIndex("1", map[string]any{"value": 1}),
+							_, err = client.Bulk(ctx, "products", []elasticsearchx.BulkAction{
+								elasticsearchx.NewBulkIndex("1", map[string]any{"value": 1}),
 							})
 						}
 					}
@@ -153,11 +153,11 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 		"{\"update\":{\"_id\":\"5\"}}\n{\"doc\":{\"value\":5}}\n"
 	factories := []struct {
 		major int
-		open  func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+		open  func(elasticsearchx.Config, ...elasticsearchx.Option) (*elasticsearchx.Client, error)
 	}{
-		{7, elasticSearchxv7.New},
-		{8, elasticSearchxv8.New},
-		{9, elasticSearchxv9.New},
+		{7, elasticsearchxv7.New},
+		{8, elasticsearchxv8.New},
+		{9, elasticsearchxv9.New},
 	}
 	for _, factory := range factories {
 		t.Run(fmt.Sprint(factory.major), func(t *testing.T) {
@@ -165,7 +165,7 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 				name         string
 				response     string
 				succeeded    int
-				failures     []elasticSearchx.BulkFailure
+				failures     []elasticsearchx.BulkFailure
 				failedShards int
 				level        string
 			}{
@@ -179,7 +179,7 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 					name:      "部分失败",
 					response:  `{"errors":true,"items":[{"index":{"_id":"1","status":201}},{"update":{"_id":"2","status":429,"error":{"type":"rejected","reason":"busy"}}},{"delete":{"_id":"3","status":404,"result":"not_found"}},{"create":{"_id":"4","status":201}},{"update":{"_id":"5","status":200}}]}`,
 					succeeded: 4,
-					failures: []elasticSearchx.BulkFailure{
+					failures: []elasticsearchx.BulkFailure{
 						{
 							Position: 1,
 							ID:       "2",
@@ -194,7 +194,7 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 					name:      "重复创建及更新缺失文档",
 					response:  `{"errors":true,"items":[{"index":{"_id":"1","status":201}},{"update":{"_id":"2","status":200}},{"delete":{"_id":"3","status":404,"result":"not_found"}},{"create":{"_id":"4","status":409,"error":{"type":"version_conflict_engine_exception","reason":"already exists"}}},{"update":{"_id":"5","status":404,"error":{"type":"document_missing_exception","reason":"missing"}}}]}`,
 					succeeded: 3,
-					failures: []elasticSearchx.BulkFailure{
+					failures: []elasticsearchx.BulkFailure{
 						{
 							Position: 3,
 							ID:       "4",
@@ -223,7 +223,7 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 					name:      "分片失败与动作失败并存",
 					response:  `{"errors":true,"items":[{"index":{"_id":"1","status":201,"_shards":{"total":2,"successful":1,"failed":1}}},{"update":{"_id":"2","status":200}},{"delete":{"_id":"3","status":404}},{"create":{"_id":"4","status":409,"error":{"type":"version_conflict_engine_exception","reason":"already exists"}}},{"update":{"_id":"5","status":200}}]}`,
 					succeeded: 4,
-					failures: []elasticSearchx.BulkFailure{
+					failures: []elasticsearchx.BulkFailure{
 						{
 							Position: 3,
 							ID:       "4",
@@ -253,29 +253,29 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 						io.WriteString(w, tt.response)
 					}))
 					defer server.Close()
-					client, err := factory.open(elasticSearchx.Config{
+					client, err := factory.open(elasticsearchx.Config{
 						Name:          "catalog",
 						Addresses:     []string{server.URL},
 						SlowThreshold: time.Hour,
-					}, elasticSearchx.OptLogRequests(true), elasticSearchx.OptLogDetails(true))
+					}, elasticsearchx.OptLogRequests(true), elasticsearchx.OptLogDetails(true))
 					if err != nil {
 						t.Fatal(err)
 					}
 					defer client.Close()
 					buf.Reset()
 					ctx := logit.WithStart(context.Background())
-					result, err := client.Bulk(ctx, "products", []elasticSearchx.BulkAction{
-						elasticSearchx.NewBulkIndex("1", map[string]any{"value": 1}),
-						elasticSearchx.NewBulkUpsert("2", map[string]any{"value": 2}),
-						elasticSearchx.NewBulkDelete("3"),
-						elasticSearchx.NewBulkCreate("4", map[string]any{"value": 4}),
-						elasticSearchx.NewBulkUpdate("5", map[string]any{"value": 5}),
+					result, err := client.Bulk(ctx, "products", []elasticsearchx.BulkAction{
+						elasticsearchx.NewBulkIndex("1", map[string]any{"value": 1}),
+						elasticsearchx.NewBulkUpsert("2", map[string]any{"value": 2}),
+						elasticsearchx.NewBulkDelete("3"),
+						elasticsearchx.NewBulkCreate("4", map[string]any{"value": 4}),
+						elasticsearchx.NewBulkUpdate("5", map[string]any{"value": 5}),
 					})
 					if result.Succeeded != tt.succeeded || len(result.Failures) != len(tt.failures) || result.FailedShards != tt.failedShards || calls.Load() != 1 {
 						t.Fatalf("Bulk 结果或请求次数错误: result=%+v calls=%d", result, calls.Load())
 					}
 					if len(tt.failures) > 0 {
-						var bulkErr *elasticSearchx.BulkError
+						var bulkErr *elasticsearchx.BulkError
 						if !errors.As(err, &bulkErr) || bulkErr.Failed != len(tt.failures) {
 							t.Fatalf("逐项失败未返回 BulkError: err=%v", err)
 						}
@@ -320,7 +320,7 @@ func TestVersionFactoriesBulkResultsAndSingleLog(t *testing.T) {
 					if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &durationRecord); err != nil {
 						t.Fatal(err)
 					}
-					if durationRecord["elasticSearch_catalog_1_duration_ms"] == nil || durationRecord["elasticSearch_catalog_2_duration_ms"] != nil {
+					if durationRecord["elasticsearch_catalog_1_duration_ms"] == nil || durationRecord["elasticsearch_catalog_2_duration_ms"] != nil {
 						t.Fatalf("Bulk 耗时丢失或重复: %v", durationRecord)
 					}
 				})
@@ -375,12 +375,12 @@ func TestModernVersionFactoriesRejectStartupFailuresAndCloseConnections(t *testi
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					type startupResult struct {
-						client *elasticSearchx.Client
+						client *elasticsearchx.Client
 						err    error
 					}
 					done := make(chan startupResult, 1)
 					go func() {
-						client, err := factory.open(elasticSearchx.Config{
+						client, err := factory.open(elasticsearchx.Config{
 							Name:           "search",
 							Addresses:      []string{server.URL},
 							StartupTimeout: 100 * time.Millisecond,

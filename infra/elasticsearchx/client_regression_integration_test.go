@@ -1,4 +1,4 @@
-package elasticSearchx_test
+package elasticsearchx_test
 
 import (
 	"context"
@@ -11,16 +11,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bpcoder16/pixiu/infra/elasticSearchx"
-	v7 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v7"
-	v8 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v8"
-	v9 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v9"
+	"github.com/bpcoder16/pixiu/infra/elasticsearchx"
+	v7 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v7"
+	v8 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v8"
+	v9 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v9"
 )
 
 func TestVersionFactoriesUseNodeHostAndRejectClosedOperations(t *testing.T) {
 	for _, factory := range []struct {
 		major int
-		open  func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+		open  func(elasticsearchx.Config, ...elasticsearchx.Option) (*elasticsearchx.Client, error)
 	}{{7, v7.New}, {8, v8.New}, {9, v9.New}} {
 		t.Run(fmt.Sprint(factory.major), func(t *testing.T) {
 			var requests atomic.Int32
@@ -51,7 +51,7 @@ func TestVersionFactoriesUseNodeHostAndRejectClosedOperations(t *testing.T) {
 			defer server.Close()
 			defer close(release)
 			host = strings.TrimPrefix(server.URL, "http://")
-			c, err := factory.open(elasticSearchx.Config{
+			c, err := factory.open(elasticsearchx.Config{
 				Name:      "host",
 				Addresses: []string{server.URL},
 			})
@@ -82,7 +82,7 @@ func TestVersionFactoriesUseNodeHostAndRejectClosedOperations(t *testing.T) {
 func TestVersionFactoriesUseStartupTimeout(t *testing.T) {
 	for _, factory := range []struct {
 		major int
-		open  func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+		open  func(elasticsearchx.Config, ...elasticsearchx.Option) (*elasticsearchx.Client, error)
 	}{{7, v7.New}, {8, v8.New}, {9, v9.New}} {
 		t.Run(fmt.Sprint(factory.major), func(t *testing.T) {
 			release := make(chan struct{})
@@ -97,7 +97,7 @@ func TestVersionFactoriesUseStartupTimeout(t *testing.T) {
 			defer close(release)
 			done := make(chan error, 1)
 			go func() {
-				client, err := factory.open(elasticSearchx.Config{
+				client, err := factory.open(elasticsearchx.Config{
 					Name:           "startup-timeout",
 					Addresses:      []string{server.URL},
 					StartupTimeout: 50 * time.Millisecond,

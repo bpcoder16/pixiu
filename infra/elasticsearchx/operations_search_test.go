@@ -1,4 +1,4 @@
-package elasticSearchx
+package elasticsearchx
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 func TestSearchWithoutTotal(t *testing.T) {
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 			var dsl struct {
 				TrackTotalHits *bool `json:"track_total_hits"`
@@ -148,7 +148,7 @@ func TestSearchPreservesResponseStatus(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Client{
 				name:           "search",
-				durationPrefix: "elasticSearch_search",
+				durationPrefix: "elasticsearch_search",
 				performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 					return jsonResponse(req, http.StatusOK, tt.body), nil
 				}),
@@ -176,7 +176,7 @@ func TestSearchPreservesResponseStatus(t *testing.T) {
 func TestSearchWithoutTotalRejectsMissingHits(t *testing.T) {
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 			return jsonResponse(req, http.StatusOK, `{"took":0,"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{}}`), nil
 		}),

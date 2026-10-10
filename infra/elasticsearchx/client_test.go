@@ -1,4 +1,4 @@
-package elasticSearchx
+package elasticsearchx
 
 import (
 	"bytes"
@@ -29,7 +29,7 @@ func jsonResponse(req *http.Request, status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: req}
 }
 
-func captureElasticSearchLogs(t *testing.T) *bytes.Buffer {
+func captureElasticsearchLogs(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	buf := &bytes.Buffer{}
 	logger := logit.MustNew(logit.OptEncoder(logit.DefaultJSONEncoder), logit.OptWriter(logit.NewWriter(buf)))
@@ -286,7 +286,7 @@ func TestAttachHonorsStartupTimeoutAndCleansUp(t *testing.T) {
 }
 
 func TestPerformResponseBodyContract(t *testing.T) {
-	captureElasticSearchLogs(t)
+	captureElasticsearchLogs(t)
 	upstreamErr := errors.New("upstream failure")
 	for _, tt := range []struct {
 		name      string
@@ -296,12 +296,12 @@ func TestPerformResponseBodyContract(t *testing.T) {
 	}{
 		{
 			name:      "nil response",
-			wantError: "elasticSearchx: empty HTTP response",
+			wantError: "elasticsearchx: empty HTTP response",
 		},
 		{
 			name:      "nil body",
 			response:  &http.Response{StatusCode: http.StatusOK},
-			wantError: "elasticSearchx: nil HTTP response body",
+			wantError: "elasticsearchx: nil HTTP response body",
 		},
 		{
 			name: "empty body",
@@ -357,12 +357,12 @@ func TestPerformResponseBodyContract(t *testing.T) {
 }
 
 func TestNonBulkLogsStatusAndContextWithoutPayload(t *testing.T) {
-	buf := captureElasticSearchLogs(t)
+	buf := captureElasticsearchLogs(t)
 	ctx := logit.WithContext(context.Background())
 	logit.AddField(ctx, logit.Str("request_id", "req-1"))
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		logRequests:    true,
 		slowThreshold:  time.Second,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
@@ -381,7 +381,7 @@ func TestNonBulkLogsStatusAndContextWithoutPayload(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &record); err != nil {
 		t.Fatal(err)
 	}
-	if record["level"] != "ERROR" || record["request_id"] != "req-1" || record[logit.DownstreamTypeKey] != "elasticSearch" || record[logit.DownstreamIDKey] != "search" {
+	if record["level"] != "ERROR" || record["request_id"] != "req-1" || record[logit.DownstreamTypeKey] != "elasticsearch" || record[logit.DownstreamIDKey] != "search" {
 		t.Fatalf("统一日志错误: %v", record)
 	}
 }
@@ -394,7 +394,7 @@ func TestNonBulkRoutesLogToNamedLogger(t *testing.T) {
 	t.Cleanup(func() { logit.SetNamed(name, logit.Default()); _ = logit.Close(logger) })
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		logRequests:    true,
 		slowThreshold:  time.Second,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
@@ -413,7 +413,7 @@ func TestNonBulkRoutesLogToNamedLogger(t *testing.T) {
 func TestSearchAndCountPreserveResultShape(t *testing.T) {
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		slowThreshold:  time.Second,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 			switch req.URL.Path {
@@ -440,7 +440,7 @@ func TestSearchAndCountPreserveResultShape(t *testing.T) {
 func TestSearchAndCountRejectMissingRequiredFields(t *testing.T) {
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		slowThreshold:  time.Second,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 			return jsonResponse(req, 200, `{}`), nil
@@ -458,7 +458,7 @@ func TestOperationsCloseResponseBodies(t *testing.T) {
 	var bodies []*trackedBody
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		slowThreshold:  time.Second,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 			status, content := 200, `{"count":1}`
@@ -482,11 +482,11 @@ func TestOperationsCloseResponseBodies(t *testing.T) {
 }
 
 func TestGetNotFoundAndBulkPartialFailure(t *testing.T) {
-	buf := captureElasticSearchLogs(t)
+	buf := captureElasticsearchLogs(t)
 	calls := 0
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		slowThreshold:  time.Second,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 			calls++
@@ -525,7 +525,7 @@ func TestGetNotFoundAndBulkPartialFailure(t *testing.T) {
 func TestGetDistinguishesMissingIndexFromMissingDocument(t *testing.T) {
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		slowThreshold:  time.Second,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 			return jsonResponse(req, 404, `{"error":{"type":"index_not_found_exception","reason":"secret-index"},"status":404}`), nil
@@ -539,10 +539,10 @@ func TestGetDistinguishesMissingIndexFromMissingDocument(t *testing.T) {
 }
 
 func TestBulkRejectsMalformedResponseAndLogsError(t *testing.T) {
-	buf := captureElasticSearchLogs(t)
+	buf := captureElasticsearchLogs(t)
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		logRequests:    true,
 		slowThreshold:  time.Second,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
@@ -560,7 +560,7 @@ func TestBulkRejectsMalformedResponseAndLogsError(t *testing.T) {
 func TestBulkDoesNotCountInformationalStatusAsSuccess(t *testing.T) {
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		slowThreshold:  time.Second,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 			return jsonResponse(req, 200, `{"errors":true,"items":[{"index":{"_id":"1","status":102}}]}`), nil
@@ -576,7 +576,7 @@ func TestBulkDoesNotCountInformationalStatusAsSuccess(t *testing.T) {
 func TestBulkRejectsResponseWithoutErrorsFlag(t *testing.T) {
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		slowThreshold:  time.Second,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 			return jsonResponse(req, 200, `{"items":[{"index":{"_id":"1","status":201}}]}`), nil
@@ -590,7 +590,7 @@ func TestBulkRejectsResponseWithoutErrorsFlag(t *testing.T) {
 func TestBulkUpdateDocAsUpsertSuccessUsesNDJSON(t *testing.T) {
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		slowThreshold:  time.Second,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 			body, err := io.ReadAll(req.Body)

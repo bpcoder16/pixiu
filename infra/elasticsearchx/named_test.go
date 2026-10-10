@@ -1,4 +1,4 @@
-package elasticSearchx
+package elasticsearchx
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 func ResetNamedClientsForTest(t *testing.T) {
 	t.Helper()
 	previous := namedClients
-	registry := named.New[*Client]("elasticSearchx")
+	registry := named.New[*Client]("elasticsearchx")
 	namedClients = registry
 	t.Cleanup(func() {
 		_ = registry.CloseAll()
@@ -37,7 +37,7 @@ func assertRegistryPanic(t *testing.T, want string, lookup func()) {
 
 func TestNamedAndDefaultInitialization(t *testing.T) {
 	ResetNamedClientsForTest(t)
-	assertRegistryPanic(t, "elasticSearchx: default client is not registered", func() {
+	assertRegistryPanic(t, "elasticsearchx: default client is not registered", func() {
 		Default()
 	})
 	buildErr := errors.New("startup failed")
@@ -46,7 +46,7 @@ func TestNamedAndDefaultInitialization(t *testing.T) {
 			if got, err := create(name, func() (*Client, error) {
 				t.Fatal("空名称执行了构造")
 				return nil, nil
-			}); got != nil || err == nil || err.Error() != "elasticSearchx: empty client name" {
+			}); got != nil || err == nil || err.Error() != "elasticsearchx: empty client name" {
 				t.Fatalf("空名称 %q: client=%p err=%v", name, got, err)
 			}
 		}
@@ -55,10 +55,10 @@ func TestNamedAndDefaultInitialization(t *testing.T) {
 		}); got != nil || !errors.Is(err, buildErr) {
 			t.Fatalf("构造失败 = %p, %v", got, err)
 		}
-		assertRegistryPanic(t, `elasticSearchx: client "retry" is not registered`, func() {
+		assertRegistryPanic(t, `elasticsearchx: client "retry" is not registered`, func() {
 			Named("retry")
 		})
-		assertRegistryPanic(t, "elasticSearchx: default client is not registered", func() {
+		assertRegistryPanic(t, "elasticsearchx: default client is not registered", func() {
 			Default()
 		})
 	}
@@ -68,13 +68,13 @@ func TestNamedAndDefaultInitialization(t *testing.T) {
 	}); got != other || err != nil {
 		t.Fatalf("命名初始化 = %p, %v", got, err)
 	}
-	assertRegistryPanic(t, "elasticSearchx: default client is not registered", func() {
+	assertRegistryPanic(t, "elasticsearchx: default client is not registered", func() {
 		Default()
 	})
 	if got, err := RegisterDefault("taken", func() (*Client, error) {
 		t.Fatal("名称冲突执行了构造")
 		return nil, nil
-	}); got != nil || err == nil || err.Error() != `elasticSearchx: client "taken" is already registered` {
+	}); got != nil || err == nil || err.Error() != `elasticsearchx: client "taken" is already registered` {
 		t.Fatalf("默认名称冲突 = %p, %v", got, err)
 	}
 	client := &Client{name: "retry"}
@@ -90,17 +90,17 @@ func TestNamedAndDefaultInitialization(t *testing.T) {
 		if got, err := RegisterDefault(name, func() (*Client, error) {
 			t.Fatal("重复默认初始化执行了构造")
 			return nil, nil
-		}); got != nil || err == nil || err.Error() != "elasticSearchx: default client is already registered" {
+		}); got != nil || err == nil || err.Error() != "elasticsearchx: default client is already registered" {
 			t.Fatalf("重复默认初始化 = %p, %v", got, err)
 		}
 	}
 	if _, err := RegisterNamed("retry", func() (*Client, error) {
 		t.Fatal("重复命名初始化执行了构造")
 		return nil, nil
-	}); err == nil || err.Error() != `elasticSearchx: client "retry" is already registered` {
+	}); err == nil || err.Error() != `elasticsearchx: client "retry" is already registered` {
 		t.Fatalf("重复命名初始化错误 = %v", err)
 	}
-	assertRegistryPanic(t, `elasticSearchx: client "rejected" is not registered`, func() {
+	assertRegistryPanic(t, `elasticsearchx: client "rejected" is not registered`, func() {
 		Named("rejected")
 	})
 	var wg sync.WaitGroup
@@ -170,13 +170,13 @@ func TestCloseAllWithLifecycle(t *testing.T) {
 		}
 	}
 	for _, lookup := range []func(){func() { Named("search-0") }, func() { Default() }} {
-		assertRegistryPanic(t, "elasticSearchx: named clients closed", lookup)
+		assertRegistryPanic(t, "elasticsearchx: named clients closed", lookup)
 	}
 	for _, create := range []func(string, func() (*Client, error)) (*Client, error){RegisterNamed, RegisterDefault} {
 		if got, err := create("later", func() (*Client, error) {
 			t.Fatal("关闭后执行了构造")
 			return nil, nil
-		}); got != nil || err == nil || err.Error() != "elasticSearchx: named clients closed" {
+		}); got != nil || err == nil || err.Error() != "elasticsearchx: named clients closed" {
 			t.Fatalf("关闭后初始化 = %p, %v", got, err)
 		}
 	}

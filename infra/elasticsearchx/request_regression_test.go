@@ -1,4 +1,4 @@
-package elasticSearchx
+package elasticsearchx
 
 import (
 	"context"
@@ -25,7 +25,7 @@ func TestCountRejectsFailedShards(t *testing.T) {
 func TestSearchPartialResultPreservesCloseErrorAndObservation(t *testing.T) {
 	for _, closeFails := range []bool{false, true} {
 		t.Run(map[bool]string{false: "部分结果", true: "部分结果和关闭错误"}[closeFails], func(t *testing.T) {
-			buf := captureElasticSearchLogs(t)
+			buf := captureElasticsearchLogs(t)
 			var closeErr error
 			if closeFails {
 				closeErr = errors.New("close failed")
@@ -61,8 +61,8 @@ func TestSearchPartialResultPreservesCloseErrorAndObservation(t *testing.T) {
 			if len(records) != 2 || records[0]["level"] != "ERROR" || records[0][logit.DownstreamDetailsKey].(map[string]any)["error_type"] != "partial_search_error" {
 				t.Fatalf("部分结果未记录一次失败日志: %v", records)
 			}
-			elapsed, ok := records[1]["elasticSearch_catalog_1_duration_ms"]
-			if !ok || elapsed != records[0]["downstream_duration_ms"] || records[1]["elasticSearch_catalog_2_duration_ms"] != nil {
+			elapsed, ok := records[1]["elasticsearch_catalog_1_duration_ms"]
+			if !ok || elapsed != records[0]["downstream_duration_ms"] || records[1]["elasticsearch_catalog_2_duration_ms"] != nil {
 				t.Fatalf("部分结果耗时丢失或重复: %v", records)
 			}
 		})
@@ -151,7 +151,7 @@ func TestOperationsLogFinalResult(t *testing.T) {
 			{"查询错误", "search", `{"error":{"type":"parsing_exception","reason":"secret"}}`, "WARN", "parsing_exception", 400},
 		} {
 			t.Run(tt.name+map[bool]string{false: "概要", true: "详情"}[detailsEnabled], func(t *testing.T) {
-				buf := captureElasticSearchLogs(t)
+				buf := captureElasticsearchLogs(t)
 				c := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
 					return jsonResponse(req, tt.status, tt.response), nil
 				}, OptLogRequests(true), OptLogDetails(detailsEnabled))
@@ -208,7 +208,7 @@ func (b *delayedResponseBody) Read(p []byte) (int, error) {
 func (*delayedResponseBody) Close() error { return nil }
 
 func TestOperationDurationIncludesBodyRead(t *testing.T) {
-	buf := captureElasticSearchLogs(t)
+	buf := captureElasticsearchLogs(t)
 	c := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -229,7 +229,7 @@ func TestOperationDurationIncludesBodyRead(t *testing.T) {
 		t.Fatalf("慢响应未记录 Warn: %v", records)
 	}
 	elapsed := records[0]["downstream_duration_ms"].(float64)
-	if elapsed < 20 || records[1]["elasticSearch_catalog_1_duration_ms"] != elapsed || records[1]["elasticSearch_catalog_2_duration_ms"] != nil {
+	if elapsed < 20 || records[1]["elasticsearch_catalog_1_duration_ms"] != elapsed || records[1]["elasticsearch_catalog_2_duration_ms"] != nil {
 		t.Fatalf("响应读取未计时或重复记账: %v", records)
 	}
 }
@@ -281,7 +281,7 @@ func TestResponseAndTransportErrorClosesBody(t *testing.T) {
 }
 
 func TestIndexPreservesResponseReadAndCloseErrors(t *testing.T) {
-	buf := captureElasticSearchLogs(t)
+	buf := captureElasticsearchLogs(t)
 	body := &failingLogBody{readErr: errors.New("read failed"), closeErr: errors.New("close failed")}
 	c := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: body}, nil
@@ -319,7 +319,7 @@ func (*finalReadErrorBody) Close() error { return nil }
 func TestCompleteJSONPreservesReadError(t *testing.T) {
 	for _, operation := range []string{"search", "count", "get", "index", "bulk"} {
 		t.Run(operation, func(t *testing.T) {
-			buf := captureElasticSearchLogs(t)
+			buf := captureElasticsearchLogs(t)
 			readErr := errors.New("response read failed")
 			responses := map[string]string{
 				"search": `{"hits":{"hits":[]}}`,
@@ -363,7 +363,7 @@ func TestResponseCloseErrorOverridesNonErrorLogLevel(t *testing.T) {
 		{"索引缺失", 404, `{"error":{"type":"index_not_found_exception"}}`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			buf := captureElasticSearchLogs(t)
+			buf := captureElasticsearchLogs(t)
 			closeErr := errors.New("close failed")
 			body := &errorResponseBody{Reader: strings.NewReader(tt.response), closeErr: closeErr}
 			c := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
@@ -379,7 +379,7 @@ func TestResponseCloseErrorOverridesNonErrorLogLevel(t *testing.T) {
 }
 
 func TestHTTPErrorPreservesResponseReadError(t *testing.T) {
-	buf := captureElasticSearchLogs(t)
+	buf := captureElasticsearchLogs(t)
 	readErr := errors.New("response read failed")
 	c := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -436,7 +436,7 @@ func TestStartupFailurePreservesCleanupError(t *testing.T) {
 }
 
 func TestClosedOperationsDoNotRecordDuration(t *testing.T) {
-	buf := captureElasticSearchLogs(t)
+	buf := captureElasticsearchLogs(t)
 	c := newLoggingTestClient(t, func(*http.Request) (*http.Response, error) {
 		t.Fatal("关闭后仍发送请求")
 		return nil, nil
@@ -453,7 +453,7 @@ func TestClosedOperationsDoNotRecordDuration(t *testing.T) {
 	}
 	logit.InfoDuration(ctx, "done")
 	records := readLogRecords(t, buf)
-	if len(records) != 1 || records[0]["elasticSearch_catalog_1_duration_ms"] != nil {
+	if len(records) != 1 || records[0]["elasticsearch_catalog_1_duration_ms"] != nil {
 		t.Fatalf("关闭后拒绝的操作被计时: %v", records)
 	}
 }

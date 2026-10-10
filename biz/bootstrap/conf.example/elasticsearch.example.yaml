@@ -1,0 +1,38 @@
+# 复制为配置目录中的 elasticsearch.<name>.yaml，并在项目 bootstrap 声明实例。
+# name 和 isDefault 只由 MustRegisterElasticsearch 指定，文件内不重复配置。
+
+# 必填，仅支持 7、8、9；8 是示例，必须与实际部署主版本一致。
+version: 8
+
+# 同一集群的 HTTP(S) 节点，也可只配置负载均衡地址；地址不能内嵌凭据。
+addresses:
+  - "https://es.example.com:9200"
+
+# 基本认证与 API Key 二选一，部署前填写；不启用认证时均留空。
+username: "biucards"
+password: ""
+apiKey: ""
+
+# PEM CA 文件；相对路径基于本配置文件所在目录，空值沿用默认信任配置。
+# 需要额外 CA 时填写，例如 certs/http_ca.crt；不提供跳过 TLS 校验的开关。
+caCertFile: ""
+
+# 零值默认均为 5s；startupTimeout 仅限制启动验活，业务总超时由请求 context 控制。
+startupTimeout: "5s"
+dialTimeout: "5s"
+
+# 每个实例独占一个 HTTP 连接池；以下为标准 Transport 下的常规默认值。
+pool:
+  # 当前实例所有节点合计的空闲连接数。
+  maxIdleConns: 100
+  maxIdleConnsPerHost: 10
+  # 零值继承默认 Transport；标准默认不限制每节点总连接数。
+  maxConnsPerHost: 0
+  idleConnTimeout: "90s"
+
+# 零值默认 200ms。
+slowThreshold: "200ms"
+# 省略默认 true；false 关闭所有请求结果日志（含慢调用和错误），仍记录下游耗时。
+logRequests: true
+# 省略默认 false；两项同时开启才采集详情，正文不脱敏、不截断。
+logDetails: false

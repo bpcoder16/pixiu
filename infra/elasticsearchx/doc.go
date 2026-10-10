@@ -1,5 +1,5 @@
-// Package elasticSearchx 提供 Elasticsearch 7、8、9 共用的结果日志和基础操作。
-// 版本适配包负责连接创建；配置、日志与结果约定见 docs/elasticSearchx-design.md。
+// Package elasticsearchx 提供 Elasticsearch 7、8、9 共用的结果日志和基础操作。
+// 版本适配包负责连接创建；配置、日志与结果约定见 docs/elasticsearchx-design.md。
 // v8/v9 使用官方 NewBase 和共用的 transport v8；启动验活只核对服务端主版本，
 // 不保证所有旧次版本均兼容，真实集群验收版本见设计文档。
 //
@@ -38,9 +38,9 @@
 // Hits、Aggregations 和 Shards.Failures 保留原始 JSON，业务解析时应使用明确的字段类型
 // 或 json.Decoder.UseNumber 保持整数精度。
 //
-// 下例还需导入 errors、time、github.com/bpcoder16/pixiu/infra/elasticSearchx/v8：
+// 下例还需导入 errors、time、github.com/bpcoder16/pixiu/infra/elasticsearchx/v8：
 //
-//	client, err := v8.New(elasticSearchx.Config{
+//	client, err := v8.New(elasticsearchx.Config{
 //	    Name:                "catalog",                                    // 必填：实例名称
 //	    Addresses:           []string{"https://search.example.com:9200"},   // 必填：至少一个节点地址
 //	    APIKey:              apiKey,                                       // 可选：按服务端要求配置认证
@@ -50,8 +50,8 @@
 //	    MaxConnsPerHost:     50,                                           // 可选：每节点总连接上限
 //	    IdleConnTimeout:     90 * time.Second,                             // 可选：空闲连接保留时间
 //	},
-//	    elasticSearchx.OptLogRequests(true), // 可选：显式开启请求结果日志
-//	    elasticSearchx.OptLogDetails(true), // 可选：采集请求体和必要响应信息
+//	    elasticsearchx.OptLogRequests(true), // 可选：显式开启请求结果日志
+//	    elasticsearchx.OptLogDetails(true), // 可选：采集请求体和必要响应信息
 //	)
 //	if err != nil {
 //	    return err
@@ -83,21 +83,21 @@
 // 文档不做深拷贝，create/update 不接受外部版本。
 // 例如，client 为已创建的客户端：
 //
-//	result, err := client.Bulk(ctx, "products", []elasticSearchx.BulkAction{
-//	    elasticSearchx.NewBulkIndex("1", map[string]any{
+//	result, err := client.Bulk(ctx, "products", []elasticsearchx.BulkAction{
+//	    elasticsearchx.NewBulkIndex("1", map[string]any{
 //	        "name":  "新版商品",
 //	        "stock": 10,
-//	    }).WithExternalVersion(12, elasticSearchx.VersionExternalGTE),
-//	    elasticSearchx.NewBulkCreate("2", map[string]any{
+//	    }).WithExternalVersion(12, elasticsearchx.VersionExternalGTE),
+//	    elasticsearchx.NewBulkCreate("2", map[string]any{
 //	        "name":  "新商品",
 //	        "stock": 5,
 //	    }),
-//	    elasticSearchx.NewBulkUpdate("1", map[string]any{"stock": 8}),
-//	    elasticSearchx.NewBulkUpsert("4", map[string]any{
+//	    elasticsearchx.NewBulkUpdate("1", map[string]any{"stock": 8}),
+//	    elasticsearchx.NewBulkUpsert("4", map[string]any{
 //	        "name":  "补货商品",
 //	        "stock": 6,
 //	    }),
-//	    elasticSearchx.NewBulkUpsertWithInitial(
+//	    elasticsearchx.NewBulkUpsertWithInitial(
 //	        "5",
 //	        map[string]any{"stock": 3},
 //	        map[string]any{
@@ -105,10 +105,10 @@
 //	            "stock": 3,
 //	        },
 //	    ),
-//	    elasticSearchx.NewBulkDelete("3"),
+//	    elasticsearchx.NewBulkDelete("3"),
 //	})
 //	if err != nil {
-//	    var bulkErr *elasticSearchx.BulkError
+//	    var bulkErr *elasticsearchx.BulkError
 //	    if errors.As(err, &bulkErr) {
 //	        // 部分失败仍保留成功数与按输入顺序排列的失败项，不应整批盲目重试。
 //	        _ = result.Succeeded
@@ -127,7 +127,7 @@
 //
 // 命名与默认实例由版本适配包创建，公共包负责查询和统一关闭：
 // v7/v8/v9.NewNamed 按 Config.Name 登记，NewDefault 同时设置默认引用。
-// elasticSearchx.Default() 与 elasticSearchx.Named(cfg.Name) 返回同一实例。
+// elasticsearchx.Default() 与 elasticsearchx.Named(cfg.Name) 返回同一实例。
 // 三个版本共用名称空间和一个默认实例；New 和 NewNamed 不设置默认引用。
 // 名称重复或默认实例已存在时返回错误，初始化失败可重试；未知名称、默认未初始化
 // 或 CloseAll 开始后查询会 panic。启动阶段须串行完成所有初始化后才开始业务，
@@ -143,10 +143,10 @@
 //	}); err != nil {
 //	    return err
 //	}
-//	if err := stack.Register(elasticSearchx.CloseAll); err != nil {
+//	if err := stack.Register(elasticsearchx.CloseAll); err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	_, err := v8.NewDefault(elasticSearchx.Config{
+//	_, err := v8.NewDefault(elasticsearchx.Config{
 //	    Name:      "catalog", // 必填：默认实例也需提供名称
 //	    Addresses: []string{"https://search.example.com:9200"}, // 必填
 //	    APIKey:    apiKey, // 可选：按服务端要求配置
@@ -154,7 +154,7 @@
 //	if err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	_, err = v8.NewNamed(elasticSearchx.Config{
+//	_, err = v8.NewNamed(elasticsearchx.Config{
 //	    Name:      "audit",
 //	    Addresses: []string{"https://audit-search.example.com:9200"},
 //	    APIKey:    apiKey,
@@ -162,11 +162,11 @@
 //	if err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	_, err = elasticSearchx.Default().Count(ctx, "products", queryDSL)
+//	_, err = elasticsearchx.Default().Count(ctx, "products", queryDSL)
 //	if err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	_, err = elasticSearchx.Named("audit").Count(ctx, "events", queryDSL)
+//	_, err = elasticsearchx.Named("audit").Count(ctx, "events", queryDSL)
 //	if err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
@@ -188,9 +188,9 @@
 // 成功及文档不存在为 Info，慢操作和 HTTP 4xx 为 Warn；
 // 网络、HTTP 5xx、解析、收尾及 Search 部分结果错误为 Error。error_type 保留服务端错误类型，
 // 其余情况使用 document_not_found、bulk_error、partial_search_error、transport_error 或 response_error。
-// ctx 已调用 logit.WithStart 时，每次实际业务请求还记录 elasticSearch_<Name>_<序号>
+// ctx 已调用 logit.WithStart 时，每次实际业务请求还记录 elasticsearch_<Name>_<序号>
 // 下游耗时，独立于日志开关和级别过滤；业务可调用 logit.InfoDuration 汇总，
-// 例如 Name 为 catalog 时输出 elasticSearch_catalog_1_duration_ms。
+// 例如 Name 为 catalog 时输出 elasticsearch_catalog_1_duration_ms。
 // 耗时包含请求执行、响应解析和 Body 关闭，不包含请求编码及日志写入。
 // 本地参数错误、空 Bulk 和关闭后拒绝的操作不计时；耗时前缀在客户端创建时计算。
-package elasticSearchx
+package elasticsearchx

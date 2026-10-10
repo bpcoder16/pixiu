@@ -1,4 +1,4 @@
-package elasticSearchx
+package elasticsearchx
 
 import (
 	"errors"
@@ -8,7 +8,7 @@ import (
 	"github.com/bpcoder16/pixiu/logit"
 )
 
-const downstreamElasticSearchMessage = "elasticSearch"
+const downstreamElasticsearchMessage = "elasticsearch"
 
 func (c *Client) resultLevel(err error, duration time.Duration) logit.Level {
 	if err != nil && err != ErrNotFound {
@@ -90,5 +90,5 @@ func (c *Client) logResult(req *http.Request, op operation, res *http.Response, 
 		details["response_body"] = string(responseBody)
 		details["response_status_text"] = statusText
 	}
-	logit.Output(ctx, level, 1, downstreamElasticSearchMessage, logit.DownstreamFields(downstreamElasticSearchMessage, c.name, duration, details)...)
+	logit.Output(ctx, level, 1, downstreamElasticsearchMessage, logit.DownstreamFields(downstreamElasticsearchMessage, c.name, duration, details)...)
 }

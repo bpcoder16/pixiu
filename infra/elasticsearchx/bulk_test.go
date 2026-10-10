@@ -1,4 +1,4 @@
-package elasticSearchx
+package elasticsearchx
 
 import (
 	"context"
@@ -21,7 +21,7 @@ func TestBulkOfficialActionsUseNDJSON(t *testing.T) {
 	calls := 0
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		slowThreshold:  time.Hour,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 			calls++
@@ -80,7 +80,7 @@ func TestBulkFailuresPreservePositionWithDuplicateIDs(t *testing.T) {
 func TestBulkReplicaFailuresDoNotFailWrite(t *testing.T) {
 	for _, closeFails := range []bool{false, true} {
 		t.Run(fmt.Sprint(closeFails), func(t *testing.T) {
-			buf := captureElasticSearchLogs(t)
+			buf := captureElasticsearchLogs(t)
 			var closeErr error
 			if closeFails {
 				closeErr = errors.New("close failed")
@@ -157,7 +157,7 @@ func TestBulkRejectsInconsistentErrorsFlag(t *testing.T) {
 func TestBulkUpdateDoesNotInsertByDefault(t *testing.T) {
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		slowThreshold:  time.Hour,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 			body, err := io.ReadAll(req.Body)
@@ -209,7 +209,7 @@ func TestBulkDeleteNotFound(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Client{
 				name:           "search",
-				durationPrefix: "elasticSearch_search",
+				durationPrefix: "elasticsearch_search",
 				slowThreshold:  time.Hour,
 				performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 					return jsonResponse(req, http.StatusOK, tt.response), nil
@@ -235,7 +235,7 @@ func TestBulkUpdateUpsertAndDeleteExternalVersion(t *testing.T) {
 		"{\"delete\":{\"_id\":\"2\",\"version\":12,\"version_type\":\"external_gte\"}}\n"
 	c := &Client{
 		name:           "search",
-		durationPrefix: "elasticSearch_search",
+		durationPrefix: "elasticsearch_search",
 		slowThreshold:  time.Hour,
 		performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 			body, err := io.ReadAll(req.Body)
@@ -282,7 +282,7 @@ func TestBulkWithExternalVersionReturnsCopy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Client{
 				name:           "search",
-				durationPrefix: "elasticSearch_search",
+				durationPrefix: "elasticsearch_search",
 				slowThreshold:  time.Hour,
 				performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 					body, err := io.ReadAll(req.Body)
@@ -401,7 +401,7 @@ func TestBulkRejectsInvalidActionsBeforeSending(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Client{
 				name:           "search",
-				durationPrefix: "elasticSearch_search",
+				durationPrefix: "elasticsearch_search",
 				performer: performerFunc(func(req *http.Request) (*http.Response, error) {
 					t.Error("无效批次不应发送请求")
 					return jsonResponse(req, http.StatusOK, `{}`), nil

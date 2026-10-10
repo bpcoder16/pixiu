@@ -1,4 +1,4 @@
-package elasticSearchx
+package elasticsearchx
 
 import (
 	"bytes"
@@ -54,7 +54,7 @@ func readLogRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 }
 
 func TestPerformDoesNotLogOrRecordDuration(t *testing.T) {
-	buf := captureElasticSearchLogs(t)
+	buf := captureElasticsearchLogs(t)
 	body := &trackedBody{Reader: strings.NewReader(`{"count":1}`)}
 	client := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: body}, nil
@@ -75,7 +75,7 @@ func TestPerformDoesNotLogOrRecordDuration(t *testing.T) {
 	}
 	logit.InfoDuration(ctx, "done")
 	records := readLogRecords(t, buf)
-	if len(records) != 1 || records[0]["elasticSearch_catalog_1_duration_ms"] != nil {
+	if len(records) != 1 || records[0]["elasticsearch_catalog_1_duration_ms"] != nil {
 		t.Fatalf("底层执行方法登记了耗时: %v", records)
 	}
 }
@@ -83,7 +83,7 @@ func TestPerformDoesNotLogOrRecordDuration(t *testing.T) {
 func TestStartupCheckDoesNotLogOrRecordDuration(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(map[bool]string{false: "关闭日志", true: "开启日志及详情"}[enabled], func(t *testing.T) {
-			buf := captureElasticSearchLogs(t)
+			buf := captureElasticsearchLogs(t)
 			cfg := Config{
 				Name:      "catalog",
 				Addresses: []string{"http://localhost:9200"},
@@ -105,7 +105,7 @@ func TestStartupCheckDoesNotLogOrRecordDuration(t *testing.T) {
 			}
 			logit.InfoDuration(ctx, "done")
 			records := readLogRecords(t, buf)
-			if len(records) != 1 || records[0]["elasticSearch_catalog_1_duration_ms"] != nil {
+			if len(records) != 1 || records[0]["elasticsearch_catalog_1_duration_ms"] != nil {
 				t.Fatalf("启动验活登记了下游耗时: %v", records)
 			}
 		})
@@ -113,7 +113,7 @@ func TestStartupCheckDoesNotLogOrRecordDuration(t *testing.T) {
 }
 
 func TestRequestsWithoutHTTPDoNotRecordDuration(t *testing.T) {
-	buf := captureElasticSearchLogs(t)
+	buf := captureElasticsearchLogs(t)
 	client := newLoggingTestClient(t, func(*http.Request) (*http.Response, error) {
 		t.Fatal("无效参数或空批次发出了请求")
 		return nil, nil
@@ -136,7 +136,7 @@ func TestRequestsWithoutHTTPDoNotRecordDuration(t *testing.T) {
 	}
 	logit.InfoDuration(ctx, "done")
 	records := readLogRecords(t, buf)
-	if len(records) != 1 || records[0]["elasticSearch_catalog_1_duration_ms"] != nil {
+	if len(records) != 1 || records[0]["elasticsearch_catalog_1_duration_ms"] != nil {
 		t.Fatalf("未发出的请求登记了耗时: %v", records)
 	}
 }
@@ -172,7 +172,7 @@ func TestNonBulkLogOptionsAndDetails(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			buf := captureElasticSearchLogs(t)
+			buf := captureElasticsearchLogs(t)
 			const requestBody = `{"query":{"match_all":{}}}`
 			const responseBody = `{"hits":{"hits":[]}}`
 			body := &trackedBody{Reader: strings.NewReader(responseBody)}
@@ -206,7 +206,7 @@ func TestNonBulkLogOptionsAndDetails(t *testing.T) {
 				}
 				return
 			}
-			if len(records) != 1 || records[0]["level"] != "INFO" || records[0]["msg"] != "elasticSearch" || records[0][logit.DownstreamIDKey] != "catalog" || records[0][logit.DownstreamTypeKey] != "elasticSearch" {
+			if len(records) != 1 || records[0]["level"] != "INFO" || records[0]["msg"] != "elasticsearch" || records[0][logit.DownstreamIDKey] != "catalog" || records[0][logit.DownstreamTypeKey] != "elasticsearch" {
 				t.Fatalf("结果日志错误: %v", records)
 			}
 			details := records[0][logit.DownstreamDetailsKey].(map[string]any)
@@ -246,7 +246,7 @@ func TestRequestDurationUsesClientNameWhenLogsDisabledOrFiltered(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			buf := captureElasticSearchLogs(t)
+			buf := captureElasticsearchLogs(t)
 			client := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
 				if strings.HasSuffix(req.URL.Path, "/_bulk") {
 					return jsonResponse(req, 200, `{"errors":false,"items":[{"index":{"_id":"1","status":201}}]}`), nil
@@ -274,7 +274,7 @@ func TestRequestDurationUsesClientNameWhenLogsDisabledOrFiltered(t *testing.T) {
 			}
 			logit.InfoDuration(ctx, "done")
 			records := readLogRecords(t, buf)
-			if len(records) != 1 || records[0]["elasticSearch_catalog_1_duration_ms"] == nil || records[0]["elasticSearch_catalog_2_duration_ms"] == nil || records[0]["elasticSearch_catalog_3_duration_ms"] == nil || records[0]["elasticSearch_catalog_4_duration_ms"] == nil || records[0]["elasticSearch_catalog_5_duration_ms"] != nil {
+			if len(records) != 1 || records[0]["elasticsearch_catalog_1_duration_ms"] == nil || records[0]["elasticsearch_catalog_2_duration_ms"] == nil || records[0]["elasticsearch_catalog_3_duration_ms"] == nil || records[0]["elasticsearch_catalog_4_duration_ms"] == nil || records[0]["elasticsearch_catalog_5_duration_ms"] != nil {
 				t.Fatalf("命名耗时丢失或重复: %v", records)
 			}
 		})
@@ -299,7 +299,7 @@ func TestBulkDetailsAndDurationAreRecordedOnce(t *testing.T) {
 		{name: "传输失败", level: "ERROR", wantErr: true, err: transportErr},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			buf := captureElasticSearchLogs(t)
+			buf := captureElasticsearchLogs(t)
 			var requestBody string
 			client := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
 				body, err := io.ReadAll(req.Body)
@@ -339,7 +339,7 @@ func TestBulkDetailsAndDurationAreRecordedOnce(t *testing.T) {
 			buf.Reset()
 			logit.InfoDuration(ctx, "done")
 			records = readLogRecords(t, buf)
-			if len(records) != 1 || records[0]["elasticSearch_catalog_1_duration_ms"] == nil || records[0]["elasticSearch_catalog_2_duration_ms"] != nil {
+			if len(records) != 1 || records[0]["elasticsearch_catalog_1_duration_ms"] == nil || records[0]["elasticsearch_catalog_2_duration_ms"] != nil {
 				t.Fatalf("Bulk 耗时重复或未记录: %v", records)
 			}
 		})
@@ -369,7 +369,7 @@ func (b *failingLogBody) Close() error {
 func TestTransportErrorLogsAfterCleanup(t *testing.T) {
 	for _, withResponse := range []bool{false, true} {
 		t.Run(map[bool]string{false: "无响应", true: "返回响应和错误"}[withResponse], func(t *testing.T) {
-			buf := captureElasticSearchLogs(t)
+			buf := captureElasticsearchLogs(t)
 			transportErr := errors.New("network failed")
 			client := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
 				if withResponse {
@@ -394,7 +394,7 @@ func TestTransportErrorLogsAfterCleanup(t *testing.T) {
 			buf.Reset()
 			logit.InfoDuration(ctx, "done")
 			records = readLogRecords(t, buf)
-			if len(records) != 1 || records[0]["elasticSearch_catalog_1_duration_ms"] == nil {
+			if len(records) != 1 || records[0]["elasticsearch_catalog_1_duration_ms"] == nil {
 				t.Fatalf("传输失败未记录耗时: %v", records)
 			}
 		})
@@ -404,7 +404,7 @@ func TestTransportErrorLogsAfterCleanup(t *testing.T) {
 func TestFilteredOrDisabledDetailsPreserveOperation(t *testing.T) {
 	for _, filtered := range []bool{false, true} {
 		t.Run(map[bool]string{false: "关闭日志", true: "级别过滤"}[filtered], func(t *testing.T) {
-			buf := captureElasticSearchLogs(t)
+			buf := captureElasticsearchLogs(t)
 			body := &trackedBody{Reader: strings.NewReader(`{"count":1}`)}
 			client := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: 200, Body: body, Request: req}, nil

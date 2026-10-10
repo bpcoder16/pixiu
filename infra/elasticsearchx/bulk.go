@@ -1,4 +1,4 @@
-package elasticSearchx
+package elasticsearchx
 
 import (
 	"bytes"
@@ -141,7 +141,7 @@ type BulkResult struct {
 type BulkError struct{ Failed int }
 
 func (e *BulkError) Error() string {
-	return fmt.Sprintf("elasticSearchx: %d bulk actions failed", e.Failed)
+	return fmt.Sprintf("elasticsearchx: %d bulk actions failed", e.Failed)
 }
 
 // Bulk 执行一批动作；部分成功时同时返回结果和 BulkError。
@@ -173,23 +173,23 @@ func encodeBulk(actions []BulkAction) ([]byte, error) {
 	encoder := json.NewEncoder(&body)
 	for _, action := range actions {
 		if action.id == "" {
-			return nil, errors.New("elasticSearchx: bulk action requires document ID")
+			return nil, errors.New("elasticsearchx: bulk action requires document ID")
 		}
 		switch action.kind {
 		case bulkIndex, bulkCreate, bulkUpdate:
 			if action.document == nil {
-				return nil, errors.New("elasticSearchx: bulk action requires document")
+				return nil, errors.New("elasticsearchx: bulk action requires document")
 			}
 		case bulkDelete:
 		default:
-			return nil, errors.New("elasticSearchx: invalid bulk action kind")
+			return nil, errors.New("elasticsearchx: invalid bulk action kind")
 		}
 		if action.updateMode == bulkUpdateWithInitial && action.initialDocument == nil {
-			return nil, errors.New("elasticSearchx: bulk upsert requires initial document")
+			return nil, errors.New("elasticsearchx: bulk upsert requires initial document")
 		}
 		if action.hasExternalVersion {
 			if (action.kind != bulkIndex && action.kind != bulkDelete) || action.version < 0 || (action.versionType != VersionExternal && action.versionType != VersionExternalGTE) {
-				return nil, errors.New("elasticSearchx: invalid bulk external version")
+				return nil, errors.New("elasticsearchx: invalid bulk external version")
 			}
 		}
 		metadata := map[string]any{"_id": action.id}
@@ -198,7 +198,7 @@ func encodeBulk(actions []BulkAction) ([]byte, error) {
 			metadata["version_type"] = action.versionType
 		}
 		if err := encoder.Encode(map[bulkKind]any{action.kind: metadata}); err != nil {
-			return nil, fmt.Errorf("elasticSearchx: encode bulk metadata: %w", err)
+			return nil, fmt.Errorf("elasticsearchx: encode bulk metadata: %w", err)
 		}
 		switch action.kind {
 		case bulkDelete:
@@ -214,14 +214,14 @@ func encodeBulk(actions []BulkAction) ([]byte, error) {
 			case bulkUpdateWithInitial:
 				update["upsert"] = action.initialDocument
 			default:
-				return nil, errors.New("elasticSearchx: invalid bulk update mode")
+				return nil, errors.New("elasticsearchx: invalid bulk update mode")
 			}
 			if err := encoder.Encode(update); err != nil {
-				return nil, fmt.Errorf("elasticSearchx: encode bulk update: %w", err)
+				return nil, fmt.Errorf("elasticsearchx: encode bulk update: %w", err)
 			}
 		default:
 			if err := encoder.Encode(action.document); err != nil {
-				return nil, fmt.Errorf("elasticSearchx: encode bulk document: %w", err)
+				return nil, fmt.Errorf("elasticsearchx: encode bulk document: %w", err)
 			}
 		}
 	}
@@ -244,21 +244,21 @@ func decodeBulk(reader io.Reader, actions []BulkAction) (BulkResult, error) {
 		} `json:"items"`
 	}
 	if err := jsonx.DecodeOne(reader, &payload); err != nil {
-		return BulkResult{}, fmt.Errorf("elasticSearchx: decode bulk response: %w", err)
+		return BulkResult{}, fmt.Errorf("elasticsearchx: decode bulk response: %w", err)
 	}
 	if payload.Errors == nil {
-		err := errors.New("elasticSearchx: bulk errors flag missing")
+		err := errors.New("elasticsearchx: bulk errors flag missing")
 		return BulkResult{}, err
 	}
 	if len(payload.Items) != len(actions) {
-		err := errors.New("elasticSearchx: bulk item count mismatch")
+		err := errors.New("elasticsearchx: bulk item count mismatch")
 		return BulkResult{}, err
 	}
 	result := BulkResult{}
 	for i, item := range payload.Items {
 		value, ok := item[actions[i].kind]
 		if !ok || value.Status == 0 {
-			err := errors.New("elasticSearchx: malformed bulk item")
+			err := errors.New("elasticsearchx: malformed bulk item")
 			return BulkResult{}, err
 		}
 		succeeded := value.Status >= 200 && value.Status < 300
@@ -288,7 +288,7 @@ func decodeBulk(reader io.Reader, actions []BulkAction) (BulkResult, error) {
 		result.Failures = append(result.Failures, failure)
 	}
 	if *payload.Errors != (len(result.Failures) > 0) {
-		err := errors.New("elasticSearchx: inconsistent bulk response")
+		err := errors.New("elasticsearchx: inconsistent bulk response")
 		return result, err
 	}
 	if len(result.Failures) != 0 {

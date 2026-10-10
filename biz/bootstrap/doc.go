@@ -1,4 +1,4 @@
-// Package bootstrap 提供日志、MySQL 和 Redis 多实例的通用初始化入口，供项目自己的 bootstrap
+// Package bootstrap 提供日志、MySQL、Redis 和 Elasticsearch 多实例的通用初始化入口，供项目自己的 bootstrap
 // 声明资源后调用，再执行业务服务装配。设计见 docs/bootstrap-design.md。
 //
 // 应用负责加载配置、创建资源关闭栈，并在初始化前登记关闭流程：
@@ -13,6 +13,7 @@
 //	bootstrap.MustRegisterMySQL("orders", true)
 //	bootstrap.MustRegisterMySQL("reports", false)
 //	bootstrap.MustRegisterRedis("orders", true)
+//	bootstrap.MustRegisterElasticsearch("orders", true)
 //	bootstrap.MustBaseInit(&config.AppConfig, &resources)
 //	logit.Info(context.Background(), "application initialized")
 //
@@ -55,7 +56,20 @@
 // redisx.Default().Client() 与 redisx.Named(name).Client() 获取同一默认客户端。
 // 创建首个实例前只登记一次 redisx.CloseAll，单个失败实例由 redisx 立即清理；
 // 此前成功的 Redis、MySQL 与日志交给应用资源栈关闭，不重复登记单个客户端 Close。
-// 关闭前先停止并等待业务任务及订阅退出，再逆序关闭项目资源、Redis、MySQL 与日志。
+// 关闭前先停止并等待业务任务及订阅退出，再逆序关闭项目资源、Elasticsearch、Redis、MySQL 与日志。
+//
+// Elasticsearch 使用 MustRegisterElasticsearch(name, isDefault) 声明，与 MySQL、Redis 独立判重。
+// Redis 初始化后读取 elasticsearch.<name>.yaml，文件前缀统一小写；未声明时跳过。
+// 模板见 conf.example/elasticsearch.example.yaml，version 必填且支持 7/8/9，文件不接受 name、isDefault。
+// 全部 ES 文件严格解析并准备后，再登记一次 elasticsearchx.CloseAll，按版本创建默认或命名客户端。
+// 三个版本共用默认与命名注册表；elasticsearchx.Default() 与 Named(默认名称) 返回同一实例。
+// caCertFile 支持绝对路径或相对配置目录的 PEM 文件；缺失或为空时失败，证书校验由底层完成。
+// startupTimeout 零值默认 5s，只限制启动验活与版本检查；业务操作使用各自的非 nil context。
+// 连接、认证和 pool 参数的默认值及语义校验沿用 elasticsearchx。
+// logRequests 省略默认 true，false 关闭所有请求结果日志，包含慢调用和错误，但仍记录下游耗时。
+// logDetails 默认 false，两项同时开启才采集正文；正文不脱敏、不截断，不额外创建 ES Logger。
+// 失败实例由底层清理，先前成功实例交给应用栈；只登记模块 CloseAll，不重复登记 Client.Close。
+// 关闭前先停止并等待业务任务，沿用底层 SDK 关闭行为，不新增关闭期限。
 //
 // 日志固定使用 rotatefile，format 必须显式设置为 text/json；默认启动目录下的 log 目录、每小时轮转、
 // 每个分流文件保留 48 个实际文件。config.Log 可配置 format、caller、dir 目录、names、rotate。

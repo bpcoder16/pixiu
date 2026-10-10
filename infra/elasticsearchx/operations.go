@@ -1,4 +1,4 @@
-package elasticSearchx
+package elasticsearchx
 
 import (
 	"bytes"
@@ -14,7 +14,7 @@ import (
 )
 
 // ErrNotFound 表示 Get 查询的文档不存在。
-var ErrNotFound = errors.New("elasticSearchx: document not found")
+var ErrNotFound = errors.New("elasticsearchx: document not found")
 
 // HTTPError 表示 Elasticsearch 返回非成功的 HTTP 状态。
 type HTTPError struct {
@@ -23,7 +23,7 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string {
-	return fmt.Sprintf("elasticSearchx: HTTP %d, type %q", e.Status, e.Type)
+	return fmt.Sprintf("elasticsearchx: HTTP %d, type %q", e.Status, e.Type)
 }
 
 // PartialSearchError 表示搜索响应已完整解析，但超时或分片失败使结果可能不完整。
@@ -34,7 +34,7 @@ type PartialSearchError struct {
 }
 
 func (e *PartialSearchError) Error() string {
-	return fmt.Sprintf("elasticSearchx: partial search response: timed_out=%t, failed_shards=%d", e.TimedOut, e.FailedShards)
+	return fmt.Sprintf("elasticsearchx: partial search response: timed_out=%t, failed_shards=%d", e.TimedOut, e.FailedShards)
 }
 
 // Total 描述搜索命中数量；Relation 为 eq 时数量准确，为 gte 时仅表示下限。
@@ -70,7 +70,7 @@ type SearchResult struct {
 // 此时若 Body 关闭也失败，结果仍保留，返回的错误链同时包含关闭错误。
 func (c *Client) Search(ctx context.Context, index string, dsl any) (SearchResult, error) {
 	if dsl == nil {
-		return SearchResult{}, errors.New("elasticSearchx: nil search DSL")
+		return SearchResult{}, errors.New("elasticsearchx: nil search DSL")
 	}
 	var payload struct {
 		Hits struct {
@@ -90,12 +90,12 @@ func (c *Client) Search(ctx context.Context, index string, dsl any) (SearchResul
 	}
 	err := c.jsonRequest(ctx, http.MethodPost, "_search", op, dsl, func(reader io.Reader) error {
 		if err := jsonx.DecodeOne(reader, &payload); err != nil {
-			return fmt.Errorf("elasticSearchx: decode search response: %w", err)
+			return fmt.Errorf("elasticsearchx: decode search response: %w", err)
 		}
 		// DecodeOne 已确认 JSON 语法完整；检查类型而不重新解码或丢失整数精度。
 		hits := bytes.TrimSpace(payload.Hits.Hits)
 		if len(hits) == 0 || hits[0] != '[' {
-			return errors.New("elasticSearchx: missing or invalid search hits array")
+			return errors.New("elasticsearchx: missing or invalid search hits array")
 		}
 		if payload.TimedOut || payload.Shards.Failed > 0 {
 			partialErr = &PartialSearchError{
@@ -124,7 +124,7 @@ func (c *Client) Search(ctx context.Context, index string, dsl any) (SearchResul
 // Count 返回匹配 DSL 的文档数；分片失败时返回零值及错误，不接受部分计数。
 func (c *Client) Count(ctx context.Context, index string, dsl any) (int64, error) {
 	if dsl == nil {
-		return 0, errors.New("elasticSearchx: nil count DSL")
+		return 0, errors.New("elasticsearchx: nil count DSL")
 	}
 	var payload struct {
 		Count  *int64     `json:"count"`
@@ -136,13 +136,13 @@ func (c *Client) Count(ctx context.Context, index string, dsl any) (int64, error
 	}
 	err := c.jsonRequest(ctx, http.MethodPost, "_count", op, dsl, func(reader io.Reader) error {
 		if err := jsonx.DecodeOne(reader, &payload); err != nil {
-			return fmt.Errorf("elasticSearchx: decode count response: %w", err)
+			return fmt.Errorf("elasticsearchx: decode count response: %w", err)
 		}
 		if payload.Count == nil {
-			return errors.New("elasticSearchx: incomplete count response")
+			return errors.New("elasticsearchx: incomplete count response")
 		}
 		if payload.Shards.Failed > 0 {
-			return fmt.Errorf("elasticSearchx: count response has %d failed shards", payload.Shards.Failed)
+			return fmt.Errorf("elasticsearchx: count response has %d failed shards", payload.Shards.Failed)
 		}
 		return nil
 	})
@@ -156,7 +156,7 @@ func (c *Client) Count(ctx context.Context, index string, dsl any) (int64, error
 // 文档存在但禁用 _source 时返回 (nil, nil)；无效响应返回错误。
 func (c *Client) Get(ctx context.Context, index, id string) (json.RawMessage, error) {
 	if id == "" {
-		return nil, errors.New("elasticSearchx: empty document ID")
+		return nil, errors.New("elasticsearchx: empty document ID")
 	}
 	var payload struct {
 		Found  *bool           `json:"found"`
@@ -168,15 +168,15 @@ func (c *Client) Get(ctx context.Context, index, id string) (json.RawMessage, er
 	}
 	err := c.request(ctx, http.MethodGet, "_doc/"+url.PathEscape(id), op, nil, "", func(reader io.Reader) error {
 		if err := jsonx.DecodeOne(reader, &payload); err != nil {
-			return fmt.Errorf("elasticSearchx: decode get response: %w", err)
+			return fmt.Errorf("elasticsearchx: decode get response: %w", err)
 		}
 		if payload.Found == nil || !*payload.Found {
-			return errors.New("elasticSearchx: missing or invalid get found flag")
+			return errors.New("elasticsearchx: missing or invalid get found flag")
 		}
 		// 禁用 _source 的索引会省略该字段；存在时必须是完整 JSON 对象。
 		source := bytes.TrimSpace(payload.Source)
 		if payload.Source != nil && (len(source) == 0 || source[0] != '{') {
-			return errors.New("elasticSearchx: invalid get source object")
+			return errors.New("elasticsearchx: invalid get source object")
 		}
 		return nil
 	})
@@ -190,7 +190,7 @@ func (c *Client) Get(ctx context.Context, index, id string) (json.RawMessage, er
 // 主分片写入成功时，副本失败不返回错误；开启请求日志时以 Warn 记录失败分片数。
 func (c *Client) Index(ctx context.Context, index, id string, document any) error {
 	if id == "" || document == nil {
-		return errors.New("elasticSearchx: empty document ID or content")
+		return errors.New("elasticsearchx: empty document ID or content")
 	}
 	var payload struct {
 		Result string `json:"result"`
@@ -208,16 +208,16 @@ func (c *Client) Index(ctx context.Context, index, id string, document any) erro
 	}
 	return c.jsonRequest(ctx, http.MethodPut, "_doc/"+url.PathEscape(id), op, document, func(reader io.Reader) error {
 		if err := jsonx.DecodeOne(reader, &payload); err != nil {
-			return fmt.Errorf("elasticSearchx: decode index response: %w", err)
+			return fmt.Errorf("elasticsearchx: decode index response: %w", err)
 		}
 		if payload.Result == "" || payload.Shards.Total == nil || payload.Shards.Successful == nil || payload.Shards.Failed == nil {
-			return errors.New("elasticSearchx: incomplete index response")
+			return errors.New("elasticsearchx: incomplete index response")
 		}
 		total, successful, failed := *payload.Shards.Total, *payload.Shards.Successful, *payload.Shards.Failed
 		// 未分配副本不计为失败，pipeline 丢弃文档也可能返回零分片。
 		// 使用减法检查上界，避免不可信计数相加溢出。
 		if total < 0 || successful < 0 || failed < 0 || successful > total || failed > total-successful {
-			return errors.New("elasticSearchx: invalid index shard counts")
+			return errors.New("elasticsearchx: invalid index shard counts")
 		}
 		// 成功响应中的副本失败只用于观测，不改变主分片写入成功的结果。
 		failedShards = failed

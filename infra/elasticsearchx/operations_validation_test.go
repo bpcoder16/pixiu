@@ -1,4 +1,4 @@
-package elasticSearchx
+package elasticsearchx
 
 import (
 	"context"
@@ -195,7 +195,7 @@ func TestIndexValidatesResponseShape(t *testing.T) {
 func TestIndexReplicaFailuresDoNotFailWrite(t *testing.T) {
 	for _, closeFails := range []bool{false, true} {
 		t.Run(fmt.Sprint(closeFails), func(t *testing.T) {
-			buf := captureElasticSearchLogs(t)
+			buf := captureElasticsearchLogs(t)
 			var closeErr error
 			if closeFails {
 				closeErr = errors.New("close failed")
@@ -225,8 +225,8 @@ func TestIndexReplicaFailuresDoNotFailWrite(t *testing.T) {
 			if details["error_type"] != wantErrorType || details["failed_shards"] != float64(1) {
 				t.Fatalf("副本失败日志详情错误: %v", records)
 			}
-			elapsed, ok := records[1]["elasticSearch_catalog_1_duration_ms"]
-			if !ok || elapsed != records[0]["downstream_duration_ms"] || records[1]["elasticSearch_catalog_2_duration_ms"] != nil {
+			elapsed, ok := records[1]["elasticsearch_catalog_1_duration_ms"]
+			if !ok || elapsed != records[0]["downstream_duration_ms"] || records[1]["elasticsearch_catalog_2_duration_ms"] != nil {
 				t.Fatalf("分片失败耗时丢失或重复: %v", records)
 			}
 			if (err != nil && strings.Contains(err.Error(), "secret")) || strings.Contains(buf.String(), "secret") {

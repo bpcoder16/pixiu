@@ -149,7 +149,6 @@ func TestRedisInstancesRouteAndCloseWithMySQL(t *testing.T) {
 				session := newBootstrapRedisServer(t, "session-value", "+PONG\r\n")
 				database := newBootstrapMySQLServer(t, "8.0.36", false)
 				content := strings.Replace(string(template), "port: 6379", fmt.Sprintf("port: %d", cache.port), 1)
-				content = strings.Replace(content, "logCommands: false", "logCommands: true", 1)
 				writeRedisConfig(t, "cache", content)
 				writeRedisConfig(t, "session", redisConfigYAML(session.port)+"username: worker\npassword: test-secret\ndb: 2\n")
 				writeMySQLConfig(t, "cache", mysqlConfigYAML(database.port))
@@ -189,7 +188,7 @@ func TestRedisInstancesRouteAndCloseWithMySQL(t *testing.T) {
 					t.Fatalf("应保留 Redis 未命中语义: %v", err)
 				}
 				opts := shared.Client().Options()
-				if opts.PoolSize != 20 || opts.MaxActiveConns != 20 || opts.MinIdleConns != 0 || opts.MaxIdleConns != 10 || opts.PoolTimeout != 3*time.Second || opts.ConnMaxIdleTime != 5*time.Minute || opts.ConnMaxLifetime != 0 || opts.DialTimeout != 3*time.Second || opts.ReadTimeout != 3*time.Second || opts.WriteTimeout != 3*time.Second || opts.MaxRetries != 0 || !opts.ContextTimeoutEnabled {
+				if opts.PoolSize != 100 || opts.MaxActiveConns != 0 || opts.MinIdleConns != 10 || opts.MaxIdleConns != 20 || opts.PoolTimeout != 4*time.Second || opts.ConnMaxIdleTime != 30*time.Minute || opts.ConnMaxLifetime != 0 || opts.DialTimeout != 3*time.Second || opts.ReadTimeout != 3*time.Second || opts.WriteTimeout != 3*time.Second || opts.MaxRetries != 0 || !opts.ContextTimeoutEnabled {
 					t.Fatal("模板中的池、超时或重试配置未生效")
 				}
 				opts = redisx.Named("session").Client().Options()

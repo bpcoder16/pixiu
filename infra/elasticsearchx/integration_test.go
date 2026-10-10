@@ -1,4 +1,4 @@
-package elasticSearchx_test
+package elasticsearchx_test
 
 import (
 	"bytes"
@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bpcoder16/pixiu/infra/elasticSearchx"
-	elasticSearchxv7 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v7"
-	elasticSearchxv8 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v8"
-	elasticSearchxv9 "github.com/bpcoder16/pixiu/infra/elasticSearchx/v9"
+	"github.com/bpcoder16/pixiu/infra/elasticsearchx"
+	elasticsearchxv7 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v7"
+	elasticsearchxv8 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v8"
+	elasticsearchxv9 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v9"
 	"github.com/bpcoder16/pixiu/logit"
 )
 
@@ -29,9 +29,9 @@ func TestVersionFactoriesConnectAndRunCommonOperations(t *testing.T) {
 	t.Cleanup(func() { logit.SetDefault(oldLogger); _ = logit.Close(logger) })
 	factories := []struct {
 		major int
-		open  func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+		open  func(elasticsearchx.Config, ...elasticsearchx.Option) (*elasticsearchx.Client, error)
 	}{
-		{7, elasticSearchxv7.New}, {8, elasticSearchxv8.New}, {9, elasticSearchxv9.New},
+		{7, elasticsearchxv7.New}, {8, elasticsearchxv8.New}, {9, elasticsearchxv9.New},
 	}
 	for _, factory := range factories {
 		t.Run(fmt.Sprint(factory.major), func(t *testing.T) {
@@ -63,7 +63,7 @@ func TestVersionFactoriesConnectAndRunCommonOperations(t *testing.T) {
 			}))
 			defer server.Close()
 			ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
-			cfg := elasticSearchx.Config{Name: "search", Addresses: []string{server.URL}, CACert: ca}
+			cfg := elasticsearchx.Config{Name: "search", Addresses: []string{server.URL}, CACert: ca}
 			if factory.major == 8 {
 				cfg.APIKey = "dGVzdA=="
 			} else {
@@ -96,11 +96,11 @@ func TestVersionFactoriesPassLogOptionsAndPreserveResponse(t *testing.T) {
 	})
 	for _, factory := range []struct {
 		major int
-		open  func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+		open  func(elasticsearchx.Config, ...elasticsearchx.Option) (*elasticsearchx.Client, error)
 	}{
-		{7, elasticSearchxv7.New},
-		{8, elasticSearchxv8.New},
-		{9, elasticSearchxv9.New},
+		{7, elasticsearchxv7.New},
+		{8, elasticsearchxv8.New},
+		{9, elasticsearchxv9.New},
 	} {
 		t.Run(fmt.Sprint(factory.major), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -117,13 +117,13 @@ func TestVersionFactoriesPassLogOptionsAndPreserveResponse(t *testing.T) {
 				fmt.Fprint(w, `{"count":4}`)
 			}))
 			defer server.Close()
-			cfg := elasticSearchx.Config{
+			cfg := elasticsearchx.Config{
 				Name:      "catalog",
 				Addresses: []string{server.URL},
 			}
 			for _, tt := range []struct {
 				name string
-				opts []elasticSearchx.Option
+				opts []elasticsearchx.Option
 				log  bool
 			}{
 				{
@@ -131,16 +131,16 @@ func TestVersionFactoriesPassLogOptionsAndPreserveResponse(t *testing.T) {
 				},
 				{
 					name: "仅开启详情",
-					opts: []elasticSearchx.Option{elasticSearchx.OptLogDetails(true)},
+					opts: []elasticsearchx.Option{elasticsearchx.OptLogDetails(true)},
 				},
 				{
 					name: "显式开启",
-					opts: []elasticSearchx.Option{elasticSearchx.OptLogRequests(true), elasticSearchx.OptLogDetails(true)},
+					opts: []elasticsearchx.Option{elasticsearchx.OptLogRequests(true), elasticsearchx.OptLogDetails(true)},
 					log:  true,
 				},
 				{
 					name: "显式关闭",
-					opts: []elasticSearchx.Option{elasticSearchx.OptLogRequests(false), elasticSearchx.OptLogDetails(true)},
+					opts: []elasticsearchx.Option{elasticsearchx.OptLogRequests(false), elasticsearchx.OptLogDetails(true)},
 				},
 			} {
 				buf.Reset()
@@ -164,7 +164,7 @@ func TestVersionFactoriesPassLogOptionsAndPreserveResponse(t *testing.T) {
 						t.Fatal(err)
 					}
 					details := record[logit.DownstreamDetailsKey].(map[string]any)
-					if record["level"] != "INFO" || record[logit.DownstreamTypeKey] != "elasticSearch" || details["request_body"] != `{"query":"all"}` || details["response_body"] != `{"count":4}` || details["response_proto"] != "HTTP/1.1" || details["response_status_text"] != "200 OK" {
+					if record["level"] != "INFO" || record[logit.DownstreamTypeKey] != "elasticsearch" || details["request_body"] != `{"query":"all"}` || details["response_body"] != `{"count":4}` || details["response_proto"] != "HTTP/1.1" || details["response_status_text"] != "200 OK" {
 						t.Fatalf("官方客户端详情日志错误: %v", record)
 					}
 				} else if buf.Len() != 0 {
@@ -172,7 +172,7 @@ func TestVersionFactoriesPassLogOptionsAndPreserveResponse(t *testing.T) {
 				}
 				buf.Reset()
 				logit.InfoDuration(ctx, "done")
-				if !strings.Contains(buf.String(), `"elasticSearch_catalog_1_duration_ms"`) || strings.Contains(buf.String(), `"elasticSearch_catalog_2_duration_ms"`) {
+				if !strings.Contains(buf.String(), `"elasticsearch_catalog_1_duration_ms"`) || strings.Contains(buf.String(), `"elasticsearch_catalog_2_duration_ms"`) {
 					t.Fatalf("官方客户端耗时记录丢失或重复: %s", buf.String())
 				}
 			}
@@ -183,11 +183,11 @@ func TestVersionFactoriesPassLogOptionsAndPreserveResponse(t *testing.T) {
 func TestVersionFactoriesRespectConnectionLimit(t *testing.T) {
 	factories := []struct {
 		major int
-		open  func(elasticSearchx.Config, ...elasticSearchx.Option) (*elasticSearchx.Client, error)
+		open  func(elasticsearchx.Config, ...elasticsearchx.Option) (*elasticsearchx.Client, error)
 	}{
-		{7, elasticSearchxv7.New},
-		{8, elasticSearchxv8.New},
-		{9, elasticSearchxv9.New},
+		{7, elasticsearchxv7.New},
+		{8, elasticsearchxv8.New},
+		{9, elasticsearchxv9.New},
 	}
 	for _, factory := range factories {
 		t.Run(fmt.Sprint(factory.major), func(t *testing.T) {
@@ -217,7 +217,7 @@ func TestVersionFactoriesRespectConnectionLimit(t *testing.T) {
 			defer server.Close()
 			// 先释放阻塞的请求，再等待服务端关闭，避免失败路径挂起。
 			defer release()
-			client, err := factory.open(elasticSearchx.Config{
+			client, err := factory.open(elasticsearchx.Config{
 				Name:            "search",
 				Addresses:       []string{server.URL},
 				MaxConnsPerHost: 1,

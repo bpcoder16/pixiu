@@ -139,9 +139,9 @@ func main() {
 | [`infra/sqlitex`](infra/sqlitex/doc.go) | SQLite 单库连接池、常用参数配置、查询日志 | GORM、go-sqlite3、logit |
 | [`infra/redisx`](infra/redisx/doc.go) | 单机 Redis 客户端、初始化验活、命令结果日志 | go-redis v9、logit |
 | [`infra/natsx`](infra/natsx/doc.go) | NATS 发布 / 请求 / 订阅、JetStream 发布与消费、统一日志 | nats.go、logit |
-| [`infra/elasticSearchx`](infra/elasticSearchx/doc.go) | Elasticsearch 通用操作、Bulk、结果日志与版本适配 | 官方 Elasticsearch SDK、logit |
+| [`infra/elasticsearchx`](infra/elasticsearchx/doc.go) | Elasticsearch 通用操作、Bulk、结果日志与版本适配 | 官方 Elasticsearch SDK、logit |
 
-Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticSearchx/v7/doc.go)、[`v8`](infra/elasticSearchx/v8/doc.go) 或 [`v9`](infra/elasticSearchx/v9/doc.go) 适配包；共用操作位于 `infra/elasticSearchx`。
+Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/doc.go)、[`v8`](infra/elasticsearchx/v8/doc.go) 或 [`v9`](infra/elasticsearchx/v9/doc.go) 适配包；共用操作位于 `infra/elasticsearchx`。
 
 ### 通用业务功能 · biz
 
@@ -181,7 +181,7 @@ pixiu/
 │   ├── sqlitex/            SQLite
 │   ├── redisx/             Redis
 │   ├── natsx/              NATS
-│   ├── elasticSearchx/     Elasticsearch 与 v7 / v8 / v9 适配
+│   ├── elasticsearchx/     Elasticsearch 与 v7 / v8 / v9 适配
 │   └── internal/           infra 内部共用实现
 ├── biz/
 │   ├── bootstrap/          通用初始化入口与资源登记约定

@@ -1,4 +1,4 @@
-package elasticSearchx
+package elasticsearchx
 
 import (
 	"context"
@@ -86,33 +86,33 @@ type Client struct {
 	closed         atomic.Bool
 }
 
-var errClientClosed = errors.New("elasticSearchx: client is closed")
+var errClientClosed = errors.New("elasticsearchx: client is closed")
 
 // NewTransport 验证配置并创建由该客户端独占的 HTTP 连接池。
 func NewTransport(cfg Config) (*http.Transport, error) {
 	if strings.TrimSpace(cfg.Name) == "" {
-		return nil, errors.New("elasticSearchx: empty client name")
+		return nil, errors.New("elasticsearchx: empty client name")
 	}
 	if len(cfg.Addresses) == 0 {
-		return nil, errors.New("elasticSearchx: empty addresses")
+		return nil, errors.New("elasticsearchx: empty addresses")
 	}
 	for _, address := range cfg.Addresses {
 		u, err := url.Parse(address)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-			return nil, errors.New("elasticSearchx: invalid address")
+			return nil, errors.New("elasticsearchx: invalid address")
 		}
 	}
 	if cfg.APIKey != "" && (cfg.Username != "" || cfg.Password != "") {
-		return nil, errors.New("elasticSearchx: conflicting authentication settings")
+		return nil, errors.New("elasticsearchx: conflicting authentication settings")
 	}
 	if cfg.Password != "" && cfg.Username == "" {
-		return nil, errors.New("elasticSearchx: password requires username")
+		return nil, errors.New("elasticsearchx: password requires username")
 	}
 	if cfg.DialTimeout < 0 || cfg.StartupTimeout < 0 || cfg.SlowThreshold < 0 {
-		return nil, errors.New("elasticSearchx: negative timeout")
+		return nil, errors.New("elasticsearchx: negative timeout")
 	}
 	if cfg.MaxIdleConns < 0 || cfg.MaxIdleConnsPerHost < 0 || cfg.MaxConnsPerHost < 0 || cfg.IdleConnTimeout < 0 {
-		return nil, errors.New("elasticSearchx: negative connection pool setting")
+		return nil, errors.New("elasticsearchx: negative connection pool setting")
 	}
 	timeout := cfg.DialTimeout
 	if timeout == 0 {
@@ -120,7 +120,7 @@ func NewTransport(cfg Config) (*http.Transport, error) {
 	}
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		return nil, errors.New("elasticSearchx: unsupported default HTTP transport")
+		return nil, errors.New("elasticsearchx: unsupported default HTTP transport")
 	}
 	transport := base.Clone()
 	// HTTPS 也须经过本模块的拨号与 TLS 校验，不能继承绕过这些配置的专用拨号器。
@@ -156,10 +156,10 @@ func NewTransport(cfg Config) (*http.Transport, error) {
 	if len(cfg.CACert) != 0 {
 		roots, err := x509.SystemCertPool()
 		if err != nil {
-			return nil, errors.New("elasticSearchx: load system CA certificates")
+			return nil, errors.New("elasticsearchx: load system CA certificates")
 		}
 		if !roots.AppendCertsFromPEM(cfg.CACert) {
-			return nil, errors.New("elasticSearchx: invalid CA certificate")
+			return nil, errors.New("elasticsearchx: invalid CA certificate")
 		}
 		tlsConfig.RootCAs = roots
 	}
@@ -171,7 +171,7 @@ func NewTransport(cfg Config) (*http.Transport, error) {
 // 传入的 transport 由返回的 Client 接管；失败时也会关闭它。
 func Attach(cfg Config, major int, performer Performer, closeClient func(context.Context) error, transport *http.Transport, opts ...Option) (*Client, error) {
 	if performer == nil || transport == nil {
-		return nil, errors.New("elasticSearchx: invalid client initialization")
+		return nil, errors.New("elasticsearchx: invalid client initialization")
 	}
 	threshold := cfg.SlowThreshold
 	if threshold == 0 {
@@ -179,7 +179,7 @@ func Attach(cfg Config, major int, performer Performer, closeClient func(context
 	}
 	c := &Client{
 		name:           cfg.Name,
-		durationPrefix: downstreamElasticSearchMessage + "_" + cfg.Name,
+		durationPrefix: downstreamElasticsearchMessage + "_" + cfg.Name,
 		performer:      performer,
 		transport:      transport,
 		closeClient:    closeClient,
@@ -207,19 +207,19 @@ func (c *Client) verify(ctx context.Context, major int) (resultErr error) {
 	// 使用相对路径，Host 随 SDK 选择的实际节点发送。
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 	if err != nil {
-		return fmt.Errorf("elasticSearchx: build startup check: %w", err)
+		return fmt.Errorf("elasticsearchx: build startup check: %w", err)
 	}
 	res, err := c.perform(req)
 	if err != nil {
-		return fmt.Errorf("elasticSearchx: startup check: %w", err)
+		return fmt.Errorf("elasticsearchx: startup check: %w", err)
 	}
 	defer func() {
 		if err := res.Body.Close(); err != nil {
-			resultErr = errors.Join(resultErr, fmt.Errorf("elasticSearchx: close startup response: %w", err))
+			resultErr = errors.Join(resultErr, fmt.Errorf("elasticsearchx: close startup response: %w", err))
 		}
 	}()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("elasticSearchx: startup check: HTTP %d", res.StatusCode)
+		return fmt.Errorf("elasticsearchx: startup check: HTTP %d", res.StatusCode)
 	}
 	var info struct {
 		Version struct {
@@ -227,7 +227,7 @@ func (c *Client) verify(ctx context.Context, major int) (resultErr error) {
 		} `json:"version"`
 	}
 	if err := jsonx.DecodeOne(io.LimitReader(res.Body, 64<<10), &info); err != nil {
-		return fmt.Errorf("elasticSearchx: decode startup check: %w", err)
+		return fmt.Errorf("elasticsearchx: decode startup check: %w", err)
 	}
 	var found int
 	if _, err := fmt.Sscanf(info.Version.Number, "%d.", &found); err != nil || found != major {
@@ -237,7 +237,7 @@ func (c *Client) verify(ctx context.Context, major int) (resultErr error) {
 }
 
 func versionError(expected int, actual string) error {
-	return fmt.Errorf("elasticSearchx: server major mismatch: expected %d, got %q", expected, actual)
+	return fmt.Errorf("elasticsearchx: server major mismatch: expected %d, got %q", expected, actual)
 }
 
 // perform 只执行底层请求并校验响应；日志、耗时及 Body 由具体请求方法处理。
@@ -250,9 +250,9 @@ func (c *Client) perform(req *http.Request) (*http.Response, error) {
 	if err == nil {
 		switch {
 		case res == nil:
-			err = errors.New("elasticSearchx: empty HTTP response")
+			err = errors.New("elasticsearchx: empty HTTP response")
 		case res.Body == nil:
-			err = errors.New("elasticSearchx: nil HTTP response body")
+			err = errors.New("elasticsearchx: nil HTTP response body")
 		}
 	}
 	if res != nil && res.Request == nil {

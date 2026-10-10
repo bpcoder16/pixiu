@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bpcoder16/pixiu/infra/elasticSearchx"
+	"github.com/bpcoder16/pixiu/infra/elasticsearchx"
 )
 
 func TestNewDoesNotRetryEOF(t *testing.T) {
@@ -20,10 +20,10 @@ func TestNewDoesNotRetryEOF(t *testing.T) {
 		closeWithoutResponse(t, w)
 	}))
 	defer server.Close()
-	client, err := New(elasticSearchx.Config{
+	client, err := New(elasticsearchx.Config{
 		Name:      "search",
 		Addresses: []string{server.URL},
-	}, elasticSearchx.OptLogRequests(false))
+	}, elasticsearchx.OptLogRequests(false))
 	if client != nil {
 		_ = client.Close()
 	}
@@ -83,10 +83,10 @@ func TestOperationsDoNotRetryEOF(t *testing.T) {
 			defer server.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			client, err := New(elasticSearchx.Config{
+			client, err := New(elasticsearchx.Config{
 				Name:      "search",
 				Addresses: []string{server.URL},
-			}, elasticSearchx.OptLogRequests(false))
+			}, elasticsearchx.OptLogRequests(false))
 			if err != nil {
 				t.Fatal(err)
 			}

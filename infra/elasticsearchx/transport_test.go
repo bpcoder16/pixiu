@@ -1,4 +1,4 @@
-package elasticSearchx
+package elasticsearchx
 
 import (
 	"context"
@@ -25,7 +25,7 @@ func TestNewTransportRejectsEmptyHostname(t *testing.T) {
 			if transport != nil {
 				transport.CloseIdleConnections()
 			}
-			if transport != nil || err == nil || err.Error() != "elasticSearchx: invalid address" {
+			if transport != nil || err == nil || err.Error() != "elasticsearchx: invalid address" {
 				t.Fatalf("空主机名未被拒绝: transport=%v err=%v", transport, err)
 			}
 		})

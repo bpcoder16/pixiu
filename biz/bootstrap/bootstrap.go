@@ -13,7 +13,7 @@ import (
 var baseInitStarted bool
 
 // MustBaseInit 执行通用初始化；参数缺失时 panic。
-// 参数校验通过后封闭注册；先应用 env 时区，再依次初始化日志、已声明的 MySQL 和 Redis。
+// 参数校验通过后封闭注册；先应用 env 时区，再依次初始化日志、MySQL、Redis 和 Elasticsearch。
 // 必须在其他 goroutine 并发使用时间或日志前调用，运行期不再修改 time.Local。
 // 日志最先登记，以保证最后关闭；重复调用或初始化失败后重试会 panic。
 // resources 由应用创建为空栈并负责关闭，调用方须提前登记关闭 defer。
@@ -35,6 +35,9 @@ func MustBaseInit(config *baseconfig.AppConfig, resources *lifecycle.Stack) {
 	}
 	if err := redisInstances.initialize(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize Redis: %w", err))
+	}
+	if err := elasticsearchInstances.initialize(resources); err != nil {
+		panic(fmt.Errorf("bootstrap: initialize Elasticsearch: %w", err))
 	}
 }
 

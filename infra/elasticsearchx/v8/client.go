@@ -1,14 +1,14 @@
-package v9
+package v8
 
 import (
-	"github.com/bpcoder16/pixiu/infra/elasticSearchx"
+	"github.com/bpcoder16/pixiu/infra/elasticsearchx"
 	"github.com/elastic/elastic-transport-go/v8/elastictransport"
-	"github.com/elastic/go-elasticsearch/v9"
+	"github.com/elastic/go-elasticsearch/v8"
 )
 
-// New 创建并验证 Elasticsearch 9 连接。
-func New(cfg elasticSearchx.Config, opts ...elasticSearchx.Option) (*elasticSearchx.Client, error) {
-	transport, err := elasticSearchx.NewTransport(cfg)
+// New 创建并验证 Elasticsearch 8 连接。
+func New(cfg elasticsearchx.Config, opts ...elasticsearchx.Option) (*elasticsearchx.Client, error) {
+	transport, err := elasticsearchx.NewTransport(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -26,21 +26,21 @@ func New(cfg elasticSearchx.Config, opts ...elasticSearchx.Option) (*elasticSear
 		transport.CloseIdleConnections()
 		return nil, err
 	}
-	return elasticSearchx.Attach(cfg, 9, native, native.Close, transport, opts...)
+	return elasticsearchx.Attach(cfg, 8, native, native.Close, transport, opts...)
 }
 
-// NewNamed 创建并按 Config.Name 登记 Elasticsearch 9 客户端；重复名称返回错误。
+// NewNamed 创建并按 Config.Name 登记 Elasticsearch 8 客户端；重复名称返回错误。
 // 启动阶段须串行初始化；全部创建完成后才开始业务，不与 CloseAll 并发。
-func NewNamed(cfg elasticSearchx.Config, opts ...elasticSearchx.Option) (*elasticSearchx.Client, error) {
-	return elasticSearchx.RegisterNamed(cfg.Name, func() (*elasticSearchx.Client, error) {
+func NewNamed(cfg elasticsearchx.Config, opts ...elasticsearchx.Option) (*elasticsearchx.Client, error) {
+	return elasticsearchx.RegisterNamed(cfg.Name, func() (*elasticsearchx.Client, error) {
 		return New(cfg, opts...)
 	})
 }
 
 // NewDefault 创建默认客户端，同时按 Config.Name 登记；Name 仍必填。
 // 已有默认实例时返回错误，创建失败可重试；初始化约束与 NewNamed 相同。
-func NewDefault(cfg elasticSearchx.Config, opts ...elasticSearchx.Option) (*elasticSearchx.Client, error) {
-	return elasticSearchx.RegisterDefault(cfg.Name, func() (*elasticSearchx.Client, error) {
+func NewDefault(cfg elasticsearchx.Config, opts ...elasticsearchx.Option) (*elasticsearchx.Client, error) {
+	return elasticsearchx.RegisterDefault(cfg.Name, func() (*elasticsearchx.Client, error) {
 		return New(cfg, opts...)
 	})
 }
