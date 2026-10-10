@@ -1,5 +1,5 @@
 // Package httpconfig 组合 configx 和 env，提供 HTTP 应用启动配置加载与环境初始化。
-// 第一版包含 env.appName、env.runMode、env.timeLocation 三个必填字段和可选 localIP。
+// 包含 env.appName、env.runMode、env.timeLocation 三个必填字段、可选 localIP 和 log 配置。
 //
 // 将本包 conf.example/app.yaml 复制到应用的 conf/app.yaml 并修改后，
 // 在应用启动时调用（需导入 github.com/bpcoder16/pixiu/biz/httpconfig
@@ -36,4 +36,14 @@
 // 如果环境已由其他启动入口初始化，本入口会 panic 并保留原环境。
 // 返回的配置是共享指针，修改后不会自动更新全局环境，配置并发读写由调用方协调。
 // 加载不修改 time.Local 或 Gin 模式，也不初始化日志或其他组件。
+//
+// LogConfig 只在此解析；biz/bootstrap 校验并应用日志默认值，不回写配置。
+// 日志固定使用 rotatefile；省略 log 时默认 text、./log 目录、轮转周期 1h、每个文件保留 48 份。
+// 可配置 format（text/json）、file 目录、names（额外命名 Logger）、
+// rotate.every（1h/24h）、rotate.maxFiles（至少 3）；不接受 mode 配置。
+// file 相对路径基于 env.RootDirPath()，绝对路径直接使用，目录由 bootstrap 创建并检查可写权限。
+// 默认与命名日志分别以 env.AppName() 和 env.AppName()+"."+name 为基名，
+// 按 Debug、Info、WF（Warn、Error、Fatal）分流，详见 biz/bootstrap/doc.go。
+// 空字符串和数值 0 表示使用默认值；Names 中不接受空字符串。
+// 类型与未知字段在加载阶段检查，格式、名字及文件冲突、轮转范围在初始化阶段检查。
 package httpconfig

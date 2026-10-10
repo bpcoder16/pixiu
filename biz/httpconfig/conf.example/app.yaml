@@ -10,3 +10,19 @@ env:
 
   # 可选 IPv4 / IPv6；空字符串在初始化时先查询本机 IPv4，失败后查询 IPv6，再失败则保持为空。
   localIP: ""
+
+log:
+  # text / json；默认 text。默认开启调用位置，release 输出 Info 及以上，其他模式输出 Debug 及以上。
+  format: "text"
+  # 日志目录，默认 ./log；相对路径拼接 env.RootDirPath()，绝对路径直接使用。
+  # 不存在时自动创建；启动时检查目录可写权限。
+  file: "./log"
+  # 额外的命名 Logger，可通过 logit.Named(name) 或 WithLoggerName(ctx, name) 选择。
+  # 每个 Logger 都按 Debug / Info / WF（Warn、Error、Fatal）分流，详见 bootstrap/doc.go。
+  names: []
+  # 固定使用 rotatefile；时间戳和轮转边界使用进程本地时区。
+  rotate:
+    # 按本地整小时（1h）或整天（24h）轮转，默认 1h。
+    every: "1h"
+    # 保留实际文件数量（含当前文件，不含软链），默认 48，最小 3。
+    maxFiles: 48

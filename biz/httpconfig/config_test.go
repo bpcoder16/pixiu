@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -137,7 +138,9 @@ func TestMustLoadAppConfigRejectsInvalidEnvironment(t *testing.T) {
 		{"invalid-ip", strings.Replace(validYAML, "192.0.2.10", "not-an-ip", 1), "env.localIP"},
 		{"unknown-field", validYAML + "  appNmae: wrong\n", "appnmae"},
 		{"unknown-null", validYAML + "  extra: null\n", "extra"},
-		{"log-not-supported", validYAML + "log: {}\n", "log"},
+		{"unknown-log-field", validYAML + "log:\n  formatt: json\n", "formatt"},
+		{"removed-log-mode", validYAML + "log:\n  mode: file\n", "mode"},
+		{"wrong-log-names-type", validYAML + "log:\n  names: [123]\n", "names"},
 		{"wrong-type", strings.Replace(validYAML, "demo", "123", 1), "appName"},
 	}
 	for _, tc := range cases {
@@ -246,6 +249,40 @@ func TestExampleTemplate(t *testing.T) {
 			t.Fatalf("模板配置不正确: %+v", cfg)
 		}
 	})
+}
+
+func TestLogConfigurationFormats(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "app.yaml",
+			content: validYAML + "log:\n  format: json\n  file: logs\n  names: [worker, request]\n  rotate:\n    every: 24h\n    maxFiles: 7\n",
+		},
+		{
+			name:    "app.toml",
+			content: "[env]\nappName = 'demo'\nrunMode = 'debug'\ntimeLocation = 'UTC'\nlocalIP = '192.0.2.10'\n[log]\nformat = 'json'\nfile = 'logs'\nnames = ['worker', 'request']\n[log.rotate]\nevery = '24h'\nmaxFiles = 7\n",
+		},
+		{
+			name:    "app.json",
+			content: `{"env":{"appName":"demo","runMode":"debug","timeLocation":"UTC","localIP":"192.0.2.10"},"log":{"format":"json","file":"logs","names":["worker","request"],"rotate":{"every":"24h","maxFiles":7}}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolated(t, func(t *testing.T) {
+				dir := t.TempDir()
+				t.Chdir(dir)
+				cfg := httpconfig.MustLoadAppConfig(writeConfig(t, dir, tc.name, tc.content))
+				if cfg.Log.Format != "json" || cfg.Log.File != "logs" || !slices.Equal(cfg.Log.Names, []string{"worker", "request"}) || cfg.Log.Rotate.Every != 24*time.Hour || cfg.Log.Rotate.MaxFiles != 7 {
+					t.Fatalf("日志配置解析错误: %+v", cfg.Log)
+				}
+				if _, err := os.Stat("logs"); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("配置加载不应创建日志目录: %v", err)
+				}
+			})
+		})
+	}
 }
 
 func TestMustLoadDoesNotReplaceExistingEnvironment(t *testing.T) {
