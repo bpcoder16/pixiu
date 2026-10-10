@@ -44,7 +44,7 @@ func BuildCluster[T any](
 	cluster *Cluster,
 	master T,
 	slaves []T,
-	open func(context.Context, T, string) (*gormlib.DB, *sql.DB, error),
+	open func(context.Context, T) (*gormlib.DB, *sql.DB, error),
 ) (err error) {
 	defer func() {
 		if err != nil {
@@ -52,7 +52,7 @@ func BuildCluster[T any](
 		}
 	}()
 
-	masterDB, masterPool, err := open(ctx, master, "master")
+	masterDB, masterPool, err := open(ctx, master)
 	if err != nil {
 		if masterPool != nil {
 			_ = masterPool.Close()
@@ -61,7 +61,7 @@ func BuildCluster[T any](
 	}
 	cluster.setMaster(masterDB, masterPool)
 	for _, slave := range slaves {
-		db, pool, openErr := open(ctx, slave, "slave")
+		db, pool, openErr := open(ctx, slave)
 		if openErr != nil {
 			if pool != nil {
 				_ = pool.Close()

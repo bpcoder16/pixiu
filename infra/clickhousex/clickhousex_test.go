@@ -49,6 +49,11 @@ func parseRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 		if err := json.Unmarshal(line, &record); err != nil {
 			t.Fatalf("解析日志: %v", err)
 		}
+		if details, ok := record[logit.DownstreamDetailsKey].(map[string]any); ok {
+			if _, exists := details["endpoint_type"]; exists {
+				t.Fatalf("GORM 日志不应包含 endpoint_type: %v", record)
+			}
+		}
 		records = append(records, record)
 	}
 	return records
@@ -220,7 +225,7 @@ func TestGORMCaller(t *testing.T) {
 		Name:          "analytics",
 		SlowThreshold: time.Hour,
 		LogSQL:        true,
-	}, "master", "master")
+	}, "master")
 	ctx := context.Background()
 	diagnostic.Info(ctx, "info")
 	diagnostic.Warn(ctx, "warn")
@@ -249,7 +254,7 @@ func TestTracePolicyDiagnosticsAndDuration(t *testing.T) {
 	l := newTraceLogger(Config{
 		Name:          "analytics",
 		SlowThreshold: 200 * time.Millisecond,
-	}, "master", "master")
+	}, "master")
 	called := 0
 	query := func() (string, int64) {
 		called++
@@ -276,19 +281,19 @@ func TestTracePolicyDiagnosticsAndDuration(t *testing.T) {
 		}
 	}
 	queryDetails := records[1][logit.DownstreamDetailsKey].(map[string]any)
-	if queryDetails["endpoint_type"] != "master" || queryDetails["endpoint"] != "master" ||
+	if queryDetails["endpoint"] != "master" ||
 		queryDetails["rows"] != float64(2) || queryDetails["sql"] != "SELECT * FROM events WHERE secret = ?" ||
 		queryDetails["err"] != "failed secret" {
 		t.Fatalf("查询详情错误: %v", queryDetails)
 	}
 	diagnostic := records[3][logit.DownstreamDetailsKey].(map[string]any)
-	if len(diagnostic) != 3 || diagnostic["msg"] != "callback ready" {
+	if len(diagnostic) != 2 || diagnostic["msg"] != "callback ready" {
 		t.Fatalf("诊断详情错误: %v", diagnostic)
 	}
 	newTraceLogger(Config{
 		Name:          "reports",
 		SlowThreshold: time.Hour,
-	}, "master", "master").Trace(ctx, time.Now(), func() (string, int64) {
+	}, "master").Trace(ctx, time.Now(), func() (string, int64) {
 		t.Fatal("禁用 SQL 日志时不应生成 SQL")
 		return "", 0
 	}, nil)
@@ -315,7 +320,7 @@ func TestTraceClickHouseExceptionDetails(t *testing.T) {
 	l := newTraceLogger(Config{
 		Name:          "analytics",
 		SlowThreshold: time.Hour,
-	}, "master", "master")
+	}, "master")
 	query := func() (string, int64) {
 		return "SELECT * FROM missing_table", -1
 	}
@@ -380,7 +385,7 @@ func TestTraceUsesNamedLogger(t *testing.T) {
 	l := newTraceLogger(Config{
 		Name:   "analytics",
 		LogSQL: true,
-	}, "slave", "slave-1")
+	}, "slave-1")
 	l.Trace(ctx, time.Now(), func() (string, int64) {
 		return "SELECT 1", 1
 	}, nil)
@@ -416,7 +421,7 @@ func newDryRunDB(t *testing.T, l logger.Interface) *gorm.DB {
 func newTestClient(t *testing.T, master *gorm.DB, slaves ...*gorm.DB) *Client {
 	t.Helper()
 	client := &Client{}
-	if err := gormcore.BuildCluster(context.Background(), &client.cluster, master, slaves, func(_ context.Context, db *gorm.DB, _ string) (*gorm.DB, *sql.DB, error) {
+	if err := gormcore.BuildCluster(context.Background(), &client.cluster, master, slaves, func(_ context.Context, db *gorm.DB) (*gorm.DB, *sql.DB, error) {
 		return db, nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -427,7 +432,7 @@ func newTestClient(t *testing.T, master *gorm.DB, slaves ...*gorm.DB) *Client {
 func newTestClientWithPool(t *testing.T, pool *sql.DB) *Client {
 	t.Helper()
 	client := &Client{}
-	if err := gormcore.BuildCluster(context.Background(), &client.cluster, pool, []*sql.DB(nil), func(_ context.Context, pool *sql.DB, _ string) (*gorm.DB, *sql.DB, error) {
+	if err := gormcore.BuildCluster(context.Background(), &client.cluster, pool, []*sql.DB(nil), func(_ context.Context, pool *sql.DB) (*gorm.DB, *sql.DB, error) {
 		return nil, pool, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -442,9 +447,9 @@ func TestGORMRoutingAndParameterFilter(t *testing.T) {
 		SlowThreshold: time.Second,
 		LogSQL:        true,
 	}
-	master := newDryRunDB(t, newTraceLogger(config, "master", "master"))
-	slaveA := newDryRunDB(t, newTraceLogger(config, "slave", "slave-1"))
-	slaveB := newDryRunDB(t, newTraceLogger(config, "slave", "slave-2"))
+	master := newDryRunDB(t, newTraceLogger(config, "master"))
+	slaveA := newDryRunDB(t, newTraceLogger(config, "slave-1"))
+	slaveB := newDryRunDB(t, newTraceLogger(config, "slave-2"))
 	client := newTestClient(t, master, slaveA, slaveB)
 	for _, db := range []*gorm.DB{
 		client.MasterDB(ctx),
@@ -473,7 +478,7 @@ func TestGORMRoutingAndParameterFilter(t *testing.T) {
 	interpolated := newTraceLogger(Config{
 		Name:           "analytics",
 		InterpolateSQL: true,
-	}, "master", "master")
+	}, "master")
 	_, vars := interpolated.ParamsFilter(ctx, "SELECT ?", "hidden-secret")
 	if len(vars) != 1 || vars[0] != "hidden-secret" {
 		t.Fatalf("插值开关没有保留参数: %v", vars)
@@ -483,7 +488,7 @@ func TestGORMRoutingAndParameterFilter(t *testing.T) {
 		SlowThreshold:  time.Second,
 		LogSQL:         true,
 		InterpolateSQL: true,
-	}, "master", "master"))
+	}, "master"))
 	if err := interpolatedDB.WithContext(ctx).Session(&gorm.Session{DryRun: true}).
 		Where("token = ?", "hidden-secret").Find(&[]testRow{}).Error; err != nil {
 		t.Fatal(err)
@@ -496,9 +501,9 @@ func TestGORMRoutingAndParameterFilter(t *testing.T) {
 }
 
 func TestSlaveFallbackConcurrentSelectionAndClose(t *testing.T) {
-	master := newDryRunDB(t, newTraceLogger(Config{Name: "analytics"}, "master", "master"))
-	slaveA := newDryRunDB(t, newTraceLogger(Config{Name: "analytics"}, "slave", "slave-1"))
-	slaveB := newDryRunDB(t, newTraceLogger(Config{Name: "analytics"}, "slave", "slave-2"))
+	master := newDryRunDB(t, newTraceLogger(Config{Name: "analytics"}, "master"))
+	slaveA := newDryRunDB(t, newTraceLogger(Config{Name: "analytics"}, "slave-1"))
+	slaveB := newDryRunDB(t, newTraceLogger(Config{Name: "analytics"}, "slave-2"))
 	ctx := context.Background()
 	client := newTestClient(t, master)
 	if got := client.SlaveDB(ctx); got.Config.Logger != master.Config.Logger || got.Statement.Context != ctx {

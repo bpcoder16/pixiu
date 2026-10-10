@@ -113,8 +113,8 @@ func New(cfg Config) (client *Client, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.InitTimeout)
 	defer cancel()
 	c := &Client{}
-	if err := gormcore.BuildCluster(ctx, &c.cluster, master, slaves, func(ctx context.Context, endpoint preparedEndpoint, role string) (*gorm.DB, *sql.DB, error) {
-		return open(ctx, cfg, endpoint, role)
+	if err := gormcore.BuildCluster(ctx, &c.cluster, master, slaves, func(ctx context.Context, endpoint preparedEndpoint) (*gorm.DB, *sql.DB, error) {
+		return open(ctx, cfg, endpoint)
 	}); err != nil {
 		return nil, err
 	}
@@ -197,7 +197,7 @@ func normalizePool(pool Pool) (Pool, error) {
 	})
 }
 
-func open(ctx context.Context, cfg Config, prepared preparedEndpoint, endpointType string) (*gorm.DB, *sql.DB, error) {
+func open(ctx context.Context, cfg Config, prepared preparedEndpoint) (*gorm.DB, *sql.DB, error) {
 	connector, err := mysqldriver.NewConnector(prepared.driver)
 	if err != nil {
 		return nil, nil, fmt.Errorf("mysqlx: endpoint %q has invalid driver settings", prepared.name)
@@ -213,7 +213,7 @@ func open(ctx context.Context, cfg Config, prepared preparedEndpoint, endpointTy
 		DSNConfig:                 prepared.driver,
 		SkipInitializeWithVersion: false,
 	}).(*gormmysql.Dialector)
-	db, err := gormcore.Open(sqlDB, dialect, newTraceLogger(cfg, endpointType, prepared.name))
+	db, err := gormcore.Open(sqlDB, dialect, newTraceLogger(cfg, prepared.name))
 	if err != nil {
 		return nil, nil, fmt.Errorf("mysqlx: initialize endpoint %q: %w", prepared.name, err)
 	}

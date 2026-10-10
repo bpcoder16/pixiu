@@ -22,15 +22,12 @@ type traceLogger struct {
 var _ logger.Interface = (*traceLogger)(nil)
 var _ gorm.ParamsFilter = (*traceLogger)(nil)
 
-func newTraceLogger(cfg Config, endpointType, endpoint string) *traceLogger {
+func newTraceLogger(cfg Config, endpoint string) *traceLogger {
 	return &traceLogger{Logger: gormcore.New(gormcore.Config{
 		Message:        downstreamMySQLMessage,
 		Name:           cfg.Name,
 		DurationPrefix: downstreamMySQLMessage + "_" + cfg.Name,
-		Endpoint: &gormcore.Endpoint{
-			Type: endpointType,
-			Name: endpoint,
-		},
+		Endpoint:       endpoint,
 		SlowThreshold:  cfg.SlowThreshold,
 		LogSQL:         cfg.LogSQL,
 		InterpolateSQL: cfg.InterpolateSQL,

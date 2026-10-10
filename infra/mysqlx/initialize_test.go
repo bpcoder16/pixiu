@@ -16,7 +16,7 @@ import (
 func TestVersionProbeUsesDriverReadTimeout(t *testing.T) {
 	endpoint := testVersionEndpoint(t, "8.0.36", "version")
 	endpoint.driver.ReadTimeout = 100 * time.Millisecond
-	db, pool, err := open(context.Background(), Config{Name: "startup"}, endpoint, "master")
+	db, pool, err := open(context.Background(), Config{Name: "startup"}, endpoint)
 	if pool != nil {
 		_ = pool.Close()
 	}
@@ -27,7 +27,7 @@ func TestVersionProbeUsesDriverReadTimeout(t *testing.T) {
 
 func TestVersionProbeKeepsDialectAndOperationContext(t *testing.T) {
 	const version = "10.5.12-MariaDB"
-	db, pool, err := open(context.Background(), Config{Name: "startup"}, testVersionEndpoint(t, version, ""), "master")
+	db, pool, err := open(context.Background(), Config{Name: "startup"}, testVersionEndpoint(t, version, ""))
 	if err != nil {
 		t.Fatal(err)
 	}

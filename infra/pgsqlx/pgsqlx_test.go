@@ -25,8 +25,10 @@ import (
 func testClusterClient(t *testing.T, master *gorm.DB, masterPool *sql.DB, slaves ...*gorm.DB) *Client {
 	t.Helper()
 	client := &Client{}
-	err := gormcore.BuildCluster(context.Background(), &client.cluster, master, slaves, func(_ context.Context, db *gorm.DB, role string) (*gorm.DB, *sql.DB, error) {
-		if role == "master" {
+	first := true
+	err := gormcore.BuildCluster(context.Background(), &client.cluster, master, slaves, func(_ context.Context, db *gorm.DB) (*gorm.DB, *sql.DB, error) {
+		if first {
+			first = false
 			return db, masterPool, nil
 		}
 		return db, nil, nil
@@ -65,6 +67,11 @@ func parseRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 		var record map[string]any
 		if err := json.Unmarshal(line, &record); err != nil {
 			t.Fatalf("解析日志: %v", err)
+		}
+		if details, ok := record[logit.DownstreamDetailsKey].(map[string]any); ok {
+			if _, exists := details["endpoint_type"]; exists {
+				t.Fatalf("GORM 日志不应包含 endpoint_type: %v", record)
+			}
 		}
 		records = append(records, record)
 	}
@@ -255,7 +262,7 @@ func TestNewLabelsEndpointsByRoleAndPosition(t *testing.T) {
 
 func TestTracePolicyAndSQLState(t *testing.T) {
 	buf, ctx := captureRecords(t)
-	l := newTraceLogger(Config{Name: "orders", SlowThreshold: 200 * time.Millisecond}, "master", "master")
+	l := newTraceLogger(Config{Name: "orders", SlowThreshold: 200 * time.Millisecond}, "master")
 	called := 0
 	query := func() (string, int64) {
 		called++
@@ -274,7 +281,7 @@ func TestTracePolicyAndSQLState(t *testing.T) {
 	details := records[1][logit.DownstreamDetailsKey].(map[string]any)
 	if records[1]["msg"] != "PostgreSQL" || records[1]["request_id"] != "request-1" ||
 		records[1][logit.DownstreamTypeKey] != "PostgreSQL" || records[1][logit.DownstreamIDKey] != "orders" ||
-		details["endpoint_type"] != "master" || details["endpoint"] != "master" ||
+		details["endpoint"] != "master" ||
 		details["rows"] != float64(1) || details["sqlstate"] != "23505" ||
 		!strings.Contains(details["err"].(string), "duplicate secret") {
 		t.Fatalf("错误日志内容错误: %v", records[1])
@@ -290,7 +297,7 @@ func TestTracePolicyAndSQLState(t *testing.T) {
 func TestDiagnosticsAndDuration(t *testing.T) {
 	buf, baseCtx := captureRecords(t)
 	ctx := logit.WithStart(baseCtx)
-	l := newTraceLogger(Config{Name: "orders", SlowThreshold: time.Hour}, "slave", "slave-1")
+	l := newTraceLogger(Config{Name: "orders", SlowThreshold: time.Hour}, "slave-1")
 	l.Info(ctx, "notice %s", "ready")
 	l.Warn(ctx, "warning %s", "slow")
 	l.Error(ctx, "failure %s", "closed")
@@ -300,7 +307,7 @@ func TestDiagnosticsAndDuration(t *testing.T) {
 		newTraceLogger(Config{
 			Name:          "accounts",
 			SlowThreshold: time.Hour,
-		}, "master", "master"),
+		}, "master"),
 	} {
 		trace.Trace(ctx, time.Now().Add(-time.Millisecond), func() (string, int64) {
 			t.Fatal("未启用 SQL 日志时不应格式化 SQL")
@@ -316,7 +323,7 @@ func TestDiagnosticsAndDuration(t *testing.T) {
 	for i, want := range []string{"notice ready", "warning slow", "failure closed"} {
 		details := records[i][logit.DownstreamDetailsKey].(map[string]any)
 		if records[i][logit.DownstreamDurationMSKey] != float64(0) ||
-			details["endpoint_type"] != "slave" || details["endpoint"] != "slave-1" || details["msg"] != want {
+			details["endpoint"] != "slave-1" || details["msg"] != want {
 			t.Fatalf("诊断详情错误: %v", records[i])
 		}
 	}
@@ -341,7 +348,7 @@ func TestGORMDiagnosticCallerAndLogMode(t *testing.T) {
 		_ = logit.Close(l)
 	})
 
-	diagnostic := newTraceLogger(Config{Name: "orders", LogSQL: true}, "master", "master")
+	diagnostic := newTraceLogger(Config{Name: "orders", LogSQL: true}, "master")
 	ctx := context.Background()
 	warn := diagnostic.LogMode(logger.Warn)
 	warn.Info(ctx, "hidden info")
@@ -395,9 +402,9 @@ func dryRunDB(t *testing.T, l logger.Interface) *gorm.DB {
 func TestGORMQueryRoutingAndInterpolation(t *testing.T) {
 	buf, ctx := captureRecords(t)
 	cfg := Config{Name: "orders", SlowThreshold: time.Hour, LogSQL: true}
-	master := dryRunDB(t, newTraceLogger(cfg, "master", "master"))
-	slaveA := dryRunDB(t, newTraceLogger(cfg, "slave", "slave-1"))
-	slaveB := dryRunDB(t, newTraceLogger(cfg, "slave", "slave-2"))
+	master := dryRunDB(t, newTraceLogger(cfg, "master"))
+	slaveA := dryRunDB(t, newTraceLogger(cfg, "slave-1"))
+	slaveB := dryRunDB(t, newTraceLogger(cfg, "slave-2"))
 	client := testClusterClient(t, master, nil, slaveA, slaveB)
 	for _, db := range []*gorm.DB{client.MasterDB(ctx), client.SlaveDB(ctx), client.SlaveDB(ctx)} {
 		if err := db.Session(&gorm.Session{DryRun: true}).Where("token = ?", "hidden-secret").Find(&[]testRow{}).Error; err != nil {
@@ -421,7 +428,7 @@ func TestGORMQueryRoutingAndInterpolation(t *testing.T) {
 		SlowThreshold:  time.Hour,
 		LogSQL:         true,
 		InterpolateSQL: true,
-	}, "master", "master"))
+	}, "master"))
 	if err := interpolated.WithContext(ctx).Session(&gorm.Session{DryRun: true}).Where("token = ?", "hidden-secret").Find(&[]testRow{}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -432,9 +439,9 @@ func TestGORMQueryRoutingAndInterpolation(t *testing.T) {
 }
 
 func TestSlaveFallbackAndConcurrentSelection(t *testing.T) {
-	master := dryRunDB(t, newTraceLogger(Config{Name: "orders"}, "master", "master"))
-	slaveA := dryRunDB(t, newTraceLogger(Config{Name: "orders"}, "slave", "slave-1"))
-	slaveB := dryRunDB(t, newTraceLogger(Config{Name: "orders"}, "slave", "slave-2"))
+	master := dryRunDB(t, newTraceLogger(Config{Name: "orders"}, "master"))
+	slaveA := dryRunDB(t, newTraceLogger(Config{Name: "orders"}, "slave-1"))
+	slaveB := dryRunDB(t, newTraceLogger(Config{Name: "orders"}, "slave-2"))
 	ctx := context.Background()
 	client := testClusterClient(t, master, nil)
 	if got := client.SlaveDB(ctx); got.Config.Logger != master.Config.Logger || got.Statement.Context != ctx {

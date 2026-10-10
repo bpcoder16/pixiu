@@ -9,18 +9,13 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// Endpoint 是可选的主从端点标识；未提供时不输出端点字段。
-type Endpoint struct {
-	Type string
-	Name string
-}
-
 // Config 配置 GORM 日志核心。调用方负责先归一化慢查询阈值。
 type Config struct {
 	Message        string
 	Name           string
 	DurationPrefix string
-	Endpoint       *Endpoint
+	// Endpoint 是可选的端点标识；空值时不输出端点字段。
+	Endpoint       string
 	SlowThreshold  time.Duration
 	LogSQL         bool
 	InterpolateSQL bool
@@ -33,7 +28,7 @@ type Logger struct {
 	message        string
 	name           string
 	durationPrefix string
-	endpoint       *Endpoint
+	endpoint       string
 	slowThreshold  time.Duration
 	logSQL         bool
 	interpolateSQL bool
@@ -47,15 +42,12 @@ func New(cfg Config) *Logger {
 		message:        cfg.Message,
 		name:           cfg.Name,
 		durationPrefix: cfg.DurationPrefix,
+		endpoint:       cfg.Endpoint,
 		slowThreshold:  cfg.SlowThreshold,
 		logSQL:         cfg.LogSQL,
 		interpolateSQL: cfg.InterpolateSQL,
 		errorDetails:   cfg.ErrorDetails,
 		level:          logger.Info,
-	}
-	if cfg.Endpoint != nil {
-		endpoint := *cfg.Endpoint
-		l.endpoint = &endpoint
 	}
 	return l
 }
@@ -126,8 +118,7 @@ func (l *Logger) LogTrace(ctx context.Context, begin time.Time, fc func() (strin
 }
 
 func (l *Logger) addEndpoint(details map[string]any) {
-	if l.endpoint != nil {
-		details["endpoint_type"] = l.endpoint.Type
-		details["endpoint"] = l.endpoint.Name
+	if l.endpoint != "" {
+		details["endpoint"] = l.endpoint
 	}
 }

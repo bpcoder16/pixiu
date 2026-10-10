@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,12 +15,12 @@ import (
 func TestBuildClusterRegistersEndpointsInOrder(t *testing.T) {
 	var cluster Cluster
 	var opened []*sql.DB
-	var roles []string
+	var endpoints []*gormlib.DB
 	master := &gormlib.DB{}
 	slaveA := &gormlib.DB{}
 	slaveB := &gormlib.DB{}
-	err := BuildCluster(context.Background(), &cluster, master, []*gormlib.DB{slaveA, slaveB}, func(_ context.Context, db *gormlib.DB, role string) (*gormlib.DB, *sql.DB, error) {
-		roles = append(roles, role)
+	err := BuildCluster(context.Background(), &cluster, master, []*gormlib.DB{slaveA, slaveB}, func(_ context.Context, db *gormlib.DB) (*gormlib.DB, *sql.DB, error) {
+		endpoints = append(endpoints, db)
 		pool, err := sql.Open("sqlite3", ":memory:")
 		if err != nil {
 			return nil, nil, err
@@ -30,9 +31,9 @@ func TestBuildClusterRegistersEndpointsInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(roles, ",") != "master,slave,slave" || cluster.master != master ||
+	if !slices.Equal(endpoints, []*gormlib.DB{master, slaveA, slaveB}) || cluster.master != master ||
 		len(cluster.slaves) != 2 || cluster.slaves[0] != slaveA || cluster.slaves[1] != slaveB {
-		t.Fatalf("主从登记顺序错误: roles=%v cluster=%+v", roles, cluster)
+		t.Fatalf("主从登记顺序错误: endpoints=%v cluster=%+v", endpoints, cluster)
 	}
 	if err := cluster.Close(); err != nil {
 		t.Fatal(err)
@@ -47,10 +48,10 @@ func TestBuildClusterRegistersEndpointsInOrder(t *testing.T) {
 func TestBuildClusterClosesOpenedPoolsOnFailure(t *testing.T) {
 	var cluster Cluster
 	var opened []*sql.DB
-	var roles []string
+	var endpoints []int
 	failure := errors.New("slave open failed")
-	err := BuildCluster(context.Background(), &cluster, 0, []int{1, 2}, func(_ context.Context, endpoint int, role string) (*gormlib.DB, *sql.DB, error) {
-		roles = append(roles, role)
+	err := BuildCluster(context.Background(), &cluster, 0, []int{1, 2}, func(_ context.Context, endpoint int) (*gormlib.DB, *sql.DB, error) {
+		endpoints = append(endpoints, endpoint)
 		pool, err := sql.Open("sqlite3", ":memory:")
 		if err != nil {
 			return nil, nil, err
@@ -64,8 +65,8 @@ func TestBuildClusterClosesOpenedPoolsOnFailure(t *testing.T) {
 	if !errors.Is(err, failure) {
 		t.Fatalf("构建错误=%v, want %v", err, failure)
 	}
-	if strings.Join(roles, ",") != "master,slave,slave" {
-		t.Fatalf("构建顺序=%v", roles)
+	if !slices.Equal(endpoints, []int{0, 1, 2}) {
+		t.Fatalf("构建顺序=%v", endpoints)
 	}
 	for _, pool := range opened {
 		if err := pool.PingContext(context.Background()); err == nil || !strings.Contains(err.Error(), "closed") {

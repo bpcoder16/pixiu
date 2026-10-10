@@ -12,7 +12,8 @@
 //	})
 //	_, _ = core.ParamsFilter(ctx, "SELECT ?", 1)
 //
-// 模块通过 BuildCluster 创建主从连接；应用停止查询后关闭：
+// 模块通过 BuildCluster 创建主从连接，open 回调只接收 context 和端点配置；
+// 应用停止查询后关闭：
 //
 //	var cluster gorm.Cluster
 //	if err := gorm.BuildCluster(ctx, &cluster, master, slaves, open); err != nil {
