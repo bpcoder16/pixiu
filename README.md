@@ -127,6 +127,7 @@ func main() {
 | 包 | 能力 | 主要依赖 |
 | --- | --- | --- |
 | [`infra/configx`](infra/configx/doc.go) | YAML / TOML / JSON 结构体配置加载、全局命名获取与零值兜底 | Viper |
+| [`infra/env`](infra/env/doc.go) | 通用应用环境、IP 校验与补齐、一次初始化与全局读取 | 标准库、netx |
 | [`infra/httpcall`](infra/httpcall/doc.go) | 可复用 HTTP 下游客户端、结果日志、请求级耗时 | Resty v2、logit |
 | [`infra/httpserver`](infra/httpserver/doc.go) | 标准 `http.Handler` 服务端、监听、限时关闭 | 标准库 |
 | [`infra/ginx`](infra/ginx/doc.go) | 独立 Gin Engine、请求日志作用域、访问日志与 Recovery | Gin、logit |
@@ -146,6 +147,7 @@ Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticSearchx/v7/d
 
 | 包 | 能力 | 典型用途 |
 | --- | --- | --- |
+| [`biz/httpconfig`](biz/httpconfig/doc.go) | 组合 configx 和 env，加载 HTTP 应用配置并初始化环境 | 从 [`app.yaml` 模板](biz/httpconfig/conf.example/app.yaml) 加载应用环境 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
 
@@ -164,6 +166,7 @@ pixiu/
 ├── jsonx/                 JSON 首值解码
 ├── netx/                  网络基础能力
 ├── infra/                 通用技术能力与 SDK 适配
+│   ├── env/                通用应用运行环境
 │   ├── httpcall/           HTTP 下游调用
 │   ├── httpserver/         HTTP 服务端
 │   ├── ginx/               Gin 请求处理
@@ -178,6 +181,7 @@ pixiu/
 │   ├── elasticSearchx/     Elasticsearch 与 v7 / v8 / v9 适配
 │   └── internal/           infra 内部共用实现
 ├── biz/
+│   ├── httpconfig/         HTTP 应用配置加载与环境初始化
 │   └── lockx/              锁契约与业务执行流程
 │       └── redislock/      Redis 锁实现
 └── assets/                吉祥物 Logo

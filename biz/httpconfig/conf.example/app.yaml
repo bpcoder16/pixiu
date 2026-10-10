@@ -1,0 +1,12 @@
+env:
+  # 应用名称，复制到具体项目后修改；必填。
+  appName: "example-http"
+
+  # debug / test / release；必填。
+  runMode: "debug"
+
+  # 应用时区，加载时校验并解析，不自动修改进程时区；必填。
+  timeLocation: "Asia/Shanghai"
+
+  # 可选 IPv4 / IPv6；空字符串在初始化时先查询本机 IPv4，失败后查询 IPv6，再失败则保持为空。
+  localIP: ""
