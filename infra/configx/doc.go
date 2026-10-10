@@ -13,6 +13,12 @@
 //	    Addr string `mapstructure:"addr"`
 //	    Port int    `mapstructure:"port"`
 //	}
+//	parsed, err := configx.Parse[ServerConfig]("./conf/server.yaml")
+//	if err != nil {
+//	    return err
+//	}
+//	_ = parsed.Port
+//
 //	if err := configx.Load[ServerConfig]("server", "./conf/server.yaml"); err != nil {
 //	    return err
 //	}
@@ -24,8 +30,9 @@
 //	optional := configx.GetOrZero[ServerConfig]("optional")
 //	_ = optional.Port
 //
-// Load 的 T 必须是结构体。文件后缀忽略大小写，支持 .yaml、.yml、.toml、.json；
-// 相对路径基于工作目录。加载失败不注册，成功后同名配置不得覆盖或重新加载。
+// Parse 和 Load 的 T 必须是结构体。文件后缀忽略大小写，支持 .yaml、.yml、.toml、.json；
+// 相对路径基于工作目录。Parse 每次重新读取文件，返回独立的配置指针，不注册全局配置。
+// Load 复用 Parse 解析并注册，加载失败不注册，成功后同名配置不得覆盖或重新加载。
 // Get 不重新读取文件，每次返回同一共享指针；GetOrZero 获取失败时返回 new(T)，
 // 不占用名称，不与其他兜底对象共享数据，map、slice 和指针字段保持 nil。
 //

@@ -99,7 +99,7 @@ func TestDefaultLogRemainsOpenUntilOtherResourcesClose(t *testing.T) {
 				wantPanic := errors.New("project init failed")
 				value := recoverValue(func() {
 					defer func() { closeErr = resources.Close() }()
-					bootstrap.MustBaseInit(context.Background(), cfg, &resources)
+					bootstrap.MustBaseInit(cfg, &resources)
 					if time.Local != local {
 						t.Fatal("日志初始化不应修改进程时区")
 					}
@@ -199,7 +199,7 @@ func TestLogCallerConfiguration(t *testing.T) {
 					cfg := loadLogConfig(t, "debug", "log:\n  format: "+format+"\n"+tc.yaml+"  names: [worker]\n")
 					var resources lifecycle.Stack
 					defer resources.Close()
-					bootstrap.MustBaseInit(context.Background(), cfg, &resources)
+					bootstrap.MustBaseInit(cfg, &resources)
 					for _, name := range []string{"", "worker"} {
 						logit.Info(logit.WithLoggerName(context.Background(), name), "caller configuration")
 					}
@@ -261,7 +261,7 @@ func TestLogInitFailureDoesNotReplaceDefault(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				value := recoverValue(func() { bootstrap.MustBaseInit(context.Background(), cfg, &resources) })
+				value := recoverValue(func() { bootstrap.MustBaseInit(cfg, &resources) })
 				err, ok := value.(error)
 				if !ok || !strings.Contains(err.Error(), "bootstrap:") {
 					t.Fatalf("日志初始化失败应 panic 并带上启动上下文: %v", value)
@@ -290,7 +290,7 @@ func TestNamedLogsDispatchLevelsAndCloseTogether(t *testing.T) {
 				cfg := loadLogConfig(t, mode, "log:\n  format: text\n  names: [worker, request, debug, info, wf, worker.debug, '.', '..']\n")
 				var resources lifecycle.Stack
 				defer resources.Close()
-				bootstrap.MustBaseInit(context.Background(), cfg, &resources)
+				bootstrap.MustBaseInit(cfg, &resources)
 				for _, name := range append([]string{""}, cfg.Log.Names...) {
 					ctx := logit.WithLoggerName(context.Background(), name)
 					logit.Debug(ctx, name+" debug message")
@@ -353,7 +353,7 @@ func TestFatalLogDispatchesToWFBeforeExit(t *testing.T) {
 		cfg := loadLogConfig(t, "debug", "log:\n  format: text\n  dir: "+dir+"\n  names: [worker]\n")
 		var resources lifecycle.Stack
 		defer resources.Close()
-		bootstrap.MustBaseInit(context.Background(), cfg, &resources)
+		bootstrap.MustBaseInit(cfg, &resources)
 		ctx := logit.WithLoggerName(context.Background(), os.Getenv("PIXIU_BOOTSTRAP_FATAL_NAME"))
 		logit.Fatal(ctx, "fatal dispatch message")
 		t.Fatal("Fatal 应退出进程")
@@ -402,7 +402,7 @@ func TestPartialNamedLogFailureLeavesCompletedLoggersForCaller(t *testing.T) {
 		previous := logit.Default()
 		var resources lifecycle.Stack
 		defer resources.Close()
-		value := recoverValue(func() { bootstrap.MustBaseInit(context.Background(), cfg, &resources) })
+		value := recoverValue(func() { bootstrap.MustBaseInit(cfg, &resources) })
 		if value == nil || logit.Default() != previous || logit.Named("worker") != previous {
 			t.Fatalf("部分创建失败不应发布默认或命名日志: %v", value)
 		}
@@ -428,7 +428,7 @@ func TestLogDirectoryUsesAbsolutePathAndCreatesParents(t *testing.T) {
 		cfg := loadLogConfig(t, "test", "log:\n  format: text\n  dir: "+dir+"\n")
 		var resources lifecycle.Stack
 		defer resources.Close()
-		bootstrap.MustBaseInit(context.Background(), cfg, &resources)
+		bootstrap.MustBaseInit(cfg, &resources)
 		logit.Info(context.Background(), "absolute directory")
 		if err := resources.Close(); err != nil {
 			t.Fatal(err)
@@ -461,7 +461,7 @@ func TestLogDirectoryRejectsMissingWritePermission(t *testing.T) {
 		previous := logit.Default()
 		var resources lifecycle.Stack
 		defer resources.Close()
-		value := recoverValue(func() { bootstrap.MustBaseInit(context.Background(), cfg, &resources) })
+		value := recoverValue(func() { bootstrap.MustBaseInit(cfg, &resources) })
 		err, ok := value.(error)
 		if !ok || !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), dir) {
 			t.Fatalf("不可写目录应保留权限错误与目录路径: %v", value)

@@ -20,20 +20,36 @@ func Load[T any](name, filePath string) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("configx: empty config name")
 	}
-	if typ := reflect.TypeFor[T](); typ.Kind() != reflect.Struct {
-		return fmt.Errorf("configx: config %q requires a struct type, got %v", name, typ)
-	}
 	if _, exists := configs.Load(name); exists {
 		return fmt.Errorf("configx: config %q is already loaded", name)
 	}
+	cfg, err := Parse[T](filePath)
+	if err != nil {
+		return fmt.Errorf("configx: load config %q: %w", name, err)
+	}
+
+	// 预检不能防止并发重名；仅将完整对象原子发布，失败者不得覆盖已有值。
+	if _, exists := configs.LoadOrStore(name, cfg); exists {
+		return fmt.Errorf("configx: config %q is already loaded", name)
+	}
+	return nil
+}
+
+// Parse 读取 YAML、TOML 或 JSON 文件，按 mapstructure 标签解析为 T，不注册全局配置。
+// T 必须是结构体；每次调用返回独立的配置指针，失败返回 nil 和错误。
+// 相对路径基于工作目录，后缀忽略大小写。未知字段通过 UnmarshalExact 报错，禁用弱类型转换。
+func Parse[T any](filePath string) (*T, error) {
+	if typ := reflect.TypeFor[T](); typ.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("configx: config file %q requires a struct type, got %v", filePath, typ)
+	}
 	if filePath == "" {
-		return fmt.Errorf("configx: config %q has an empty file path", name)
+		return nil, fmt.Errorf("configx: empty config file path")
 	}
 	format := strings.ToLower(strings.TrimPrefix(filepath.Ext(filePath), "."))
 	switch format {
 	case "yaml", "yml", "toml", "json":
 	default:
-		return fmt.Errorf("configx: config %q file %q has unsupported format %q", name, filePath, format)
+		return nil, fmt.Errorf("configx: config file %q has unsupported format %q", filePath, format)
 	}
 
 	decoders := &fileDecoders{}
@@ -41,7 +57,7 @@ func Load[T any](name, filePath string) error {
 	v.SetConfigFile(filePath)
 	v.SetConfigType(format)
 	if err := v.ReadInConfig(); err != nil {
-		return fmt.Errorf("configx: read config %q from %q: %w", name, filePath, err)
+		return nil, fmt.Errorf("configx: read config file %q: %w", filePath, err)
 	}
 	cfg := new(T)
 	if err := v.UnmarshalExact(cfg, func(dc *mapstructure.DecoderConfig) {
@@ -60,14 +76,9 @@ func Load[T any](name, filePath string) error {
 			jsonNumberHook(dc.DecodeHook),
 		)
 	}); err != nil {
-		return fmt.Errorf("configx: decode config %q from %q: %w", name, filePath, err)
+		return nil, fmt.Errorf("configx: decode config file %q: %w", filePath, err)
 	}
-
-	// 预检不能防止并发重名；仅将完整对象原子发布，失败者不得覆盖已有值。
-	if _, exists := configs.LoadOrStore(name, cfg); exists {
-		return fmt.Errorf("configx: config %q is already loaded", name)
-	}
-	return nil
+	return cfg, nil
 }
 
 // Get 返回已注册且类型匹配的共享结构体指针，不重新读文件或拷贝内容。

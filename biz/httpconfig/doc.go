@@ -14,7 +14,7 @@
 //	_ = env.LocalIP()
 //	_ = env.RootDirPath()
 //
-// 文件读取复用 infra/configx，支持 YAML、TOML、JSON，未知字段和弱类型转换报错。
+// 文件读取复用 infra/configx.Parse，支持 YAML、TOML、JSON，未知字段和弱类型转换报错。
 // AppConfig 值嵌入 baseconfig.AppConfig 并使用 squash，env、log 保持文件顶层。
 // 加载时始终按完整 HTTP 配置解析一次；调用通用 bootstrap 时传入 &cfg.AppConfig。
 // AppConfig.Env 复用 env.Config，并交给 env.Init 校验及发布环境。
@@ -30,13 +30,12 @@
 // env.RootDirPath() 保存 env.Init 时的工作目录绝对路径快照，由 env 自动获取。
 //
 // MustLoadAppConfig 失败或重复调用时 panic，仅用于启动期，失败应退出进程。
-// configx 保留名称为 pixiu.biz.httpconfig.app，应用不得占用此名称。
-// configx 在结构体解析成功后注册；环境校验失败可能保留该注册项，
-// 因此不承诺在同一进程中恢复并重试，也不提供重置或热更新。
+// 应用配置只解析并返回给调用方，不在 configx 注册，也不保留配置名称。
+// 重复初始化由 env.Init 拒绝；不承诺在同一进程中恢复并重试，也不提供重置或热更新。
 //
 // env 全部校验成功后一次性发布环境快照，之后可并发读取；初始化前读取会 panic。
 // 如果环境已由其他启动入口初始化，本入口会 panic 并保留原环境。
-// 返回的配置是共享指针，修改后不会自动更新全局环境，配置并发读写由调用方协调。
+// 返回的配置由调用方持有，修改后不会自动更新全局环境，配置并发读写由调用方协调。
 // 加载不修改 time.Local 或 Gin 模式，也不初始化日志或其他组件。
 //
 // baseconfig.LogConfig 只在此解析；biz/bootstrap 校验并应用日志默认值，不回写配置。

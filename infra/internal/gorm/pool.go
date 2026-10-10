@@ -14,13 +14,13 @@ import (
 // PoolConfig 是数据库模块共用的连接池配置；零值默认值由使用它的模块决定。
 type PoolConfig struct {
 	// MaxOpenConns 限制同时打开的连接数；零值使用模块默认值。
-	MaxOpenConns int
+	MaxOpenConns int `mapstructure:"maxOpenConns"`
 	// MaxIdleConns 限制保留的空闲连接数；零值使用模块默认值。
-	MaxIdleConns int
+	MaxIdleConns int `mapstructure:"maxIdleConns"`
 	// ConnMaxLifetime 限制连接可被复用的最长时间；零值使用模块默认值。
-	ConnMaxLifetime time.Duration
+	ConnMaxLifetime time.Duration `mapstructure:"connMaxLifetime"`
 	// ConnMaxIdleTime 限制连接的空闲时间；零值使用模块默认值。
-	ConnMaxIdleTime time.Duration
+	ConnMaxIdleTime time.Duration `mapstructure:"connMaxIdleTime"`
 }
 
 // NormalizePool 校验参数并应用模块默认值；默认空闲数不超过生效后的打开数。

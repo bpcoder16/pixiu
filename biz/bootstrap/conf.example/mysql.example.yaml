@@ -1,0 +1,47 @@
+# 复制为配置目录中的 mysql.<name>.yaml，并在项目 bootstrap 声明实例。
+# name 和 isDefault 只由 MustRegisterMySQL(name, isDefault) 指定，文件内不重复配置。
+# 时间使用带单位字符串；除下方两个日志开关外，默认值及配置校验沿用 mysqlx。
+
+# 当前逻辑实例的全部主从端点共用此初始化超时；零值默认 10s。
+initTimeout: "10s"
+
+# 所有新连接的 MySQL 会话时区；空值沿用服务端配置，应与公共 location 一致。
+sessionTimeZone: "+08:00"
+# 零值默认 200ms；正常查询开关不影响慢查询和错误日志。
+slowThreshold: "200ms"
+# 省略时默认 true，显式 false 关闭正常查询 SQL 日志。
+logSQL: true
+# 省略时默认 true；开启后日志会展开 SQL 参数，可能包含业务数据。
+interpolateSQL: true
+
+# 当前逻辑实例的所有主从端点共用以下连接参数。
+database: "example"
+username: "example"
+password: ""
+
+charset: "utf8mb4"
+# 只控制 Go 时间解析，不自动修改 MySQL 会话时区。
+location: "Asia/Shanghai"
+# 驱动支持的 TLS 配置名；空值不配置 TLS，部署时按服务端要求设置。
+tlsConfig: ""
+
+# 单次连接及读写超时；零值不设置驱动级超时。
+dialTimeout: "3s"
+readTimeout: "5s"
+writeTimeout: "5s"
+
+# 每个主从端点各有一个连接池，以下不是全部实例的总额度。
+# 零值默认：100、min(10, maxOpenConns)、3m、1m；负值无效。
+pool:
+  maxOpenConns: 100
+  maxIdleConns: 10
+  connMaxLifetime: "3m"
+  connMaxIdleTime: "1m"
+
+master:
+  host: "127.0.0.1"
+  port: 3306
+
+# 每项与 master 一样只填写 host、port，其余参数使用上方公共配置。
+# 未配置从库时 SlaveDB 回退主库；多个从库轮询选择。
+slaves: []

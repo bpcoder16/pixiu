@@ -14,12 +14,13 @@ import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/biz/httpconfig"
+	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/env"
 )
 
 const validYAML = "env:\n  appName: demo\n  runMode: debug\n  timeLocation: Asia/Shanghai\n  localIP: 192.0.2.10\n"
 
-// 配置注册和环境发布均为进程生命周期状态，通过子进程隔离启动场景。
+// 环境发布是进程生命周期状态，通过子进程隔离启动场景。
 func isolated(t *testing.T, test func(*testing.T)) {
 	t.Helper()
 	const marker = "PIXIU_HTTPCONFIG_TEST_PROCESS"
@@ -95,6 +96,9 @@ func TestMustLoadAppConfigFormatsAndPaths(t *testing.T) {
 					t.Fatal(err)
 				}
 				cfg := httpconfig.MustLoadAppConfig(input)
+				if got, err := configx.Get[httpconfig.AppConfig]("pixiu.biz.httpconfig.app"); got != nil || err == nil {
+					t.Fatalf("HTTP 配置不应注册到 configx: %+v, %v", got, err)
+				}
 				if env.RootDirPath() != workingDir {
 					t.Fatalf("工作目录快照不正确: got %q, want %q", env.RootDirPath(), workingDir)
 				}
@@ -156,12 +160,37 @@ func TestMustLoadAppConfigRejectsInvalidEnvironment(t *testing.T) {
 					t.Fatalf("错误应包含文件路径及字段: %v", value)
 				}
 				requireUninitialized(t)
+				if got, err := configx.Get[httpconfig.AppConfig]("pixiu.biz.httpconfig.app"); got != nil || err == nil {
+					t.Fatalf("失败后不应注册 HTTP 配置: %+v, %v", got, err)
+				}
 				if time.Local != local {
 					t.Fatal("失败不应修改进程时区")
 				}
 			})
 		})
 	}
+}
+
+func TestMustLoadAppConfigDoesNotUseGlobalConfigRegistration(t *testing.T) {
+	isolated(t, func(t *testing.T) {
+		const name = "pixiu.biz.httpconfig.app"
+		dir := t.TempDir()
+		other := writeConfig(t, dir, "other.yaml", "server_name: other\n")
+		type otherConfig struct {
+			Name string `mapstructure:"server_name"`
+		}
+		if err := configx.Load[otherConfig](name, other); err != nil {
+			t.Fatal(err)
+		}
+		file := writeConfig(t, dir, "app.yaml", validYAML)
+		cfg := httpconfig.MustLoadAppConfig(file)
+		if cfg.Env.AppName != "demo" || env.AppName() != "demo" {
+			t.Fatal("已有命名配置不应影响 HTTP 配置加载")
+		}
+		if got, err := configx.Get[otherConfig](name); err != nil || got.Name != "other" {
+			t.Fatalf("HTTP 配置加载不应改变已有命名配置: %+v, %v", got, err)
+		}
+	})
 }
 
 func TestMustLoadAppConfigReadFailure(t *testing.T) {
@@ -192,8 +221,10 @@ func TestEnvironmentSnapshotAndDuplicateLoad(t *testing.T) {
 		}
 		other := writeConfig(t, dir, "other.yaml", strings.Replace(validYAML, "demo", "other", 1))
 		for _, path := range []string{file, other} {
-			if value := panicValue(func() { httpconfig.MustLoadAppConfig(path) }); value == nil {
-				t.Fatal("重复加载应 panic")
+			value := panicValue(func() { httpconfig.MustLoadAppConfig(path) })
+			err, ok := value.(error)
+			if !ok || !errors.Is(err, env.ErrAlreadyInitialized) {
+				t.Fatalf("重复加载应由环境初始化拒绝: %v", value)
 			}
 		}
 		if env.AppName() != "demo" || env.RunMode() != "debug" || env.TimeLocation() != location || env.ConfigDirPath() != configDir || env.LocalIP() != localIP {
