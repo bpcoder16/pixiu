@@ -31,6 +31,8 @@ func newBootstrapMySQLServer(t *testing.T, version string, stall bool) *bootstra
 		_ = listener.Close()
 		server.requireClosed(t)
 	})
+	// 协议桩早于 bootstrap 启动，提前固定期限，避免后台读取正在初始化的 time.Local。
+	deadline := time.Now().Add(10 * time.Second)
 	go func() {
 		defer close(server.closed)
 		conn, err := listener.Accept()
@@ -38,6 +40,7 @@ func newBootstrapMySQLServer(t *testing.T, version string, stall bool) *bootstra
 			return
 		}
 		defer conn.Close()
+		_ = conn.SetDeadline(deadline)
 		server.connected.Store(true)
 		go func() {
 			select {
@@ -61,7 +64,6 @@ func (s *bootstrapMySQLServer) requireClosed(t *testing.T) {
 }
 
 func serveBootstrapMySQL(conn net.Conn, version string, stall bool) {
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	writePacket := func(sequence byte, payload []byte) error {
 		header := []byte{byte(len(payload)), byte(len(payload) >> 8), byte(len(payload) >> 16), sequence}
 		_, err := conn.Write(append(header, payload...))

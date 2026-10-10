@@ -74,5 +74,6 @@
 //
 // 全局默认 Logger 输出到 stdout,启动期用 SetDefault 替换;
 // 测试可先用 Default 保存旧值,再用 SetDefault 替换并在结束时恢复。
-// panic 处理见 ReportPanic/RecoverAndReport。
+// panic 处理见 ReportPanic/RecoverAndReport；processStart 保存包初始化时的时间点，
+// 输出时按当前 time.Local 格式化。应用必须在并发使用日志前完成默认时区设置。
 package logit

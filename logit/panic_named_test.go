@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func capturePanicLogger(t *testing.T) *bytes.Buffer {
@@ -58,6 +59,36 @@ func TestReportPanicErrorValue(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "panic=[boom]") {
 		t.Errorf("error value should be stringified: %q", buf.String())
+	}
+}
+
+func TestReportPanicUsesLocalTimezoneForProcessStart(t *testing.T) {
+	previous := time.Local
+	t.Cleanup(func() { time.Local = previous })
+	buf := capturePanicLogger(t)
+	startText := func() string {
+		t.Helper()
+		if err := ReportPanic(context.Background(), "timezone"); err != nil {
+			t.Fatal(err)
+		}
+		_, tail, ok := strings.Cut(buf.String(), "processStart=[")
+		text, _, end := strings.Cut(tail, "]")
+		if !ok || !end {
+			t.Fatalf("缺少进程启动时间: %s", buf.String())
+		}
+		buf.Reset()
+		return text
+	}
+	const layout = "2006-01-02 15:04:05"
+	started, err := time.ParseInLocation(layout, startText(), previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, offset := started.Zone()
+	// 同步测试没有后台写入；模拟应用在启动阶段切换默认时区。
+	time.Local = time.FixedZone("startup-zone", offset+45*60)
+	if got, want := startText(), started.In(time.Local).Format(layout); got != want {
+		t.Fatalf("进程启动时间应保留原时间点并使用当前本地时区: got %q, want %q", got, want)
 	}
 }
 

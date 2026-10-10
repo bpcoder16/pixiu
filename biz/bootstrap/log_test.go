@@ -92,7 +92,6 @@ func TestDefaultLogRemainsOpenUntilOtherResourcesClose(t *testing.T) {
 				}
 				// 相对日志路径应固定到加载环境时的目录，而非随工作目录变化。
 				t.Chdir(t.TempDir())
-				local := time.Local
 				var resources lifecycle.Stack
 				var closeErr error
 				wantCloseErr := errors.New("database close failed")
@@ -100,8 +99,8 @@ func TestDefaultLogRemainsOpenUntilOtherResourcesClose(t *testing.T) {
 				value := recoverValue(func() {
 					defer func() { closeErr = resources.Close() }()
 					bootstrap.MustBaseInit(cfg, &resources)
-					if time.Local != local {
-						t.Fatal("日志初始化不应修改进程时区")
+					if time.Local != env.TimeLocation() {
+						t.Fatal("bootstrap 应将应用时区设置为进程本地时区")
 					}
 					logit.Info(context.Background(), "started", logit.Str("application", "demo"))
 					if logit.DebugEnabled(context.Background()) != (tc.mode != "release") {

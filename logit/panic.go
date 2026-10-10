@@ -54,7 +54,7 @@ func SetPanicLogger(w Writer) {
 }
 
 // ReportPanic 记录一次 panic:panic 值、保留物理换行的 goroutine 栈、
-// pid 与进程启动时间;以 Fatal 级别同步写入并尽力 Sync,
+// pid 与按当前本地时区格式化的进程启动时间;以 Fatal 级别同步写入并尽力 Sync,
 // 写入或 Sync 失败通过 PanicLogger 的 WriteErrorStats 观察，不承诺必然落盘。
 // 未配置 panic Logger 时返回 ErrPanicLoggerNotConfigured；记录后不退出进程。
 // 供 recover 处理器调用,也可用更省心的 RecoverAndReport。
@@ -78,7 +78,7 @@ func ReportPanic(ctx context.Context, recovered any, fields ...Field) error {
 	all = append(all, fields...)
 	all = append(all,
 		Int("pid", os.Getpid()),
-		Str("processStart", processStart),
+		Str("processStart", processStart.Local().Format("2006-01-02 15:04:05")),
 		Str("panic", fmt.Sprint(recovered)),
 		Field{Key: "stack", typ: panicStackType, str: string(stack)},
 	)
@@ -98,4 +98,5 @@ func RecoverAndReport(ctx context.Context) {
 	}
 }
 
-var processStart = time.Now().Format("2006-01-02 15:04:05")
+// 保存时间点，避免应用启动阶段设置 time.Local 后仍输出旧时区的字符串。
+var processStart = time.Now()
