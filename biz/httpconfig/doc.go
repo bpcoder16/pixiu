@@ -1,4 +1,4 @@
-// Package httpconfig 组合 configx 和 env，提供 HTTP 应用启动配置加载与环境初始化。
+// Package httpconfig 嵌入 baseconfig，组合 configx 和 env 提供 HTTP 应用配置加载与环境初始化。
 // 包含 env.appName、env.runMode、env.timeLocation 三个必填字段、可选 localIP 和 log 配置。
 //
 // 将本包 conf.example/app.yaml 复制到应用的 conf/app.yaml 并修改后，
@@ -15,6 +15,8 @@
 //	_ = env.RootDirPath()
 //
 // 文件读取复用 infra/configx，支持 YAML、TOML、JSON，未知字段和弱类型转换报错。
+// AppConfig 值嵌入 baseconfig.AppConfig 并使用 squash，env、log 保持文件顶层。
+// 加载时始终按完整 HTTP 配置解析一次；调用通用 bootstrap 时传入 &cfg.AppConfig。
 // AppConfig.Env 复用 env.Config，并交给 env.Init 校验及发布环境。
 // 应用名称不能为空或全为空白；运行模式必须为 debug、test、release；时区须能通过
 // time.LoadLocation 解析。加载器不内嵌时区数据库，时区数据使用标准库查找机制。
@@ -37,7 +39,7 @@
 // 返回的配置是共享指针，修改后不会自动更新全局环境，配置并发读写由调用方协调。
 // 加载不修改 time.Local 或 Gin 模式，也不初始化日志或其他组件。
 //
-// LogConfig 只在此解析；biz/bootstrap 校验并应用日志默认值，不回写配置。
+// baseconfig.LogConfig 只在此解析；biz/bootstrap 校验并应用日志默认值，不回写配置。
 // 日志固定使用 rotatefile；format 必须显式设置，目录默认 ./log、轮转周期 1h、每个文件保留 48 份。
 // 可配置 format（text/json）、caller（调用位置，默认 false）、dir 目录、names（额外命名 Logger）、
 // rotate.every（1h/24h）、rotate.maxFiles（至少 3）；不接受 mode 配置。

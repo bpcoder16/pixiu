@@ -9,14 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bpcoder16/pixiu/biz/httpconfig"
+	"github.com/bpcoder16/pixiu/biz/internal/baseconfig"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/lifecycle"
 	"github.com/bpcoder16/pixiu/logit"
 	"github.com/bpcoder16/pixiu/rotatefile"
 )
 
-func initLog(cfg httpconfig.LogConfig, resources *lifecycle.Stack) error {
+func initLog(cfg baseconfig.LogConfig, resources *lifecycle.Stack) error {
 	var encoder logit.Encoder
 	switch cfg.Format {
 	case "text":
@@ -123,7 +123,7 @@ func prepareLogDirectory(dir string) error {
 	return nil
 }
 
-func newLogLogger(cfg httpconfig.LogConfig, base string, encoder logit.Encoder, level logit.Level) (logger logit.Logger, err error) {
+func newLogLogger(cfg baseconfig.LogConfig, base string, encoder logit.Encoder, level logit.Level) (logger logit.Logger, err error) {
 	targets := make([]logit.Target, 0, 3)
 	// Logger 尚未创建成功时，由构造函数清理已打开的 Writer。
 	defer func() {

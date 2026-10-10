@@ -148,9 +148,11 @@ Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticSearchx/v7/d
 | 包 | 能力 | 典型用途 |
 | --- | --- | --- |
 | [`biz/bootstrap`](biz/bootstrap/doc.go) | 默认及命名日志初始化，组合 logit、rotatefile 与应用资源关闭栈 | 固定轮转文件、Debug/Info/WF 分流、JSON/text，日志最后关闭 |
-| [`biz/httpconfig`](biz/httpconfig/doc.go) | 组合 configx 和 env，加载 HTTP 应用配置并初始化环境 | 从 [`app.yaml` 模板](biz/httpconfig/conf.example/app.yaml) 加载应用环境和日志配置 |
+| [`biz/httpconfig`](biz/httpconfig/doc.go) | 嵌入 baseconfig，加载完整 HTTP 应用配置并初始化环境 | 从 [`app.yaml` 模板](biz/httpconfig/conf.example/app.yaml) 加载应用环境和日志配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
+
+`biz/internal/baseconfig` 供 biz 内部共用环境与日志配置；业务项目通过 `httpconfig.AppConfig` 的嵌入字段使用，无需直接导入内部包。
 
 ### 规划中的能力
 
@@ -184,6 +186,8 @@ pixiu/
 ├── biz/
 │   ├── bootstrap/          通用初始化入口与资源登记约定
 │   ├── httpconfig/         HTTP 应用配置加载与环境初始化
+│   ├── internal/           biz 内部共用实现
+│   │   └── baseconfig/     各类应用共用的环境与日志配置
 │   └── lockx/              锁契约与业务执行流程
 │       └── redislock/      Redis 锁实现
 └── assets/                吉祥物 Logo

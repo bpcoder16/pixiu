@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
-	"github.com/bpcoder16/pixiu/biz/httpconfig"
+	"github.com/bpcoder16/pixiu/biz/internal/baseconfig"
 	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
-func TestMustInitRejectsStoppedContext(t *testing.T) {
+func TestMustBaseInitRejectsStoppedContext(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
@@ -34,16 +34,16 @@ func TestMustInitRejectsStoppedContext(t *testing.T) {
 					t.Fatalf("启动错误应保留 context 错误链: got %v, want %v", value, tc.want)
 				}
 			}()
-			bootstrap.MustInit(tc.ctx, &httpconfig.AppConfig{}, &resources)
+			bootstrap.MustBaseInit(tc.ctx, &baseconfig.AppConfig{}, &resources)
 		})
 	}
 }
 
-func TestMustInitRejectsMissingArguments(t *testing.T) {
+func TestMustBaseInitRejectsMissingArguments(t *testing.T) {
 	for _, name := range []string{"context", "config", "resources"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg := &httpconfig.AppConfig{}
+			cfg := &baseconfig.AppConfig{}
 			resources := &lifecycle.Stack{}
 			switch name {
 			case "context":
@@ -58,7 +58,7 @@ func TestMustInitRejectsMissingArguments(t *testing.T) {
 					t.Fatal("缺少启动参数应 panic")
 				}
 			}()
-			bootstrap.MustInit(ctx, cfg, resources)
+			bootstrap.MustBaseInit(ctx, cfg, resources)
 		})
 	}
 }

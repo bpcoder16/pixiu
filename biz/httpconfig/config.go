@@ -1,9 +1,8 @@
 package httpconfig
 
-import "github.com/bpcoder16/pixiu/infra/env"
+import "github.com/bpcoder16/pixiu/biz/internal/baseconfig"
 
-// AppConfig 定义 HTTP 应用的环境与通用组件启动配置。
+// AppConfig 嵌入共用启动配置，HTTP 专属配置在此扩展。
 type AppConfig struct {
-	Env env.Config `mapstructure:"env"`
-	Log LogConfig  `mapstructure:"log"`
+	baseconfig.AppConfig `mapstructure:",squash"`
 }

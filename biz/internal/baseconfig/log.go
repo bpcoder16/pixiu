@@ -1,4 +1,4 @@
-package httpconfig
+package baseconfig
 
 import "time"
 

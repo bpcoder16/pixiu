@@ -4,14 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bpcoder16/pixiu/biz/httpconfig"
+	"github.com/bpcoder16/pixiu/biz/internal/baseconfig"
 	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
-// MustInit 执行通用初始化；参数缺失或启动 context 已结束时 panic。
+// MustBaseInit 执行通用初始化；参数缺失或启动 context 已结束时 panic。
 // 日志最先初始化并登记，后续组件按需接入，以保证日志最后关闭。
 // resources 由应用创建为空栈并负责关闭，调用方须提前登记关闭 defer。
-func MustInit(ctx context.Context, config *httpconfig.AppConfig, resources *lifecycle.Stack) {
+func MustBaseInit(ctx context.Context, config *baseconfig.AppConfig, resources *lifecycle.Stack) {
 	if err := validateParams(ctx, config, resources); err != nil {
 		panic(err)
 	}
@@ -20,7 +20,7 @@ func MustInit(ctx context.Context, config *httpconfig.AppConfig, resources *life
 	}
 }
 
-func validateParams(ctx context.Context, config *httpconfig.AppConfig, resources *lifecycle.Stack) error {
+func validateParams(ctx context.Context, config *baseconfig.AppConfig, resources *lifecycle.Stack) error {
 	if ctx == nil {
 		return fmt.Errorf("bootstrap: nil context")
 	}

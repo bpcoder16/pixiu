@@ -12,11 +12,12 @@
 //			log.Printf("close resources: %v", err)
 //		}
 //	}()
-//	bootstrap.MustInit(ctx, config, &resources)
+//	bootstrap.MustBaseInit(ctx, &config.AppConfig, &resources)
 //	logit.Info(ctx, "application initialized")
 //
 // 示例使用标准库 context、log，以及 pixiu 的 biz/httpconfig、biz/bootstrap、
 // lifecycle、logit。初始化 panic 原样传播，已登记资源由应用的 defer 关闭。
+// 通用入口只接收 baseconfig.AppConfig；HTTP 配置将其嵌入的基础配置传入。
 //
 // 日志固定使用 rotatefile，format 必须显式设置为 text/json；默认启动目录下的 log 目录、每小时轮转、
 // 每个分流文件保留 48 个实际文件。config.Log 可配置 format、caller、dir 目录、names、rotate。
@@ -37,5 +38,5 @@
 // 后续成功创建资源后立即登记关闭函数；登记失败须关闭尚未交付的资源。
 // 共享资源只登记一次，日志先登记、最后关闭。本包不持有全局关闭栈。
 // 接入后台任务后，应用必须先停止入口并等待任务退出，再关闭下游资源；
-// 取消 context 不能代替等待。MustInit 仅供启动期串行调用，不承诺失败后重试。
+// 取消 context 不能代替等待。MustBaseInit 仅供启动期串行调用，不承诺失败后重试。
 package bootstrap
