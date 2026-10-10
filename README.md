@@ -147,8 +147,8 @@ Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticSearchx/v7/d
 
 | 包 | 能力 | 典型用途 |
 | --- | --- | --- |
-| [`biz/bootstrap`](biz/bootstrap/doc.go) | 通用初始化入口骨架，接收应用持有的资源关闭栈 | 项目先执行通用初始化，再装配项目资源；具体组件按需接入 |
-| [`biz/httpconfig`](biz/httpconfig/doc.go) | 组合 configx 和 env，加载 HTTP 应用配置并初始化环境 | 从 [`app.yaml` 模板](biz/httpconfig/conf.example/app.yaml) 加载应用环境 |
+| [`biz/bootstrap`](biz/bootstrap/doc.go) | 默认及命名日志初始化，组合 logit、rotatefile 与应用资源关闭栈 | 固定轮转文件、Debug/Info/WF 分流、JSON/text，日志最后关闭 |
+| [`biz/httpconfig`](biz/httpconfig/doc.go) | 组合 configx 和 env，加载 HTTP 应用配置并初始化环境 | 从 [`app.yaml` 模板](biz/httpconfig/conf.example/app.yaml) 加载应用环境和日志配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
 

@@ -9,11 +9,14 @@ import (
 )
 
 // MustInit 执行通用初始化；参数缺失或启动 context 已结束时 panic。
-// 第一版仅检查启动前置条件，具体组件按需接入。
-// resources 由应用创建并关闭，调用方须提前登记关闭 defer。
+// 日志最先初始化并登记，后续组件按需接入，以保证日志最后关闭。
+// resources 由应用创建为空栈并负责关闭，调用方须提前登记关闭 defer。
 func MustInit(ctx context.Context, config *httpconfig.AppConfig, resources *lifecycle.Stack) {
 	if err := validateParams(ctx, config, resources); err != nil {
 		panic(err)
+	}
+	if err := initLog(config.Log, resources); err != nil {
+		panic(fmt.Errorf("bootstrap: initialize log: %w", err))
 	}
 }
 

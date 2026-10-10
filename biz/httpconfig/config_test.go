@@ -140,6 +140,8 @@ func TestMustLoadAppConfigRejectsInvalidEnvironment(t *testing.T) {
 		{"unknown-null", validYAML + "  extra: null\n", "extra"},
 		{"unknown-log-field", validYAML + "log:\n  formatt: json\n", "formatt"},
 		{"removed-log-mode", validYAML + "log:\n  mode: file\n", "mode"},
+		{"removed-log-file", validYAML + "log:\n  file: logs\n", "file"},
+		{"wrong-log-caller-type", validYAML + "log:\n  caller: 'true'\n", "caller"},
 		{"wrong-log-names-type", validYAML + "log:\n  names: [123]\n", "names"},
 		{"wrong-type", strings.Replace(validYAML, "demo", "123", 1), "appName"},
 	}
@@ -245,7 +247,7 @@ func TestConcurrentLoadAndRead(t *testing.T) {
 func TestExampleTemplate(t *testing.T) {
 	isolated(t, func(t *testing.T) {
 		cfg := httpconfig.MustLoadAppConfig("conf.example/app.yaml")
-		if cfg.Env.AppName != "example-http" || cfg.Env.RunMode != "debug" || cfg.Env.TimeLocation != "Asia/Shanghai" {
+		if cfg.Env.AppName != "example-http" || cfg.Env.RunMode != "debug" || cfg.Env.TimeLocation != "Asia/Shanghai" || cfg.Log.Format != "json" || cfg.Log.Caller {
 			t.Fatalf("模板配置不正确: %+v", cfg)
 		}
 	})
@@ -258,15 +260,15 @@ func TestLogConfigurationFormats(t *testing.T) {
 	}{
 		{
 			name:    "app.yaml",
-			content: validYAML + "log:\n  format: json\n  file: logs\n  names: [worker, request]\n  rotate:\n    every: 24h\n    maxFiles: 7\n",
+			content: validYAML + "log:\n  format: json\n  caller: true\n  dir: logs\n  names: [worker, request]\n  rotate:\n    every: 24h\n    maxFiles: 7\n",
 		},
 		{
 			name:    "app.toml",
-			content: "[env]\nappName = 'demo'\nrunMode = 'debug'\ntimeLocation = 'UTC'\nlocalIP = '192.0.2.10'\n[log]\nformat = 'json'\nfile = 'logs'\nnames = ['worker', 'request']\n[log.rotate]\nevery = '24h'\nmaxFiles = 7\n",
+			content: "[env]\nappName = 'demo'\nrunMode = 'debug'\ntimeLocation = 'UTC'\nlocalIP = '192.0.2.10'\n[log]\nformat = 'json'\ncaller = true\ndir = 'logs'\nnames = ['worker', 'request']\n[log.rotate]\nevery = '24h'\nmaxFiles = 7\n",
 		},
 		{
 			name:    "app.json",
-			content: `{"env":{"appName":"demo","runMode":"debug","timeLocation":"UTC","localIP":"192.0.2.10"},"log":{"format":"json","file":"logs","names":["worker","request"],"rotate":{"every":"24h","maxFiles":7}}}`,
+			content: `{"env":{"appName":"demo","runMode":"debug","timeLocation":"UTC","localIP":"192.0.2.10"},"log":{"format":"json","caller":true,"dir":"logs","names":["worker","request"],"rotate":{"every":"24h","maxFiles":7}}}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -274,7 +276,7 @@ func TestLogConfigurationFormats(t *testing.T) {
 				dir := t.TempDir()
 				t.Chdir(dir)
 				cfg := httpconfig.MustLoadAppConfig(writeConfig(t, dir, tc.name, tc.content))
-				if cfg.Log.Format != "json" || cfg.Log.File != "logs" || !slices.Equal(cfg.Log.Names, []string{"worker", "request"}) || cfg.Log.Rotate.Every != 24*time.Hour || cfg.Log.Rotate.MaxFiles != 7 {
+				if cfg.Log.Format != "json" || !cfg.Log.Caller || cfg.Log.Dir != "logs" || !slices.Equal(cfg.Log.Names, []string{"worker", "request"}) || cfg.Log.Rotate.Every != 24*time.Hour || cfg.Log.Rotate.MaxFiles != 7 {
 					t.Fatalf("日志配置解析错误: %+v", cfg.Log)
 				}
 				if _, err := os.Stat("logs"); !errors.Is(err, os.ErrNotExist) {

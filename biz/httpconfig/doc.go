@@ -38,12 +38,12 @@
 // 加载不修改 time.Local 或 Gin 模式，也不初始化日志或其他组件。
 //
 // LogConfig 只在此解析；biz/bootstrap 校验并应用日志默认值，不回写配置。
-// 日志固定使用 rotatefile；省略 log 时默认 text、./log 目录、轮转周期 1h、每个文件保留 48 份。
-// 可配置 format（text/json）、file 目录、names（额外命名 Logger）、
+// 日志固定使用 rotatefile；format 必须显式设置，目录默认 ./log、轮转周期 1h、每个文件保留 48 份。
+// 可配置 format（text/json）、caller（调用位置，默认 false）、dir 目录、names（额外命名 Logger）、
 // rotate.every（1h/24h）、rotate.maxFiles（至少 3）；不接受 mode 配置。
-// file 相对路径基于 env.RootDirPath()，绝对路径直接使用，目录由 bootstrap 创建并检查可写权限。
+// dir 相对路径基于 env.RootDirPath()，绝对路径直接使用，目录由 bootstrap 创建并检查可写权限。
 // 默认与命名日志分别以 env.AppName() 和 env.AppName()+"."+name 为基名，
 // 按 Debug、Info、WF（Warn、Error、Fatal）分流，详见 biz/bootstrap/doc.go。
-// 空字符串和数值 0 表示使用默认值；Names 中不接受空字符串。
+// Dir 的空字符串和轮转配置的数值 0 表示使用默认值；Format 与 Names 中不接受空字符串。
 // 类型与未知字段在加载阶段检查，格式、名字及文件冲突、轮转范围在初始化阶段检查。
 package httpconfig

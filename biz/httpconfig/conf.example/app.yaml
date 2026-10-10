@@ -12,13 +12,15 @@ env:
   localIP: ""
 
 log:
-  # text / json；默认 text。默认开启调用位置，release 输出 Info 及以上，其他模式输出 Debug 及以上。
-  format: "text"
+  # text / json；必填。release 输出 Info 及以上，其他模式输出 Debug 及以上。
+  format: "json"
+  # 是否输出调用位置；默认 false，对默认及命名 Logger 同时生效。
+  caller: false
   # 日志目录，默认 ./log；相对路径拼接 env.RootDirPath()，绝对路径直接使用。
   # 不存在时自动创建；启动时检查目录可写权限。
-  file: "./log"
+  dir: "./log"
   # 额外的命名 Logger，可通过 logit.Named(name) 或 WithLoggerName(ctx, name) 选择。
-  # 每个 Logger 都按 Debug / Info / WF（Warn、Error、Fatal）分流，详见 bootstrap/doc.go。
+  # 每个 Logger 分流为 .debug.log / .info.log / .wf.log（Warn、Error、Fatal）。
   names: []
   # 固定使用 rotatefile；时间戳和轮转边界使用进程本地时区。
   rotate:
