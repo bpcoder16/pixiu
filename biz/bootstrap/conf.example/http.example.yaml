@@ -1,0 +1,25 @@
+# 复制为 http.yaml，由 NewHTTPService(configFile, handler) 读取。
+# 面向网关或负载均衡器后方的普通 JSON API；TLS 在入口终止，后端监听普通 HTTP。
+# 时间使用带单位字符串；以下值与 httpserver 默认配置一致。
+
+# 监听所有网卡，供网关访问；部署时通过网络策略限制后端入口。
+addr: ":8888"
+
+# 请求头读取期限，避免慢速连接长期占用资源；零值默认 5s，负值无效。
+readHeaderTimeout: "5s"
+# 完整请求（含请求体）读取期限；零值默认 10s，负值不设上限。
+readTimeout: "10s"
+# 响应写入期限；零值默认 15s，负值不设上限。
+# 上传、下载或流式接口需按业务调整读写期限，并为业务 context 单独设置执行期限。
+writeTimeout: "15s"
+# 长连接等待下一次请求的期限；零值默认 60s，负值无效。
+idleTimeout: "60s"
+
+# 请求行与请求头总大小上限（字节）；零值默认 64 KiB，负值无效。
+# 请求体大小由 handler 单独限制。
+maxHeaderBytes: 65536
+
+# 从首次 Shutdown 开始计算的 HTTP 排空期限；零值默认 15s，负值无效。
+# 应用总关闭期限及部署平台终止宽限期需为 HTTP 排空和其他资源清理预留足够时间。
+# 超时后强制关闭普通连接，不额外等待 handler；WebSocket 等接管连接需独立关闭。
+shutdownTimeout: "15s"

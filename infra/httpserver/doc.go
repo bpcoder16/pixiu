@@ -9,7 +9,7 @@
 // Run 和 Shutdown 均不接收外部 context。应用处理停机信号后主动调用 Shutdown，
 // 排空期限从首次调用开始，ShutdownTimeout 为零时默认 15 秒。
 // 实例内部 context 在排空完成或超时强制关闭连接后取消，不提前取消正在排空的请求。
-// HTTP 关闭超时后不额外等待 handler，应用尽力清理资源后以非零状态退出。
+// HTTP 关闭超时后不额外等待 handler，应用记录错误并尽力清理资源后退出，退出码由应用决定。
 //
 // 以下示例需导入 net/http、os、os/signal、syscall 和
 // github.com/bpcoder16/pixiu/infra/httpserver：

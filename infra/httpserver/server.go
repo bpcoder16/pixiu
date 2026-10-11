@@ -21,19 +21,19 @@ var (
 // 仅 ReadTimeout、WriteTimeout 允许负值,表示不设上限。
 type Config struct {
 	// Addr 是 Run 使用的监听地址,空值默认使用 :8888。
-	Addr string
+	Addr string `mapstructure:"addr"`
 	// ReadHeaderTimeout 是读取请求头的最长时间,零值默认使用 5 秒。
-	ReadHeaderTimeout time.Duration
+	ReadHeaderTimeout time.Duration `mapstructure:"readHeaderTimeout"`
 	// ReadTimeout 是读取完整请求(含请求体)的最长时间,零值默认使用 10 秒,负值不设上限。
-	ReadTimeout time.Duration
+	ReadTimeout time.Duration `mapstructure:"readTimeout"`
 	// WriteTimeout 是写入响应的超时时间,零值默认使用 15 秒,负值不设上限。
-	WriteTimeout time.Duration
+	WriteTimeout time.Duration `mapstructure:"writeTimeout"`
 	// IdleTimeout 是长连接等待下一次请求的最长时间,零值默认使用 60 秒。
-	IdleTimeout time.Duration
+	IdleTimeout time.Duration `mapstructure:"idleTimeout"`
 	// MaxHeaderBytes 限制请求行与请求头的总字节数,零值默认使用 64 KiB,不限制请求体。
-	MaxHeaderBytes int
+	MaxHeaderBytes int `mapstructure:"maxHeaderBytes"`
 	// ShutdownTimeout 限制首次 Shutdown 触发后的排空期限,零值默认使用 15 秒。
-	ShutdownTimeout time.Duration
+	ShutdownTimeout time.Duration `mapstructure:"shutdownTimeout"`
 }
 
 // Server 独立管理普通 HTTP 连接;不管理 hijacked 连接。

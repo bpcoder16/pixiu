@@ -1,5 +1,5 @@
-// Package bootstrap 提供日志、MySQL、Redis、Elasticsearch 和 NATS 多实例的通用初始化入口，供项目自己的 bootstrap
-// 声明资源后调用，再执行业务服务装配。设计见 docs/bootstrap-design.md。
+// Package bootstrap 提供日志、MySQL、Redis、Elasticsearch 和 NATS 多实例的通用初始化入口，
+// 以及应用运行管理器和 HTTP 服务的构造方法，供项目自己的 bootstrap 组装。设计见 docs/bootstrap-design.md。
 //
 // 应用负责加载配置、创建资源关闭栈，并在初始化前登记关闭流程：
 //
@@ -21,6 +21,33 @@
 // 示例使用标准库 context、log，以及 pixiu 的 biz/httpconfig、biz/bootstrap、
 // lifecycle、logit。初始化 panic 原样传播，已登记资源由应用的 defer 关闭。
 // 通用入口只接收 baseconfig.AppConfig；HTTP 配置将其嵌入的基础配置传入。
+//
+// 初始化成功后，应用持有管理器，显式登记服务并接管停机信号：
+//
+//	func start(handler http.Handler) error {
+//		manager, err := bootstrap.NewAppManager()
+//		if err != nil {
+//			return err
+//		}
+//		service, err := bootstrap.NewHTTPService("./conf/http.yaml", handler)
+//		if err != nil {
+//			return err
+//		}
+//		if err := manager.Register(service); err != nil {
+//			return errors.Join(err, service.Shutdown())
+//		}
+//		return manager.RunSignals(context.Background())
+//	}
+//
+// 此示例另用标准库 errors、net/http；handler 和配置路径由应用提供。
+// NewAppManager() 或 NewAppManager(0) 使用 apprun 默认的 20 秒总关闭期限，
+// 也可传入一个不小于 5 秒的 time.Duration，负值或不足 5 秒的正值返回错误；
+// 不保存全局管理器，不自动注册服务或接管信号。
+// NewHTTPService 严格解析 httpserver.Config 并返回名为 http 的 apprun.Service，
+// 构造时不监听，HTTP ShutdownTimeout 省略或为零时默认 15 秒。
+// Run 将启动与关闭竞争产生的 httpserver.ErrClosed 视为正常退出，保留其他运行与关闭错误。
+// 注册失败由调用方关闭该服务；注册成功后由管理器关闭，不重复登记到资源栈。
+// HTTP 超时后强制关闭普通连接，不额外等待 handler；管理器返回后应用尽力清理共享资源及日志。
 //
 // 初始化最先将 time.Local 设置为 env.TimeLocation()，随后创建日志及轮转资源。
 // 配置加载只发布环境，设置默认时区由本包负责；必须在并发使用时间或日志前执行。

@@ -150,7 +150,7 @@ Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/d
 
 | 包 | 能力 | 典型用途 |
 | --- | --- | --- |
-| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及 MySQL / Redis / Elasticsearch / NATS 多实例初始化 | 声明实例、按配置文件创建资源、登记关闭栈，日志最后关闭 |
+| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，运行管理器与 HTTP 服务构造 | 声明实例、登记关闭栈；应用持有 Manager 并注册 HTTP 服务，日志最后关闭 |
 | [`biz/httpconfig`](biz/httpconfig/doc.go) | 嵌入 baseconfig，严格解析 HTTP 应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/httpconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
@@ -158,6 +158,8 @@ Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/d
 `biz/internal/baseconfig` 供 biz 内部共用环境与日志配置；业务项目通过 `httpconfig.AppConfig` 的嵌入字段使用，无需直接导入内部包。
 
 `httpconfig.MustLoadAppConfig` 使用 `configx.Parse`，支持 YAML / TOML / JSON，拒绝未知字段和弱类型转换；配置只返回给调用方，环境由 `env.Init` 一次性发布。应用配置文件所在目录作为 `env.ConfigDirPath()`，供 bootstrap 查找实例配置。加载配置不会初始化日志或修改 `time.Local`；`bootstrap.MustBaseInit` 在日志创建前应用环境时区，再依次初始化日志、MySQL、Redis、Elasticsearch 和 NATS，仅初始化已声明的组件实例。
+
+初始化完成后，应用可调用 `bootstrap.NewAppManager()` 创建默认总关闭期限为 20 秒的管理器，也可传入不小于 5 秒的自定义时长，传入 0 仍使用默认值。`bootstrap.NewHTTPService(configFile, handler)` 严格加载 HTTP 配置并返回可注册的 `apprun.Service`，HTTP 关闭期限默认 15 秒。应用显式调用 `manager.Register(service)` 和 `manager.RunSignals(context.Background())`，管理器返回后再关闭共享资源栈。
 
 ### 规划中的能力
 
@@ -189,7 +191,7 @@ pixiu/
 │   ├── elasticsearchx/     Elasticsearch 与 v7 / v8 / v9 适配
 │   └── internal/           infra 内部共用实现
 ├── biz/
-│   ├── bootstrap/          应用时区、日志及多实例组件初始化
+│   ├── bootstrap/          组件初始化、运行管理器与 HTTP 服务构造
 │   ├── httpconfig/         HTTP 应用配置加载与环境初始化
 │   ├── internal/           biz 内部共用实现
 │   │   └── baseconfig/     各类应用共用的环境与日志配置
