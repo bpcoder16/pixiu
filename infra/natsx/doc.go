@@ -8,6 +8,27 @@
 // 业务 Stream/Consumer 配置、ACK 和重试策略由调用方决定；详见 docs/natsx-design.md。
 // 第一版原样记录错误文本并保留原始错误链，不脱敏其中可能包含的 URL、密码或 Token。
 //
+// 共享客户端可在启动阶段使用 NewDefault/NewNamed 创建，由 Default/Named 获取。
+// 默认引用与同名实例相同；独立 New 不登记到注册表，仍由调用方显式关闭。
+// 以下为共享客户端的发布样例（需导入 context 和 natsx）：
+//
+//	client, err := natsx.NewDefault(natsx.Config{
+//		Name: "events",
+//		URLs: []string{"nats://127.0.0.1:4222"},
+//	})
+//	if err != nil {
+//		return err
+//	}
+//	defer natsx.CloseAll()
+//	return client.Publish(context.Background(), "events.created", []byte("hello"))
+//
+// NewDefault/NewNamed 只在启动阶段串行调用，不能与 CloseAll 并发；失败不占用名称。
+// 未初始化、名称不存在或 CloseAll 开始后查询会 panic。CloseAll 只关闭已登记实例，
+// 默认实例只关闭一次，并汇总错误；重复调用返回同一次结果。
+// 关闭前停止并等待外部生产者，托管消费由 Client.Close 排空；消费者及其发布服务须在
+// 启动时持有客户端引用，排空期间不能再次查询 Default/Named。数据库等依赖和日志晚于 NATS 关闭。
+// 注册表不保证多实例关闭顺序，各实例使用独立的 CloseTimeout，不支持关闭期跨实例依赖。
+//
 // 应用启动时创建连接并完成 Subscribe/QueueSubscribe 注册和 ConsumeWithWorkers 启动；运行期间保持消费关系固定。
 // 关闭时先停止并等待外部生产者，再通过 Client.Close 统一排空并关闭连接，最后关闭日志。
 // 已建立连接意外断开后默认持续重连，心跳间隔默认 20 秒，重连发送缓冲默认 16 MiB；
