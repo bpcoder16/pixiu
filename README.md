@@ -139,20 +139,24 @@ func main() {
 | [`infra/sqlitex`](infra/sqlitex/doc.go) | SQLite 单库连接池、常用参数配置、查询日志 | GORM、go-sqlite3、logit |
 | [`infra/redisx`](infra/redisx/doc.go) | 单机 Redis 客户端、初始化验活、命令结果日志 | go-redis v9、logit |
 | [`infra/natsx`](infra/natsx/doc.go) | NATS 发布 / 请求 / 订阅、JetStream 发布与消费、统一日志 | nats.go、logit |
-| [`infra/elasticsearchx`](infra/elasticsearchx/doc.go) | Elasticsearch 通用操作、Bulk、结果日志与版本适配 | 官方 Elasticsearch SDK、logit |
+| [`infra/elasticsearchx`](infra/elasticsearchx/doc.go) | Elasticsearch 通用操作、Bulk、默认及命名实例、结果日志与版本适配 | 官方 Elasticsearch SDK、logit |
 
-Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/doc.go)、[`v8`](infra/elasticsearchx/v8/doc.go) 或 [`v9`](infra/elasticsearchx/v9/doc.go) 适配包；共用操作位于 `infra/elasticsearchx`。
+Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/doc.go)、[`v8`](infra/elasticsearchx/v8/doc.go) 或 [`v9`](infra/elasticsearchx/v9/doc.go) 适配包；共用操作位于 `infra/elasticsearchx`。各版本的 `NewDefault` / `NewNamed` 共用注册表，通过 `elasticsearchx.Default()` / `Named(name)` 获取实例，应用统一调用 `CloseAll()` 关闭；独立 `New` 创建的实例仍需自行关闭。
+
+独立 Elasticsearch 客户端默认关闭请求结果日志，通过 `OptLogRequests(true)` 开启；请求体和响应详情还需开启 `OptLogDetails(true)`。context 已调用 `logit.WithStart` 时，关闭结果日志仍会记录请求级下游耗时。`Search` 超时或分片失败会保留已有结果并返回 `PartialSearchError`；`Bulk` 动作失败返回 `BulkError` 并保留成功数与失败项，调用方应检查错误后再决定是否接受结果或重试。
 
 ### 通用业务功能 · biz
 
 | 包 | 能力 | 典型用途 |
 | --- | --- | --- |
-| [`biz/bootstrap`](biz/bootstrap/doc.go) | 默认及命名日志初始化，组合 logit、rotatefile 与应用资源关闭栈 | 固定轮转文件、Debug/Info/WF 分流、JSON/text，日志最后关闭 |
-| [`biz/httpconfig`](biz/httpconfig/doc.go) | 嵌入 baseconfig，加载完整 HTTP 应用配置并初始化环境 | 从 [`app.yaml` 模板](biz/httpconfig/conf.example/app.yaml) 加载应用环境和日志配置 |
+| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及 MySQL / Redis / Elasticsearch / NATS 多实例初始化 | 声明实例、按配置文件创建资源、登记关闭栈，日志最后关闭 |
+| [`biz/httpconfig`](biz/httpconfig/doc.go) | 嵌入 baseconfig，严格解析 HTTP 应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/httpconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
 
 `biz/internal/baseconfig` 供 biz 内部共用环境与日志配置；业务项目通过 `httpconfig.AppConfig` 的嵌入字段使用，无需直接导入内部包。
+
+`httpconfig.MustLoadAppConfig` 使用 `configx.Parse`，支持 YAML / TOML / JSON，拒绝未知字段和弱类型转换；配置只返回给调用方，环境由 `env.Init` 一次性发布。应用配置文件所在目录作为 `env.ConfigDirPath()`，供 bootstrap 查找实例配置。加载配置不会初始化日志或修改 `time.Local`；`bootstrap.MustBaseInit` 在日志创建前应用环境时区，再依次初始化日志、MySQL、Redis、Elasticsearch 和 NATS，仅初始化已声明的组件实例。
 
 ### 规划中的能力
 
@@ -184,7 +188,7 @@ pixiu/
 │   ├── elasticsearchx/     Elasticsearch 与 v7 / v8 / v9 适配
 │   └── internal/           infra 内部共用实现
 ├── biz/
-│   ├── bootstrap/          通用初始化入口与资源登记约定
+│   ├── bootstrap/          应用时区、日志及多实例组件初始化
 │   ├── httpconfig/         HTTP 应用配置加载与环境初始化
 │   ├── internal/           biz 内部共用实现
 │   │   └── baseconfig/     各类应用共用的环境与日志配置
@@ -204,6 +208,58 @@ pixiu/
 ## 使用示例
 
 下面的示例可分别保存为独立程序，安装相应包后运行。每个示例展示一种组合方式；完整配置与边界请阅读对应包文档。
+
+### 应用配置与多实例初始化
+
+将 [`app.yaml`](biz/httpconfig/conf.example/app.yaml) 复制到应用的 `conf/app.yaml`。本例还声明三个组件实例，需将对应模板复制到同一配置目录，并填写实际连接信息：
+
+| 声明 | 配置文件 | 模板 |
+| --- | --- | --- |
+| `MustRegisterMySQL("orders", true)` | `conf/mysql.orders.yaml` | [MySQL](biz/bootstrap/conf.example/mysql.example.yaml) |
+| `MustRegisterRedis("cache", true)` | `conf/redis.cache.yaml` | [Redis](biz/bootstrap/conf.example/redis.example.yaml) |
+| `MustRegisterElasticsearch("search", true)` | `conf/elasticsearch.search.yaml` | [Elasticsearch](biz/bootstrap/conf.example/elasticsearch.example.yaml) |
+
+实例名与默认标记只在代码中声明，实例文件不接受 `name` / `isDefault`。Elasticsearch 文件的 `version` 必须与部署主版本一致，支持 7 / 8 / 9；`caCertFile` 相对路径基于配置目录。只需某个组件时，保留对应声明与配置文件即可；未声明的实例不会加载。
+
+<details>
+<summary>展开完整示例（需要实际下游服务）</summary>
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/bpcoder16/pixiu/biz/bootstrap"
+	"github.com/bpcoder16/pixiu/biz/httpconfig"
+	"github.com/bpcoder16/pixiu/lifecycle"
+	"github.com/bpcoder16/pixiu/logit"
+)
+
+func main() {
+	cfg := httpconfig.MustLoadAppConfig("./conf/app.yaml")
+	var resources lifecycle.Stack
+	defer func() {
+		if err := resources.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "close resources:", err)
+		}
+	}()
+
+	bootstrap.MustRegisterMySQL("orders", true)
+	bootstrap.MustRegisterRedis("cache", true)
+	bootstrap.MustRegisterElasticsearch("search", true)
+	bootstrap.MustBaseInit(&cfg.AppConfig, &resources)
+	logit.Info(context.Background(), "应用初始化完成")
+}
+```
+
+</details>
+
+各组件独立选择默认实例，`Default()` 与 `Named(默认名称)` 返回同一客户端。共享组件由 bootstrap 各登记一次 `CloseAll`，业务无需重复登记单个客户端关闭；应用退出前先停止并等待业务任务，再关闭资源栈。配置或初始化失败会 panic，提前登记的 defer 负责回收已创建资源；初始化只在启动阶段串行执行，失败后不支持重试。
+
+Elasticsearch 经 bootstrap 创建时，省略 `logRequests` 默认开启结果日志，`logDetails` 默认关闭；这与直接调用版本适配包 `New` 默认关闭结果日志不同。Redis 模板显式开启 `logCommands`，省略该字段则关闭正常命令日志，慢调用和错误日志仍会输出。完整参数与边界见 [`bootstrap` 包文档](biz/bootstrap/doc.go)。
 
 ### 日志写入轮转文件
 
