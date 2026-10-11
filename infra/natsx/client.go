@@ -25,7 +25,7 @@ var (
 type Config struct {
 	// Name 是连接名称，同时用于日志标识；不能为空或仅含空白。
 	Name string
-	// URLs 是服务器地址列表；至少提供一个地址，且每项不能为空或仅含空白。
+	// URLs 是服务器地址列表；至少提供一个地址，且每项非空、无首尾空白，不自动裁剪。
 	URLs []string
 	// Username 与 Password 配对，允许空密码；只有 Password 时无效。
 	// 两者均为空时可通过官方选项使用动态用户名/密码或其他认证；显式配置时不可与认证选项或 URL 凭据混用。
@@ -100,8 +100,12 @@ func New(cfg Config, options ...nats.Option) (*Client, error) {
 		return nil, errors.New("natsx: no server URLs")
 	}
 	for _, serverURL := range cfg.URLs {
-		if strings.TrimSpace(serverURL) == "" {
+		trimmed := strings.TrimSpace(serverURL)
+		if trimmed == "" {
 			return nil, errors.New("natsx: empty server URL")
+		}
+		if trimmed != serverURL {
+			return nil, errors.New("natsx: server URL must not have surrounding whitespace")
 		}
 	}
 	if cfg.ConnectTimeout < 0 || cfg.DrainTimeout < 0 || cfg.CloseTimeout < 0 {

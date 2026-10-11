@@ -91,6 +91,32 @@ func TestNewValidationAndConnectErrorLogs(t *testing.T) {
 	}
 }
 
+func TestNewRejectsServerURLWhitespaceBeforeDial(t *testing.T) {
+	for _, address := range []string{
+		"",
+		" \t",
+		" " + nats.DefaultURL,
+		nats.DefaultURL + " ",
+		"\u00a0" + nats.DefaultURL,
+		nats.DefaultURL + "/ ",
+	} {
+		t.Run(address, func(t *testing.T) {
+			dialer := &authCountingDialer{}
+			client, err := New(Config{
+				Name: "url-whitespace",
+				URLs: []string{nats.DefaultURL, address},
+			}, nats.SetCustomDialer(dialer))
+			if client != nil {
+				_ = client.Close()
+				t.Fatal("含空白的地址意外建立连接")
+			}
+			if err == nil || errors.Is(err, ErrConnect) || dialer.calls != 0 {
+				t.Fatalf("应在任何拨号前拒绝空地址或首尾空白: err=%v, dials=%d", err, dialer.calls)
+			}
+		})
+	}
+}
+
 func TestNewRejectsServerURLOptionsBeforeDial(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

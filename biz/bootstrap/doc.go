@@ -1,4 +1,4 @@
-// Package bootstrap 提供日志、MySQL、Redis 和 Elasticsearch 多实例的通用初始化入口，供项目自己的 bootstrap
+// Package bootstrap 提供日志、MySQL、Redis、Elasticsearch 和 NATS 多实例的通用初始化入口，供项目自己的 bootstrap
 // 声明资源后调用，再执行业务服务装配。设计见 docs/bootstrap-design.md。
 //
 // 应用负责加载配置、创建资源关闭栈，并在初始化前登记关闭流程：
@@ -14,6 +14,7 @@
 //	bootstrap.MustRegisterMySQL("reports", false)
 //	bootstrap.MustRegisterRedis("orders", true)
 //	bootstrap.MustRegisterElasticsearch("orders", true)
+//	bootstrap.MustRegisterNATS("orders", true)
 //	bootstrap.MustBaseInit(&config.AppConfig, &resources)
 //	logit.Info(context.Background(), "application initialized")
 //
@@ -56,7 +57,8 @@
 // redisx.Default().Client() 与 redisx.Named(name).Client() 获取同一默认客户端。
 // 创建首个实例前只登记一次 redisx.CloseAll，单个失败实例由 redisx 立即清理；
 // 此前成功的 Redis、MySQL 与日志交给应用资源栈关闭，不重复登记单个客户端 Close。
-// 关闭前先停止并等待业务任务及订阅退出，再逆序关闭项目资源、Elasticsearch、Redis、MySQL 与日志。
+// 关闭前先停止并等待外部生产者及业务管理的订阅；NATS 托管消费由其 CloseAll 排空，
+// 再关闭 Elasticsearch、Redis、MySQL 与日志。消费者仍使用的项目资源也必须晚于 NATS 关闭。
 //
 // Elasticsearch 使用 MustRegisterElasticsearch(name, isDefault) 声明，与 MySQL、Redis 独立判重。
 // Redis 初始化后读取 elasticsearch.<name>.yaml，文件前缀统一小写；未声明时跳过。
@@ -70,6 +72,22 @@
 // logDetails 默认 false，两项同时开启才采集正文；正文不脱敏、不截断，不额外创建 ES Logger。
 // 失败实例由底层清理，先前成功实例交给应用栈；只登记模块 CloseAll，不重复登记 Client.Close。
 // 关闭前先停止并等待业务任务，沿用底层 SDK 关闭行为，不新增关闭期限。
+//
+// NATS 使用 MustRegisterNATS(name, isDefault) 声明，Elasticsearch 之后读取 nats.<name>.yaml。
+// 全部 NATS 文件严格解析并转换后，登记一次 natsx.CloseAll，再创建默认或命名客户端；
+// 未声明时跳过。模板见 conf.example/nats.example.yaml；文件不接受 name、isDefault。
+// 转换阶段检查 URL 解析及内嵌凭据，通用参数由 natsx 在构造时校验；
+// 后续实例校验失败时，此前成功的实例由应用关闭栈回收。
+// urls 必填，地址非空且无首尾空白，不接受 URL 内嵌凭据；认证使用 username/password。
+// 超时零值使用 natsx 默认值，负值无效；connectTimeout 默认 5s，是单次拨号期限。
+// drainTimeout 默认 10s，仅用于底层连接 Drain；closeTimeout 默认 20s，限制完整关闭流程。
+// jetStream.publishAsyncTimeout 默认 5s，只限制默认上下文的异步 PubAck 等待。
+// 连接成功不代表 JetStream 已启用或业务权限已验证；业务自行准备 Stream/Consumer，
+// 在 handler 依赖就绪后注册订阅。消息格式、ACK、重试和幂等策略由业务负责。
+// NATS 关闭前先停止并等待外部生产者，托管订阅及 worker 由 Client.Close 排空，期间允许
+// 回调继续发布和请求。消费者及其发布服务必须在启动时持有客户端引用，不能在排空期间
+// 再次查询 Default/Named；回调依赖的资源晚于 NATS 关闭，日志最后关闭。
+// CloseTimeout 超时强制关闭连接并取消消息 ctx，不能强制终止不响应取消的业务函数。
 //
 // 日志固定使用 rotatefile，format 必须显式设置为 text/json；默认启动目录下的 log 目录、每小时轮转、
 // 每个分流文件保留 48 个实际文件。config.Log 可配置 format、caller、dir 目录、names、rotate。
@@ -89,7 +107,8 @@
 // 构造失败仅清理当前 Logger 已打开的 Writer；此前已登记的 Logger 由 main 的 defer 收尾。
 // 调用方须传入空资源栈，让后续资源关闭期间仍可写日志。
 // 不重复发布环境；日志时间与轮转均使用启动时设置的应用时区。
-// 后续独立资源创建成功后立即登记关闭函数；登记失败须关闭尚未交付的资源。
+// 后续独立资源创建成功后立即安排关闭；登记失败须关闭尚未交付的资源，
+// 被 NATS 消费回调使用的资源必须安排在 NATS 排空完成后关闭。
 // 共享资源只登记一次，日志先登记、最后关闭。本包不持有全局关闭栈。
 // 接入后台任务后，应用必须先停止入口并等待任务退出，再关闭下游资源；
 // 取消 context 不能代替等待。注册及 MustBaseInit 仅供启动期串行调用；

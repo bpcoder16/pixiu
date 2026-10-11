@@ -75,6 +75,7 @@
 // 消费端精确读取 X-Log-Id（区分大小写），在独立日志作用域还原 ID，
 // 可通过 logit.LogIDFromContext 读取。
 // 服务器地址只能通过 Config.URLs 提供；选项中的 Url 非空或 Servers 长度非零时在拨号前报错。
+// URLs 至少包含一个地址，每项必须非空且无首尾空白；不自动裁剪，非法值在拨号前报错。
 // DisconnectedErrCB、DisconnectedCB、ReconnectedCB、ClosedCB、AsyncErrorCB 由 Pixiu 管理；
 // 选项中任一字段非 nil 时在拨号前报错，不保留或串联用户连接回调。
 // 取得 Conn() 后也不得覆盖这些回调；可通过原生 StatusChanged 观察连接状态。

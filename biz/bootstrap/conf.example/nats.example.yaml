@@ -1,0 +1,21 @@
+# 复制为 nats.<name>.yaml，放在 app.yaml 同目录下。
+# name 和 isDefault 由 MustRegisterNATS(name, isDefault) 声明，文件内不重复配置。
+# 列表中的地址属于同一个逻辑实例，不为每个地址创建独立客户端。
+urls:
+  - "nats://127.0.0.1:4222"
+
+# 不接受 URL 内嵌凭据；允许均为空，有密码时必须填写用户名。
+username: ""
+password: ""
+
+# 零值采用以下默认值，负值无效；connectTimeout 是单次拨号而非全部地址总预算。
+connectTimeout: "5s"
+# 仅限制底层连接 Drain。
+drainTimeout: "10s"
+# 消费排空、异步确认等待、最终连接关闭共用此整体期限。
+closeTimeout: "20s"
+
+# 不负责启用或校验服务端 JetStream；业务自行准备 Stream/Consumer。
+jetStream:
+  # 仅限制默认上下文的异步 PubAck 等待，不影响同步发布或 Consumer AckWait。
+  publishAsyncTimeout: "5s"
