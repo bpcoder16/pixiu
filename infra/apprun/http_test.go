@@ -15,11 +15,11 @@ import (
 	"github.com/bpcoder16/pixiu/infra/httpserver"
 )
 
-func TestHTTPDrainsBeforeDependencyShutdown(t *testing.T) {
+func TestHTTPShutdownThenDependencyCleanup(t *testing.T) {
 	for _, timeout := range []bool{false, true} {
 		name := "完整响应后退出"
 		if timeout {
-			name = "保留组件排空超时"
+			name = "组件超时后继续清理"
 		}
 		t.Run(name, func(t *testing.T) {
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -28,7 +28,10 @@ func TestHTTPDrainsBeforeDependencyShutdown(t *testing.T) {
 			}
 			addr := listener.Addr().String()
 			_ = listener.Close()
-			var manager apprun.Manager
+			manager, err := apprun.New(time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
 			var dependencyClosed atomic.Bool
 			dependencyStop := make(chan struct{})
 			if err := manager.Register(apprun.Service{
@@ -69,7 +72,7 @@ func TestHTTPDrainsBeforeDependencyShutdown(t *testing.T) {
 					<-r.Context().Done()
 				}
 				<-release
-				if dependencyClosed.Load() {
+				if !timeout && dependencyClosed.Load() {
 					t.Error("请求处理期间依赖被关闭")
 				}
 				_, _ = io.WriteString(w, "complete")
@@ -89,8 +92,7 @@ func TestHTTPDrainsBeforeDependencyShutdown(t *testing.T) {
 				},
 				Shutdown: func() error {
 					close(stopping)
-					_ = server.Shutdown()
-					return server.Wait()
+					return server.Shutdown()
 				},
 			}); err != nil {
 				t.Fatal(err)
@@ -116,6 +118,10 @@ func TestHTTPDrainsBeforeDependencyShutdown(t *testing.T) {
 				requestDone <- err
 			}()
 			requestCtx := receive(t, entered)
+			defer func() {
+				unblock()
+				receive(t, handlerDone)
+			}()
 			cancel()
 			receive(t, stopping)
 			select {
@@ -127,25 +133,27 @@ func TestHTTPDrainsBeforeDependencyShutdown(t *testing.T) {
 			}
 			if timeout {
 				receive(t, requestCtx.Done())
-				// 强制断开后，handler 响应取消但仍需使用依赖完成业务收尾。
-				select {
-				case err := <-done:
-					t.Fatalf("handler 收尾未完成就返回: %v", err)
-				case <-time.After(20 * time.Millisecond):
-				}
-				if dependencyClosed.Load() {
-					t.Fatal("handler 收尾期间依赖被关闭")
-				}
+				// 保持 handler 阻塞，HTTP 自身超时后就应继续清理，不耗尽总期限。
+			} else {
+				unblock()
 			}
-			unblock()
 			err = receive(t, done)
-			if timeout && !errors.Is(err, context.DeadlineExceeded) || !timeout && err != nil {
+			if errors.Is(err, apprun.ErrShutdownTimeout) || timeout && !errors.Is(err, context.DeadlineExceeded) || !timeout && err != nil {
 				t.Fatalf("关闭结果: %v", err)
 			}
-			receive(t, handlerDone)
+			if timeout {
+				select {
+				case <-handlerDone:
+					t.Fatal("测试中的 handler 应仍在等待释放")
+				default:
+				}
+			}
 			requestErr := receive(t, requestDone)
 			if !timeout && requestErr != nil {
 				t.Fatal(requestErr)
+			}
+			if timeout && requestErr == nil {
+				t.Fatal("HTTP 超时未强制关闭请求连接")
 			}
 			if !dependencyClosed.Load() {
 				t.Fatal("未关闭依赖")

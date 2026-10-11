@@ -7,8 +7,9 @@
 // 网络读写超时不代替业务 context 的执行期限，请求体大小应由 handler 单独限制。
 //
 // Run 和 Shutdown 均不接收外部 context。应用处理停机信号后主动调用 Shutdown，
-// 排空期限从首次调用开始，ShutdownTimeout 为零时默认 20 秒。
+// 排空期限从首次调用开始，ShutdownTimeout 为零时默认 15 秒。
 // 实例内部 context 在排空完成或超时强制关闭连接后取消，不提前取消正在排空的请求。
+// HTTP 关闭超时后不额外等待 handler，应用尽力清理资源后以非零状态退出。
 //
 // 以下示例需导入 net/http、os、os/signal、syscall 和
 // github.com/bpcoder16/pixiu/infra/httpserver：
@@ -45,5 +46,6 @@
 // Gin Engine 等实现 http.Handler 的路由器可直接传给 New，再调用 Run。
 // Shutdown 是唯一关闭入口，允许重复或并发调用，共享首次关闭的期限和结果。
 // 超时会强制关闭普通连接，但不能强制终止忽略请求 context 的业务代码。
+// handler 直接交给标准库，停止接入及请求排空由 Shutdown 负责；未退出的 handler 可能与超时后的清理并发。
 // WebSocket 等已接管连接需独立关闭；日志由应用最后关闭。
 package httpserver

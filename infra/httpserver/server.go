@@ -32,7 +32,7 @@ type Config struct {
 	IdleTimeout time.Duration
 	// MaxHeaderBytes 限制请求行与请求头的总字节数,零值默认使用 64 KiB,不限制请求体。
 	MaxHeaderBytes int
-	// ShutdownTimeout 限制首次 Shutdown 触发后的排空期限,零值默认使用 20 秒。
+	// ShutdownTimeout 限制首次 Shutdown 触发后的排空期限,零值默认使用 15 秒。
 	ShutdownTimeout time.Duration
 }
 
@@ -84,7 +84,7 @@ func New(cfg Config, handler http.Handler) (*Server, error) {
 		cfg.MaxHeaderBytes = 64 << 10
 	}
 	if cfg.ShutdownTimeout == 0 {
-		cfg.ShutdownTimeout = 20 * time.Second
+		cfg.ShutdownTimeout = 15 * time.Second
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
@@ -159,6 +159,7 @@ func (s *Server) Run() error {
 
 // Shutdown 是唯一关闭入口,停止接入并按 ShutdownTimeout 限时排空。
 // 超时后强制关闭普通连接;重复或并发调用共享同一次期限和关闭结果。
+// 超时后不额外等待尚未返回的 handler,应用尽力清理资源后退出。
 func (s *Server) Shutdown() error {
 	if !s.beginClose() {
 		<-s.ctx.Done()

@@ -33,10 +33,7 @@
 //			}
 //			return err
 //		},
-//		Shutdown: func() error {
-//			_ = server.Shutdown()
-//			return server.Wait() // 保留关闭结果,同时等待 handler 收尾。
-//		},
+//		Shutdown: server.Shutdown,
 //	}); err != nil {
 //		return errors.Join(err, server.Shutdown())
 //	}
@@ -55,8 +52,8 @@
 // 总期限耗尽返回 ErrShutdownTimeout，并停止发起后续关闭；已执行的回调可能继续运行。
 // 超时分支非阻塞地收集已到达的 Shutdown 结果，不等待迟到结果。
 // 此错误不代表服务已经停止；应用若继续清理资源，须接受未退出任务与清理并发，随后终止进程。
-// 本包不强制终止 goroutine。HTTP 适配在 Shutdown 后调用 Wait，在总期限内等待 handler 收尾；
-// Run 返回也不能证明组件未等待的业务回调已退出，其他组件同样须等待实际业务完成。
+// 本包不强制终止 goroutine。HTTP 适配直接调用 Shutdown，HTTP 关闭超时后不再等待 handler，
+// 继续尽力清理并退出。Run 返回不能证明组件未等待的业务回调已退出。
 // 正常退出先等待服务，再释放客户端，最后关闭日志；应用负责资源清理及最终进程期限。
 // 已交给管理器的服务不重复登记到 lifecycle.Stack；资源栈继续负责其他资源。
 // 启动 Run 不等于服务 ready；首版不提供就绪依赖、自动重启或运行期追加服务。

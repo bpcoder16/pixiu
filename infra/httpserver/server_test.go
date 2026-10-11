@@ -184,7 +184,9 @@ func TestShutdownDeadlineAndConcurrentResult(t *testing.T) {
 		// 模拟忽略请求取消的业务代码,验证关闭仍受配置期限限制。
 		<-release
 	}))
-	t.Cleanup(func() { close(release) })
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
 	requestDone := make(chan error, 1)
 	go func() {
 		resp, err := http.Get("http://" + addr)
@@ -241,6 +243,8 @@ func TestShutdownDeadlineAndConcurrentResult(t *testing.T) {
 	if err := s.Shutdown(); err != shutdownErr {
 		t.Fatalf("重复关闭丢失超时结果: %v", err)
 	}
+	unblock()
+	awaitResult(t, handlerDone)
 }
 
 func TestValidationAndListenFailure(t *testing.T) {
@@ -286,7 +290,7 @@ func TestShutdownBeforeStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.config.ShutdownTimeout != 20*time.Second {
+	if s.config.ShutdownTimeout != 15*time.Second {
 		t.Fatalf("默认关闭期限: %v", s.config.ShutdownTimeout)
 	}
 	if err := s.Shutdown(); err != nil {
