@@ -25,6 +25,8 @@
 //
 // 环境校验由 infra/env 负责，日志校验与默认值由 biz/bootstrap 负责。
 // 日志固定使用 rotatefile，Format 必须显式设为 text/json，Caller 默认关闭。
+// HookStd 为 nil 时默认开启 stdout/stderr 劫持，指向 false 时关闭；原始输出单独写入非轮转文件。
 // Dir 零值使用启动目录下的 log，轮转默认每小时、每个分流文件保留 48 份。
+// 业务日志位于 Dir/<appName>/biz，标准流日志位于 Dir/<appName>/std。
 // 配置类型与未知字段在加载阶段检查，日志语义在组件初始化阶段检查。
 package baseconfig

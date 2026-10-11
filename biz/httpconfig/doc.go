@@ -39,10 +39,13 @@
 // 加载不修改 time.Local 或 Gin 模式，也不初始化日志或其他组件。
 //
 // baseconfig.LogConfig 只在此解析；biz/bootstrap 校验并应用日志默认值，不回写配置。
-// 日志固定使用 rotatefile；format 必须显式设置，目录默认 ./log、轮转周期 1h、每个文件保留 48 份。
+// Logger 固定使用 rotatefile；format 必须显式设置，目录默认 ./log、轮转周期 1h、每个文件保留 48 份。
 // 可配置 format（text/json）、caller（调用位置，默认 false）、dir 目录、names（额外命名 Logger）、
-// rotate.every（1h/24h）、rotate.maxFiles（至少 3）；不接受 mode 配置。
+// hookStd（stdout/stderr 劫持，省略默认 true）、rotate.every（1h/24h）、rotate.maxFiles（至少 3）；不接受 mode 配置。
+// hookStd 开启时原始输出分别追加到 dir/<appName>/std/<appName>.stdout.log 和 dir/<appName>/std/<appName>.stderr.log，
+// 自动创建 std 目录，文件不轮转，重定向持续至进程退出；仅支持 Linux/macOS。
 // dir 相对路径基于 env.RootDirPath()，绝对路径直接使用，目录由 bootstrap 创建并检查可写权限。
+// 业务日志位于 dir/<appName>/biz；应用名作为独立目录名，禁止为 . 或 ..。
 // 默认与命名日志分别以 env.AppName() 和 env.AppName()+"."+name 为基名，
 // 按 Debug、Info、WF（Warn、Error、Fatal）分流，详见 biz/bootstrap/doc.go。
 // Dir 的空字符串和轮转配置的数值 0 表示使用默认值；Format 与 Names 中不接受空字符串。

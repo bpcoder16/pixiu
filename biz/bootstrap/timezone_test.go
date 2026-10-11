@@ -57,7 +57,7 @@ log:
 					if name != "" {
 						base += "." + name
 					}
-					file := filepath.Join(dir, base+".info.log")
+					file := filepath.Join(dir, "timezone-test", "biz", base+".info.log")
 					// 在首次写入之前检查软链，确保创建轮转文件前已设置时区。
 					target, err := os.Readlink(file)
 					first := filepath.Base(file) + "." + before.In(location).Format("2006010215")

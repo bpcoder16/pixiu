@@ -66,12 +66,12 @@ func TestDefaultLogRemainsOpenUntilOtherResourcesClose(t *testing.T) {
 		json      bool
 		initPanic bool
 	}{
-		{name: "default-file-settings", mode: "debug", logYAML: "log:\n  format: text\n  caller: true\n", file: "log/bootstrap-test.info.log"},
+		{name: "default-file-settings", mode: "debug", logYAML: "log:\n  format: text\n  caller: true\n", file: "log/bootstrap-test/biz/bootstrap-test.info.log"},
 		{
 			name:      "json-project-init-panic",
 			mode:      "release",
 			logYAML:   "log:\n  format: json\n  caller: true\n  dir: output\n  rotate:\n    every: 24h\n    maxFiles: 3\n",
-			file:      "output/bootstrap-test.info.log",
+			file:      "output/bootstrap-test/biz/bootstrap-test.info.log",
 			json:      true,
 			initPanic: true,
 		},
@@ -206,7 +206,7 @@ func TestLogCallerConfiguration(t *testing.T) {
 						t.Fatal(err)
 					}
 					for _, base := range []string{"bootstrap-test", "bootstrap-test.worker"} {
-						data, err := os.ReadFile(filepath.Join(env.RootDirPath(), "log", base+".info.log"))
+						data, err := os.ReadFile(filepath.Join(env.RootDirPath(), "log", env.AppName(), "biz", base+".info.log"))
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -270,7 +270,7 @@ func TestLogInitFailureDoesNotReplaceDefault(t *testing.T) {
 				}
 				if tc.closed {
 					for _, suffix := range []string{".info", ".debug", ".wf"} {
-						path := filepath.Join(env.RootDirPath(), "log", env.AppName()+suffix+".log")
+						path := filepath.Join(env.RootDirPath(), "log", env.AppName(), "biz", env.AppName()+suffix+".log")
 						requireLogFileOpen(t, path, false)
 					}
 				}
@@ -316,7 +316,7 @@ func TestNamedLogsDispatchLevelsAndCloseTogether(t *testing.T) {
 						{suffix: ".debug", levels: []string{"debug"}},
 						{suffix: ".wf", levels: []string{"warn", "error"}},
 					} {
-						path := filepath.Join(env.RootDirPath(), "log", base+group.suffix+".log")
+						path := filepath.Join(env.RootDirPath(), "log", env.AppName(), "biz", base+group.suffix+".log")
 						data, err := os.ReadFile(path)
 						if err != nil {
 							t.Fatal(err)
@@ -373,7 +373,7 @@ func TestFatalLogDispatchesToWFBeforeExit(t *testing.T) {
 					base += "." + loggerName
 				}
 				for _, suffix := range []string{".info", ".debug", ".wf"} {
-					path := filepath.Join(dir, base+suffix+".log")
+					path := filepath.Join(dir, "bootstrap-test", "biz", base+suffix+".log")
 					data, readErr := os.ReadFile(path)
 					if readErr != nil {
 						t.Fatal(readErr)
@@ -391,7 +391,7 @@ func TestFatalLogDispatchesToWFBeforeExit(t *testing.T) {
 func TestPartialNamedLogFailureLeavesCompletedLoggersForCaller(t *testing.T) {
 	isolatedLog(t, func() {
 		cfg := loadLogConfig(t, "debug", "log:\n  format: text\n  names: [worker]\n")
-		dir := filepath.Join(env.RootDirPath(), "log")
+		dir := filepath.Join(env.RootDirPath(), "log", env.AppName(), "biz")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -421,6 +421,50 @@ func TestPartialNamedLogFailureLeavesCompletedLoggersForCaller(t *testing.T) {
 	})
 }
 
+func TestLogDirectoryRejectsDotAppNames(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		appName string
+	}{
+		{name: "current-directory", appName: "."},
+		{name: "parent-directory", appName: ".."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolatedLog(t, func() {
+				root := t.TempDir()
+				t.Chdir(root)
+				if err := env.Init(env.Config{
+					AppName:       tc.appName,
+					RunMode:       env.RunModeTest,
+					TimeLocation:  "UTC",
+					ConfigDirPath: root,
+					LocalIP:       "192.0.2.10",
+				}); err != nil {
+					t.Fatal(err)
+				}
+				hookStd := false
+				cfg := &baseconfig.AppConfig{
+					Log: baseconfig.LogConfig{
+						Format:  "text",
+						Dir:     filepath.Join(root, "logs"),
+						HookStd: &hookStd,
+					},
+				}
+				previous := logit.Default()
+				var resources lifecycle.Stack
+				defer resources.Close()
+				value := recoverValue(func() { bootstrap.MustBaseInit(cfg, &resources) })
+				if value == nil || !strings.Contains(fmt.Sprint(value), "env.appName") || logit.Default() != previous {
+					t.Fatalf("应用名不能折叠或跳出日志目录: %v", value)
+				}
+				if _, err := os.Stat(cfg.Log.Dir); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("非法应用名不应创建日志目录: %v", err)
+				}
+			})
+		})
+	}
+}
+
 func TestLogDirectoryUsesAbsolutePathAndCreatesParents(t *testing.T) {
 	isolatedLog(t, func() {
 		dir := filepath.Join(t.TempDir(), "nested", "logs")
@@ -432,14 +476,14 @@ func TestLogDirectoryUsesAbsolutePathAndCreatesParents(t *testing.T) {
 		if err := resources.Close(); err != nil {
 			t.Fatal(err)
 		}
-		data, err := os.ReadFile(filepath.Join(dir, "bootstrap-test.info.log"))
+		data, err := os.ReadFile(filepath.Join(dir, "bootstrap-test", "biz", "bootstrap-test.info.log"))
 		if err != nil || !strings.Contains(string(data), "absolute directory") {
 			t.Fatalf("绝对目录应自动创建并保存日志: %s, %v", data, err)
 		}
 		if _, err := os.Stat("log"); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("绝对目录不应拼接到启动目录: %v", err)
 		}
-		probes, err := filepath.Glob(filepath.Join(dir, ".pixiu-log-write-*"))
+		probes, err := filepath.Glob(filepath.Join(dir, "bootstrap-test", "biz", ".pixiu-log-write-*"))
 		if err != nil || len(probes) != 0 {
 			t.Fatalf("目录可写检查不应留下临时文件: %v, %v", probes, err)
 		}

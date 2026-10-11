@@ -298,7 +298,7 @@ func TestMySQLInstancesRouteAndCloseBeforeLogs(t *testing.T) {
 				for _, server := range []*bootstrapMySQLServer{master, slave, reports} {
 					server.requireClosed(t)
 				}
-				path := filepath.Join(env.RootDirPath(), "log/bootstrap-test.info.log")
+				path := filepath.Join(env.RootDirPath(), "log/bootstrap-test/biz/bootstrap-test.info.log")
 				data, err := os.ReadFile(path)
 				if err != nil || !strings.Contains(string(data), "worker closed with database available") {
 					t.Fatalf("资源关闭期间日志丢失: %v", err)
@@ -386,7 +386,7 @@ func TestMySQLSharedConfigAndSQLLogDefaults(t *testing.T) {
 				if err := resources.Close(); err != nil {
 					t.Fatal(err)
 				}
-				data, err := os.ReadFile(filepath.Join(env.RootDirPath(), "log/bootstrap-test.info.log"))
+				data, err := os.ReadFile(filepath.Join(env.RootDirPath(), "log/bootstrap-test/biz/bootstrap-test.info.log"))
 				if err != nil {
 					t.Fatal(err)
 				}

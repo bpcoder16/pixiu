@@ -46,6 +46,10 @@ func initLog(cfg baseconfig.LogConfig, resources *lifecycle.Stack) error {
 	if err := validateLogFilePart(appName); err != nil {
 		return fmt.Errorf("env.appName: %w", err)
 	}
+	// 应用名还会作为独立目录名，不能折叠目录层级或跳出日志根目录。
+	if appName == "." || appName == ".." {
+		return fmt.Errorf("env.appName: invalid log directory name %q", appName)
+	}
 	// 先校验所有名字及其分流文件名，避免同一路径被多个 Writer 打开。
 	names := append([]string{""}, cfg.Names...)
 	paths := make(map[string]bool)
@@ -69,6 +73,8 @@ func initLog(cfg baseconfig.LogConfig, resources *lifecycle.Stack) error {
 	if !filepath.IsAbs(cfg.Dir) {
 		cfg.Dir = filepath.Join(env.RootDirPath(), cfg.Dir)
 	}
+	stdDir := filepath.Join(cfg.Dir, appName, "std")
+	cfg.Dir = filepath.Join(cfg.Dir, appName, "biz")
 	if err := prepareLogDirectory(cfg.Dir); err != nil {
 		return err
 	}
@@ -85,10 +91,41 @@ func initLog(cfg baseconfig.LogConfig, resources *lifecycle.Stack) error {
 		}
 		loggers = append(loggers, logger)
 	}
+	if cfg.HookStd == nil || *cfg.HookStd {
+		if err := hookLogStd(stdDir, appName); err != nil {
+			return err
+		}
+	}
 	// 全部创建并登记成功后再发布，避免暴露半初始化的日志配置。
 	logit.SetDefault(loggers[0])
 	for i, name := range cfg.Names {
 		logit.SetNamed(name, loggers[i+1])
+	}
+	return nil
+}
+
+func hookLogStd(dir, appName string) (err error) {
+	// fd 重定向绑定打开时的文件，必须使用独立的非轮转目标。
+	stdoutPath := filepath.Join(dir, appName+".stdout.log")
+	stdout, err := logit.OpenFile(stdoutPath)
+	if err != nil {
+		return fmt.Errorf("open stdout log file %q: %w", stdoutPath, err)
+	}
+	// Hook 通过 dup2 复制到 fd 1/2；关闭原始 Writer 不会关闭这两个副本，
+	// 后续输出及应用 defer 收尾之后的 runtime panic 仍能写入，直到进程退出。
+	defer func() { err = errors.Join(err, stdout.Close()) }()
+	stderrPath := filepath.Join(dir, appName+".stderr.log")
+	stderr, err := logit.OpenFile(stderrPath)
+	if err != nil {
+		return fmt.Errorf("open stderr log file %q: %w", stderrPath, err)
+	}
+	defer func() { err = errors.Join(err, stderr.Close()) }()
+	// 两个文件全部打开成功后再重定向，避免文件打开失败时只劫持一条标准流。
+	if err := logit.HookStdout(stdout); err != nil {
+		return fmt.Errorf("hook stdout: %w", err)
+	}
+	if err := logit.HookStderr(stderr); err != nil {
+		return fmt.Errorf("hook stderr: %w", err)
 	}
 	return nil
 }

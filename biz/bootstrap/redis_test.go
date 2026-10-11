@@ -264,7 +264,7 @@ func TestRedisInstancesRouteAndCloseWithMySQL(t *testing.T) {
 				if err := shared.Client().Ping(ctx).Err(); !errors.Is(err, redis.ErrClosed) || recoverValue(func() { redisx.Named("cache") }) == nil {
 					t.Fatalf("关闭后客户端或注册表仍可用: %v", err)
 				}
-				infoPath := filepath.Join(env.RootDirPath(), "log/bootstrap-test.info.log")
+				infoPath := filepath.Join(env.RootDirPath(), "log/bootstrap-test/biz/bootstrap-test.info.log")
 				data, err := os.ReadFile(infoPath)
 				if err != nil || !strings.Contains(string(data), "worker closed with Redis available") {
 					t.Fatalf("关闭期间日志丢失: %v", err)
@@ -273,7 +273,7 @@ func TestRedisInstancesRouteAndCloseWithMySQL(t *testing.T) {
 				if !strings.Contains(string(data), "cache-marker") || strings.Contains(string(data), "session-marker") {
 					t.Fatalf("release 模式的 Info 文件应记录已开启的正常命令: %s", data)
 				}
-				data, err = os.ReadFile(filepath.Join(env.RootDirPath(), "log/bootstrap-test.debug.log"))
+				data, err = os.ReadFile(filepath.Join(env.RootDirPath(), "log/bootstrap-test/biz/bootstrap-test.debug.log"))
 				if err != nil || strings.Contains(string(data), "cache-marker") {
 					t.Fatalf("正常命令不应写入 Debug 文件: %s, %v", data, err)
 				}
