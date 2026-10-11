@@ -13,7 +13,7 @@ env:
 
 log:
   # 是否劫持 stdout/stderr；省略时默认 true，仅支持 Linux/macOS。
-  # 原始输出分别追加到 dir/<appName>/std/<appName>.stdout.log 和 dir/<appName>/std/<appName>.stderr.log。
+  # 原始输出分别追加到 dir/<appName>/std/stdout.log 和 dir/<appName>/std/stderr.log。
   # std 目录自动创建，文件不轮转；资源栈关闭后仍生效，直到进程退出。
   hookStd: true
 
@@ -25,7 +25,7 @@ log:
   # 业务日志位于 dir/<appName>/biz；不存在时自动创建，启动时检查目录可写权限。
   dir: "./log"
   # 额外的命名 Logger，可通过 logit.Named(name) 或 WithLoggerName(ctx, name) 选择。
-  # 每个 Logger 分流为 .debug.log / .info.log / .wf.log（Warn、Error、Fatal）。
+  # 默认文件为 debug.log / info.log / wf.log（Warn、Error、Fatal）；命名 Logger 增加 <name>. 前缀。
   names: []
   # 固定使用 rotatefile；时间戳和轮转边界使用进程本地时区。
   rotate:

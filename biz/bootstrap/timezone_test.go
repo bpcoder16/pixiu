@@ -53,11 +53,11 @@ log:
 					t.Fatalf("默认时区未使用已发布配置: got %v, want %v", time.Local, location)
 				}
 				for _, name := range []string{"", "worker"} {
-					base := "timezone-test"
+					base := ""
 					if name != "" {
-						base += "." + name
+						base = name + "."
 					}
-					file := filepath.Join(dir, "timezone-test", "biz", base+".info.log")
+					file := filepath.Join(dir, "timezone-test", "biz", base+"info.log")
 					// 在首次写入之前检查软链，确保创建轮转文件前已设置时区。
 					target, err := os.Readlink(file)
 					first := filepath.Base(file) + "." + before.In(location).Format("2006010215")

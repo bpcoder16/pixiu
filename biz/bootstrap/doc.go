@@ -93,17 +93,16 @@
 // 每个分流文件保留 48 个实际文件。config.Log 可配置 format、caller、dir 目录、names、rotate。
 // dir 相对路径基于 env.RootDirPath()，绝对路径直接使用；目录自动创建并检查可写权限。
 // 业务日志写入 dir/<appName>/biz；应用名作为独立目录名，禁止为 . 或 ..。
-// 默认 Info 写 env.AppName()+".info.log"，Debug 写 env.AppName()+".debug.log"，
-// Warn、Error、Fatal 写 env.AppName()+".wf.log"，每条日志仅写入其对应文件。
-// names 中的每个名字创建独立 Logger，文件基名为 env.AppName()+"."+name，
-// 同样分流为 .info.log、.debug.log、.wf.log；不允许空名、路径分隔符或完全重复的文件名。
+// 默认 Info 写 info.log，Debug 写 debug.log，Warn、Error、Fatal 写 wf.log，每条日志仅写入其对应文件。
+// names 中的每个名字创建独立 Logger，文件为 <name>.info.log、<name>.debug.log、<name>.wf.log；
+// 所有文件名均不带 appName 前缀；不允许空名、路径分隔符或完全重复的文件名。
 // 名字按原始字符串使用和判重，不做大小写折叠或规范化；
 // 文件系统大小写规则引起的文件冲突由调用方自行负责。
 // 例如 names: [worker] 时，可以通过 logit.Named("worker").Info(ctx, "worker ready")，
 // 或 logit.Info(logit.WithLoggerName(ctx, "worker"), "worker ready") 写入命名日志。
 // caller 由 config.Log.Caller 控制，默认关闭，对默认及命名 Logger 同时生效。
 // hookStd 省略时默认开启，显式 false 关闭；Linux/macOS 上将 stdout/stderr
-// 分别原样追加到 dir/<appName>/std/<appName>.stdout.log 和 dir/<appName>/std/<appName>.stderr.log，
+// 分别原样追加到 dir/<appName>/std/stdout.log 和 dir/<appName>/std/stderr.log，
 // 自动创建 std 目录，文件不编码、不轮转。
 // 重定向在发布 Logger 前完成，失败终止初始化；fd 1/2 保留至进程退出，
 // 不随资源栈恢复，确保应用 defer 之后的 runtime panic 仍被收集。

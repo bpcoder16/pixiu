@@ -413,7 +413,7 @@ func TestElasticsearchLoggingOptions(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, suffix := range []string{"info", "wf"} {
-					data, err := os.ReadFile(filepath.Join(env.RootDirPath(), "log", env.AppName(), "biz", "bootstrap-test.search."+suffix+".log"))
+					data, err := os.ReadFile(filepath.Join(env.RootDirPath(), "log", env.AppName(), "biz", "search."+suffix+".log"))
 					if err != nil {
 						t.Fatal(err)
 					}

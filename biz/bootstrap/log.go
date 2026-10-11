@@ -59,8 +59,8 @@ func initLog(cfg baseconfig.LogConfig, resources *lifecycle.Stack) error {
 				return fmt.Errorf("log.names: %w", err)
 			}
 		}
-		for _, suffix := range []string{".info", ".debug", ".wf"} {
-			path := logBaseName(appName, name) + suffix + ".log"
+		for _, suffix := range []string{"info", "debug", "wf"} {
+			path := logFileName(name, suffix)
 			if paths[path] {
 				return fmt.Errorf("log.names: duplicate log file %q", path)
 			}
@@ -81,7 +81,7 @@ func initLog(cfg baseconfig.LogConfig, resources *lifecycle.Stack) error {
 
 	loggers := make([]logit.Logger, 0, len(names))
 	for _, name := range names {
-		logger, err := newLogLogger(cfg, logBaseName(appName, name), encoder, level)
+		logger, err := newLogLogger(cfg, name, encoder, level)
 		if err != nil {
 			return err
 		}
@@ -92,7 +92,7 @@ func initLog(cfg baseconfig.LogConfig, resources *lifecycle.Stack) error {
 		loggers = append(loggers, logger)
 	}
 	if cfg.HookStd == nil || *cfg.HookStd {
-		if err := hookLogStd(stdDir, appName); err != nil {
+		if err := hookLogStd(stdDir); err != nil {
 			return err
 		}
 	}
@@ -104,9 +104,9 @@ func initLog(cfg baseconfig.LogConfig, resources *lifecycle.Stack) error {
 	return nil
 }
 
-func hookLogStd(dir, appName string) (err error) {
+func hookLogStd(dir string) (err error) {
 	// fd 重定向绑定打开时的文件，必须使用独立的非轮转目标。
-	stdoutPath := filepath.Join(dir, appName+".stdout.log")
+	stdoutPath := filepath.Join(dir, "stdout.log")
 	stdout, err := logit.OpenFile(stdoutPath)
 	if err != nil {
 		return fmt.Errorf("open stdout log file %q: %w", stdoutPath, err)
@@ -114,7 +114,7 @@ func hookLogStd(dir, appName string) (err error) {
 	// Hook 通过 dup2 复制到 fd 1/2；关闭原始 Writer 不会关闭这两个副本，
 	// 后续输出及应用 defer 收尾之后的 runtime panic 仍能写入，直到进程退出。
 	defer func() { err = errors.Join(err, stdout.Close()) }()
-	stderrPath := filepath.Join(dir, appName+".stderr.log")
+	stderrPath := filepath.Join(dir, "stderr.log")
 	stderr, err := logit.OpenFile(stderrPath)
 	if err != nil {
 		return fmt.Errorf("open stderr log file %q: %w", stderrPath, err)
@@ -138,11 +138,11 @@ func validateLogFilePart(value string) error {
 	return nil
 }
 
-func logBaseName(appName, name string) string {
+func logFileName(name, suffix string) string {
 	if name == "" {
-		return appName
+		return suffix + ".log"
 	}
-	return appName + "." + name
+	return name + "." + suffix + ".log"
 }
 
 func prepareLogDirectory(dir string) error {
@@ -160,7 +160,7 @@ func prepareLogDirectory(dir string) error {
 	return nil
 }
 
-func newLogLogger(cfg baseconfig.LogConfig, base string, encoder logit.Encoder, level logit.Level) (logger logit.Logger, err error) {
+func newLogLogger(cfg baseconfig.LogConfig, name string, encoder logit.Encoder, level logit.Level) (logger logit.Logger, err error) {
 	targets := make([]logit.Target, 0, 3)
 	// Logger 尚未创建成功时，由构造函数清理已打开的 Writer。
 	defer func() {
@@ -174,11 +174,11 @@ func newLogLogger(cfg baseconfig.LogConfig, base string, encoder logit.Encoder, 
 		suffix string
 		levels []logit.Level
 	}{
-		{suffix: ".info", levels: []logit.Level{logit.InfoLevel}},
-		{suffix: ".debug", levels: []logit.Level{logit.DebugLevel}},
-		{suffix: ".wf", levels: []logit.Level{logit.WarnLevel, logit.ErrorLevel, logit.FatalLevel}},
+		{suffix: "info", levels: []logit.Level{logit.InfoLevel}},
+		{suffix: "debug", levels: []logit.Level{logit.DebugLevel}},
+		{suffix: "wf", levels: []logit.Level{logit.WarnLevel, logit.ErrorLevel, logit.FatalLevel}},
 	} {
-		path := filepath.Join(cfg.Dir, base+group.suffix+".log")
+		path := filepath.Join(cfg.Dir, logFileName(name, group.suffix))
 		file, openErr := rotatefile.New(path,
 			rotatefile.OptEvery(cfg.Rotate.Every),
 			rotatefile.OptMaxFiles(cfg.Rotate.MaxFiles),

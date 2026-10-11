@@ -76,7 +76,7 @@ func TestLogHookStd(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, stream := range []string{"stdout", "stderr"} {
-					path := filepath.Join(stdDir, "bootstrap-test."+stream+".log")
+					path := filepath.Join(stdDir, stream+".log")
 					if err := os.WriteFile(path, []byte("existing "+stream+"\n"), 0o600); err != nil {
 						t.Fatal(err)
 					}
@@ -113,7 +113,7 @@ func TestLogHookStd(t *testing.T) {
 			} {
 				data := stream.original
 				if tc.setting != "false" {
-					path := filepath.Join(stdDir, "bootstrap-test."+stream.name+".log")
+					path := filepath.Join(stdDir, stream.name+".log")
 					content, err := os.ReadFile(path)
 					if err != nil {
 						t.Fatal(err)
@@ -144,7 +144,7 @@ func TestLogHookStd(t *testing.T) {
 					t.Fatalf("%s 不应混入其他日志: %s", stream.name, data)
 				}
 			}
-			info, err := os.ReadFile(filepath.Join(dir, "bootstrap-test", "biz", "bootstrap-test.info.log"))
+			info, err := os.ReadFile(filepath.Join(dir, "bootstrap-test", "biz", "info.log"))
 			if err != nil || !strings.Contains(string(info), `"msg":"structured message"`) {
 				t.Fatalf("结构化日志应继续单独分流: info=%s, err=%v", info, err)
 			}
@@ -158,7 +158,7 @@ func TestLogHookOpenFailureDoesNotPublishLoggers(t *testing.T) {
 			isolatedLog(t, func() {
 				cfg := loadLogConfig(t, "debug", "log:\n  format: text\n  names: [worker]\n")
 				dir := filepath.Join(env.RootDirPath(), "log", env.AppName())
-				path := filepath.Join(dir, "std", "bootstrap-test."+stream+".log")
+				path := filepath.Join(dir, "std", stream+".log")
 				if err := os.MkdirAll(path, 0o755); err != nil {
 					t.Fatal(err)
 				}
@@ -171,13 +171,13 @@ func TestLogHookOpenFailureDoesNotPublishLoggers(t *testing.T) {
 				}
 				if stream == "stderr" {
 					// stderr 打开失败时，stdout 原始 Writer 应关闭，且尚未重定向 fd 1。
-					requireLogFileOpen(t, filepath.Join(dir, "std", "bootstrap-test.stdout.log"), false)
+					requireLogFileOpen(t, filepath.Join(dir, "std", "stdout.log"), false)
 				}
 				if err := resources.Close(); err != nil {
 					t.Fatal(err)
 				}
-				for _, base := range []string{"bootstrap-test", "bootstrap-test.worker"} {
-					for _, suffix := range []string{".info", ".debug", ".wf"} {
+				for _, base := range []string{"", "worker."} {
+					for _, suffix := range []string{"info", "debug", "wf"} {
 						requireLogFileOpen(t, filepath.Join(dir, "biz", base+suffix+".log"), false)
 					}
 				}

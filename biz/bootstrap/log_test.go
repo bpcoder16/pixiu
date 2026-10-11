@@ -66,12 +66,12 @@ func TestDefaultLogRemainsOpenUntilOtherResourcesClose(t *testing.T) {
 		json      bool
 		initPanic bool
 	}{
-		{name: "default-file-settings", mode: "debug", logYAML: "log:\n  format: text\n  caller: true\n", file: "log/bootstrap-test/biz/bootstrap-test.info.log"},
+		{name: "default-file-settings", mode: "debug", logYAML: "log:\n  format: text\n  caller: true\n", file: "log/bootstrap-test/biz/info.log"},
 		{
 			name:      "json-project-init-panic",
 			mode:      "release",
 			logYAML:   "log:\n  format: json\n  caller: true\n  dir: output\n  rotate:\n    every: 24h\n    maxFiles: 3\n",
-			file:      "output/bootstrap-test/biz/bootstrap-test.info.log",
+			file:      "output/bootstrap-test/biz/info.log",
 			json:      true,
 			initPanic: true,
 		},
@@ -205,8 +205,8 @@ func TestLogCallerConfiguration(t *testing.T) {
 					if err := resources.Close(); err != nil {
 						t.Fatal(err)
 					}
-					for _, base := range []string{"bootstrap-test", "bootstrap-test.worker"} {
-						data, err := os.ReadFile(filepath.Join(env.RootDirPath(), "log", env.AppName(), "biz", base+".info.log"))
+					for _, base := range []string{"", "worker."} {
+						data, err := os.ReadFile(filepath.Join(env.RootDirPath(), "log", env.AppName(), "biz", base+"info.log"))
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -269,8 +269,8 @@ func TestLogInitFailureDoesNotReplaceDefault(t *testing.T) {
 					t.Fatalf("应保留关闭栈错误链: %v", err)
 				}
 				if tc.closed {
-					for _, suffix := range []string{".info", ".debug", ".wf"} {
-						path := filepath.Join(env.RootDirPath(), "log", env.AppName(), "biz", env.AppName()+suffix+".log")
+					for _, suffix := range []string{"info", "debug", "wf"} {
+						path := filepath.Join(env.RootDirPath(), "log", env.AppName(), "biz", suffix+".log")
 						requireLogFileOpen(t, path, false)
 					}
 				}
@@ -301,9 +301,9 @@ func TestNamedLogsDispatchLevelsAndCloseTogether(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, name := range append([]string{""}, cfg.Log.Names...) {
-					base := env.AppName()
+					base := ""
 					if name != "" {
-						base += "." + name
+						base = name + "."
 						if logit.Named(name) == logit.Default() {
 							t.Fatalf("命名 Logger %q 未注册", name)
 						}
@@ -312,9 +312,9 @@ func TestNamedLogsDispatchLevelsAndCloseTogether(t *testing.T) {
 						suffix string
 						levels []string
 					}{
-						{suffix: ".info", levels: []string{"info"}},
-						{suffix: ".debug", levels: []string{"debug"}},
-						{suffix: ".wf", levels: []string{"warn", "error"}},
+						{suffix: "info", levels: []string{"info"}},
+						{suffix: "debug", levels: []string{"debug"}},
+						{suffix: "wf", levels: []string{"warn", "error"}},
 					} {
 						path := filepath.Join(env.RootDirPath(), "log", env.AppName(), "biz", base+group.suffix+".log")
 						data, err := os.ReadFile(path)
@@ -368,17 +368,17 @@ func TestFatalLogDispatchesToWFBeforeExit(t *testing.T) {
 				t.Fatalf("Fatal 应以状态 1 退出: %v, %s", err, output)
 			}
 			for _, loggerName := range []string{"", "worker"} {
-				base := "bootstrap-test"
+				base := ""
 				if loggerName != "" {
-					base += "." + loggerName
+					base = loggerName + "."
 				}
-				for _, suffix := range []string{".info", ".debug", ".wf"} {
+				for _, suffix := range []string{"info", "debug", "wf"} {
 					path := filepath.Join(dir, "bootstrap-test", "biz", base+suffix+".log")
 					data, readErr := os.ReadFile(path)
 					if readErr != nil {
 						t.Fatal(readErr)
 					}
-					want := loggerName == name && suffix == ".wf"
+					want := loggerName == name && suffix == "wf"
 					if strings.Contains(string(data), "fatal dispatch message") != want {
 						t.Fatalf("Fatal 应只写对应 WF 文件: %s, %s", path, data)
 					}
@@ -395,7 +395,7 @@ func TestPartialNamedLogFailureLeavesCompletedLoggersForCaller(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, env.AppName()+".worker.wf.log"), nil, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "worker.wf.log"), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		previous := logit.Default()
@@ -406,17 +406,17 @@ func TestPartialNamedLogFailureLeavesCompletedLoggersForCaller(t *testing.T) {
 			t.Fatalf("部分创建失败不应发布默认或命名日志: %v", value)
 		}
 		// 完整的默认 Logger 交给应用栈；未完成的 worker Logger 自行清理。
-		for _, suffix := range []string{".info", ".debug", ".wf"} {
-			requireLogFileOpen(t, filepath.Join(dir, env.AppName()+suffix+".log"), true)
+		for _, suffix := range []string{"info", "debug", "wf"} {
+			requireLogFileOpen(t, filepath.Join(dir, suffix+".log"), true)
 		}
-		for _, suffix := range []string{".info", ".debug"} {
-			requireLogFileOpen(t, filepath.Join(dir, env.AppName()+".worker"+suffix+".log"), false)
+		for _, suffix := range []string{"info", "debug"} {
+			requireLogFileOpen(t, filepath.Join(dir, "worker."+suffix+".log"), false)
 		}
 		if err := resources.Close(); err != nil {
 			t.Fatalf("应用栈应关闭此前已完成的 Logger: %v", err)
 		}
-		for _, suffix := range []string{".info", ".debug", ".wf"} {
-			requireLogFileOpen(t, filepath.Join(dir, env.AppName()+suffix+".log"), false)
+		for _, suffix := range []string{"info", "debug", "wf"} {
+			requireLogFileOpen(t, filepath.Join(dir, suffix+".log"), false)
 		}
 	})
 }
@@ -476,7 +476,7 @@ func TestLogDirectoryUsesAbsolutePathAndCreatesParents(t *testing.T) {
 		if err := resources.Close(); err != nil {
 			t.Fatal(err)
 		}
-		data, err := os.ReadFile(filepath.Join(dir, "bootstrap-test", "biz", "bootstrap-test.info.log"))
+		data, err := os.ReadFile(filepath.Join(dir, "bootstrap-test", "biz", "info.log"))
 		if err != nil || !strings.Contains(string(data), "absolute directory") {
 			t.Fatalf("绝对目录应自动创建并保存日志: %s, %v", data, err)
 		}
