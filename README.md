@@ -126,6 +126,7 @@ func main() {
 
 | 包 | 能力 | 主要依赖 |
 | --- | --- | --- |
+| [`infra/apprun`](infra/apprun/doc.go) | 常驻服务运行监督、逆序关闭、显式 SIGINT/SIGTERM 接入 | 标准库、logit |
 | [`infra/configx`](infra/configx/doc.go) | YAML / TOML / JSON 结构体配置加载、全局命名获取与零值兜底 | Viper |
 | [`infra/env`](infra/env/doc.go) | 通用应用环境、IP 校验与补齐、一次初始化与全局读取 | 标准库、netx |
 | [`infra/httpcall`](infra/httpcall/doc.go) | 可复用 HTTP 下游客户端、结果日志、请求级耗时 | Resty v2、logit |
