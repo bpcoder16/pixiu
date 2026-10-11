@@ -10,7 +10,7 @@
 // 未发起该服务关闭时 Run 返回 nil 视为 ErrUnexpectedExit；真实错误汇总保留原始错误链。
 // 预取消不启动 Run，但仍在总期限内逆序关闭已登记服务。回调 panic 转为带堆栈的 PanicError。
 //
-// 应用可将现有 HTTP 服务交给管理器（需导入 context、errors、net/http，
+// 应用可将现有 HTTP 服务交给管理器（需导入 errors、net/http，
 // 以及 github.com/bpcoder16/pixiu/infra/apprun 和 infra/httpserver）：
 //
 //	manager, err := apprun.New(0) // 使用默认 20 秒总关闭期限。
@@ -37,7 +37,7 @@
 //	}); err != nil {
 //		return errors.Join(err, server.Shutdown())
 //	}
-//	return manager.RunSignals(context.Background())
+//	return manager.RunSignals()
 //
 // Run 不安装信号处理；RunSignals 显式订阅 SIGINT/SIGTERM，首次停机后立即取消订阅，
 // 无其他订阅者且原来使用默认处理时，后续中断恢复直接退出。应用只使用一个信号所有者。

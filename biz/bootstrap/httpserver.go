@@ -4,16 +4,20 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 
 	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/configx"
+	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/infra/httpserver"
 )
 
-// NewHTTPService 严格读取配置并构造名为 http 的服务，监听在 Run 时才启动。
+// NewHTTPService 从 env.ConfigDirPath() 下严格读取 http.yaml 并构造名为 http 的服务。
+// 调用前须初始化 env；监听在 Run 时才启动。
 // 调用方负责注册；注册失败时调用返回服务的 Shutdown 清理。
 // HTTP 关闭期限由配置指定，零值默认 15 秒，超时后不额外等待 handler。
-func NewHTTPService(configFile string, handler http.Handler) (apprun.Service, error) {
+func NewHTTPService(handler http.Handler) (apprun.Service, error) {
+	configFile := filepath.Join(env.ConfigDirPath(), "http.yaml")
 	config, err := configx.Parse[httpserver.Config](configFile)
 	if err != nil {
 		return apprun.Service{}, fmt.Errorf("bootstrap: load HTTP config: %w", err)

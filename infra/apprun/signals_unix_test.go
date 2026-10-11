@@ -107,7 +107,7 @@ func TestSignalChild(t *testing.T) {
 			return err
 		},
 	})
-	if err := manager.RunSignals(context.Background()); err != nil {
+	if err := manager.RunSignals(); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -1,4 +1,4 @@
-# 复制为 http.yaml，由 NewHTTPService(configFile, handler) 读取。
+# 复制到 app.yaml 所在配置目录，由 NewHTTPService(handler) 通过 env.ConfigDirPath() 读取。
 # 面向网关或负载均衡器后方的普通 JSON API；TLS 在入口终止，后端监听普通 HTTP。
 # 时间使用带单位字符串；以下值与 httpserver 默认配置一致。
 

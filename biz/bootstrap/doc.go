@@ -29,21 +29,21 @@
 //		if err != nil {
 //			return err
 //		}
-//		service, err := bootstrap.NewHTTPService("./conf/http.yaml", handler)
+//		service, err := bootstrap.NewHTTPService(handler)
 //		if err != nil {
 //			return err
 //		}
 //		if err := manager.Register(service); err != nil {
 //			return errors.Join(err, service.Shutdown())
 //		}
-//		return manager.RunSignals(context.Background())
+//		return manager.RunSignals()
 //	}
 //
-// 此示例另用标准库 errors、net/http；handler 和配置路径由应用提供。
+// 此示例另用标准库 errors、net/http；handler 由应用提供，http.yaml 从 env.ConfigDirPath() 读取。
 // NewAppManager() 或 NewAppManager(0) 使用 apprun 默认的 20 秒总关闭期限，
 // 也可传入一个不小于 5 秒的 time.Duration，负值或不足 5 秒的正值返回错误；
 // 不保存全局管理器，不自动注册服务或接管信号。
-// NewHTTPService 严格解析 httpserver.Config 并返回名为 http 的 apprun.Service，
+// NewHTTPService 从 env.ConfigDirPath() 下读取 http.yaml，严格解析 httpserver.Config 并返回名为 http 的 apprun.Service，
 // 构造时不监听，HTTP ShutdownTimeout 省略或为零时默认 15 秒。
 // Run 将启动与关闭竞争产生的 httpserver.ErrClosed 视为正常退出，保留其他运行与关闭错误。
 // 注册失败由调用方关闭该服务；注册成功后由管理器关闭，不重复登记到资源栈。
