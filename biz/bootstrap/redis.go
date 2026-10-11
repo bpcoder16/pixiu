@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"fmt"
-	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -75,26 +74,12 @@ func (cfg *redisFileConfig) clientConfig(name string) (redisx.Config, error) {
 		{"dialTimeout", cfg.DialTimeout},
 		{"readTimeout", cfg.ReadTimeout},
 		{"writeTimeout", cfg.WriteTimeout},
-		{"slowThreshold", cfg.SlowThreshold},
 		{"pool.timeout", cfg.Pool.Timeout},
 		{"pool.connMaxIdleTime", cfg.Pool.ConnMaxIdleTime},
 		{"pool.connMaxLifetime", cfg.Pool.ConnMaxLifetime},
 	} {
 		if setting.value < 0 {
 			return redisx.Config{}, fmt.Errorf("negative %s", setting.name)
-		}
-	}
-	for _, setting := range []struct {
-		name  string
-		value int
-	}{
-		{"pool.size", cfg.Pool.Size},
-		{"pool.maxActiveConns", cfg.Pool.MaxActiveConns},
-		{"pool.minIdleConns", cfg.Pool.MinIdleConns},
-		{"pool.maxIdleConns", cfg.Pool.MaxIdleConns},
-	} {
-		if setting.value < 0 || setting.value > math.MaxInt32 {
-			return redisx.Config{}, fmt.Errorf("invalid %s", setting.name)
 		}
 	}
 	port := cfg.Port

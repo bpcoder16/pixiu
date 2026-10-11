@@ -45,8 +45,8 @@
 // 部分创建失败的连接由 mysqlx 清理，此前已完成的实例由应用栈统一关闭。
 //
 // Redis 使用 MustRegisterRedis(name, isDefault) 声明，与 MySQL 独立判重，允许同名。
-// MySQL 初始化后，读取配置目录下的 redis.<name>.yaml，先严格解析、校验全部 Redis 文件，
-// 再按声明顺序创建并 Ping 验活；未声明时不初始化或关闭 Redis 模块。
+// MySQL 初始化后，读取配置目录下的 redis.<name>.yaml，先严格解析全部文件并完成文件层校验，
+// 再按声明顺序由 redisx 校验客户端配置、创建并 Ping 验活；未声明时不初始化或关闭 Redis 模块。
 // 模板见 conf.example/redis.example.yaml；首版使用单节点 TCP，文件不接受 name、isDefault。
 // host、port、username、password、db、驱动超时、maxRetries、pool 和日志开关由文件提供。
 // host 必填，port 零值默认 6379，db 非负；pool.size 对应 PoolSize，

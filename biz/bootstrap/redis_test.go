@@ -104,9 +104,7 @@ func TestRedisConfigFailureBeforeConnecting(t *testing.T) {
 		{name: "database", content: "host: localhost\ndb: -1\n", want: "db"},
 		{name: "retries", content: "host: localhost\nmaxRetries: -2\n", want: "maxRetries"},
 		{name: "negative-read-timeout", content: "host: localhost\nreadTimeout: -1s\n", want: "readTimeout"},
-		{name: "pool-size", content: "host: localhost\npool:\n  size: -1\n", want: "pool.size"},
 		{name: "pool-duration", content: "host: localhost\npool:\n  timeout: -1s\n", want: "pool.timeout"},
-		{name: "threshold", content: "host: localhost\nslowThreshold: -1s\n", want: "slowThreshold"},
 		{name: "unsupported-total-deadline", content: "host: localhost\ninitTimeout: 1s\n", want: "inittimeout"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -131,6 +129,48 @@ func TestRedisConfigFailureBeforeConnecting(t *testing.T) {
 				if server.connected.Load() {
 					t.Fatal("应先解析、校验全部 Redis 文件，再连接首个 Redis 实例")
 				}
+			})
+		})
+	}
+}
+
+func TestRedisClientConfigFailureDuringInitialization(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{name: "pool-size", content: "pool:\n  size: -1\n", want: "redisx: invalid PoolSize"},
+		{name: "max-active", content: "pool:\n  maxActiveConns: -1\n", want: "redisx: invalid MaxActiveConns"},
+		{name: "min-idle", content: "pool:\n  minIdleConns: -1\n", want: "redisx: invalid MinIdleConns"},
+		{name: "max-idle", content: "pool:\n  maxIdleConns: -1\n", want: "redisx: invalid MaxIdleConns"},
+		{name: "threshold", content: "slowThreshold: -1s\n", want: "redisx: negative slow threshold"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolatedLog(t, func() {
+				cfg := loadLogConfig(t, "debug", "log:\n  format: text\n")
+				cache := newBootstrapRedisServer(t, "cache", "+PONG\r\n")
+				session := newBootstrapRedisServer(t, "session", "+PONG\r\n")
+				writeRedisConfig(t, "cache", redisConfigYAML(cache.port))
+				writeRedisConfig(t, "session", redisConfigYAML(session.port)+tc.content)
+				bootstrap.MustRegisterRedis("cache", true)
+				bootstrap.MustRegisterRedis("session", false)
+				var resources lifecycle.Stack
+				defer resources.Close()
+				err := requireRedisPanic(t, tc.want, func() { bootstrap.MustBaseInit(cfg, &resources) })
+				if !strings.Contains(err.Error(), "initialize instance") || !strings.Contains(err.Error(), "redis.session.yaml") {
+					t.Fatalf("客户端校验应在初始化阶段报告实例和路径: %v", err)
+				}
+				if session.connected.Load() || recoverValue(func() { redisx.Named("session") }) == nil {
+					t.Fatal("无效客户端配置不应建立连接或发布实例")
+				}
+				if err := redisx.Default().Client().Ping(context.Background()).Err(); err != nil {
+					t.Fatalf("此前成功的实例应由应用栈管理: %v", err)
+				}
+				if err := resources.Close(); err != nil {
+					t.Fatal(err)
+				}
+				cache.requireClosed(t)
 			})
 		})
 	}
