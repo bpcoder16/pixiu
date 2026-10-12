@@ -147,6 +147,7 @@ func TestMustLoadAppConfigRejectsInvalidEnvironment(t *testing.T) {
 		{"removed-log-file", validYAML + "log:\n  file: logs\n", "file"},
 		{"wrong-log-caller-type", validYAML + "log:\n  caller: 'true'\n", "caller"},
 		{"wrong-log-names-type", validYAML + "log:\n  names: [123]\n", "names"},
+		{"gin-belongs-to-bootstrap", validYAML + "gin:\n  disableAccessLog: true\n", "gin"},
 		{"wrong-type", strings.Replace(validYAML, "demo", "123", 1), "appName"},
 	}
 	for _, tc := range cases {

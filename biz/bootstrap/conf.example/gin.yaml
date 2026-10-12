@@ -1,0 +1,13 @@
+# 与 app.yaml 放在同一配置目录，由 bootstrap.NewGinEngine 在构造时读取一次。
+# 文件必须存在；使用 {} 可沿用全部默认值。监听和超时仍由 http.yaml 配置。
+
+# 可信代理 IP 或 CIDR；空列表不信任代理转发的客户端地址。
+trustedProxies: []
+# 请求使用的命名 Logger，对应 app.yaml 的 log.names；空值沿用请求 context 的 Logger 路由。
+loggerName: "http"
+# 关闭访问日志及两侧详情采集，不影响 panic 错误日志。
+disableAccessLog: false
+# 详情完整记录且不脱敏；本示例默认开启。
+# 请求正文在业务中间件之前预读，开启前须在 Engine 外层限制大小及读取期限。
+logRequestInfo: true
+logResponseInfo: true

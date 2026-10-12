@@ -1,5 +1,5 @@
 // Package bootstrap 提供日志、MySQL、Redis、Elasticsearch 和 NATS 多实例的通用初始化入口，
-// 以及应用运行管理器和 HTTP 服务的构造方法，供项目自己的 bootstrap 组装。设计见 docs/bootstrap-design.md。
+// 以及应用运行管理器、Gin Engine 和 HTTP 服务的构造方法，供项目自己的 bootstrap 组装。设计见 docs/bootstrap-design.md。
 //
 // 应用负责加载配置、创建资源关闭栈，并在初始化前登记关闭流程：
 //
@@ -40,6 +40,27 @@
 //	}
 //
 // 此示例另用标准库 errors、net/http；handler 由应用提供，http.yaml 从 env.ConfigDirPath() 读取。
+// 使用 Gin 的应用可在启动阶段先构造 Engine（另需导入 github.com/gin-gonic/gin 和 pixiu 的 infra/env）：
+//
+//	gin.SetMode(env.RunMode())
+//	engine, err := bootstrap.NewGinEngine()
+//	if err != nil {
+//		return err
+//	}
+//	engine.GET("/healthz", func(c *gin.Context) {
+//		c.Status(http.StatusNoContent)
+//	})
+//	return start(engine)
+//
+// NewGinEngine 从 env.ConfigDirPath() 下的 gin.yaml 读取一次配置，再调用 ginx.New。
+// 文件必需，{} 沿用默认值：不信任代理、记录访问日志、不记录请求或响应详情。
+// 支持 trustedProxies、loggerName、disableAccessLog、logRequestInfo、logResponseInfo；
+// 不接受运行时回调，不注册全局配置或重读文件；缺失、未知字段、错误类型和非法代理均返回错误。
+// 模板见 conf.example/gin.yaml；这些配置不属于 app.yaml 或 httpconfig.AppConfig。
+// 不修改 Gin 全局模式或 Validator，不监听端口或自动注册路由。应用构造一次后持有 Engine，
+// 完成路由和业务中间件注册，再传给 NewHTTPService；模式由应用启动时显式设置。
+// disableAccessLog 覆盖详情开关；详情完整记录且不脱敏，开启前须在 Engine 外层约束请求体规模及读取期限。
+//
 // NewAppManager() 或 NewAppManager(0) 使用 apprun 默认的 20 秒总关闭期限，
 // 也可传入一个不小于 5 秒的 time.Duration，负值或不足 5 秒的正值返回错误；
 // 不保存全局管理器，不自动注册服务或接管信号。
