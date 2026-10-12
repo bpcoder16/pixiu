@@ -553,7 +553,7 @@ func run() error {
 
 </details>
 
-`Sign` 要求提供 `exp`，原样签名，不补写声明或检查时间；`Verify` 验证签名并要求 `exp` 存在、尚未过期，存在 `nbf` 时校验生效时间。RS256 / PS256 使用至少 2048 位的 RSA 密钥，ES256 使用 P-256；非对称签发通过 `PrivateKeyPEM` 配置私钥，验签通过 `PublicKeyPEM` 配置公钥，不传 `Secret`。自定义 claims 与完整密钥格式见 [`jwtx` 包文档](infra/jwtx/doc.go)。
+`Sign` 要求提供 `exp`，原样签名，不补写声明或检查时间；`Verify` 验证签名并要求 `exp` 存在、校验过期时间，存在 `nbf` 时校验生效时间；时间校验可通过 `Leeway` 配置容差。RS256 / PS256 使用至少 2048 位的 RSA 密钥，ES256 使用 P-256；非对称签发通过 `PrivateKeyPEM` 配置私钥，验签通过 `PublicKeyPEM` 配置公钥，不传 `Secret`。自定义 claims 与完整密钥格式见 [`jwtx` 包文档](infra/jwtx/doc.go)。
 
 更多示例：[`ginx` 请求处理](infra/ginx/doc.go)、[`httpserver` 启停](infra/httpserver/doc.go)、[`lrucache` 缓存](infra/lrucache/doc.go)、[`mysqlx` 主从查询](infra/mysqlx/doc.go)、[`natsx` 消息通信](infra/natsx/doc.go)、[`redislock` 锁流程](biz/lockx/redislock/doc.go)。
 
