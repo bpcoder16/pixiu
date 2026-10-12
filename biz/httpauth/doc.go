@@ -21,5 +21,6 @@
 // Gin 中间件由子包 ginauth 提供，按认证器返回的错误中止请求，成功时将身份注入 Context。
 // 业务通过 PrincipalFromContext 和 SchemeFromContext 读取身份及账号体系。
 // Principal 按值复制，只有 UserID；角色、权限、登录、签发和刷新留在业务层。
-// 没有包级默认实例，不自动尝试多个方案，也不缓存认证结果或持有资源关闭责任。
+// Registry 没有包级默认实例；ginauth 可通过 SetDefault/Default 提供默认 Gin 中间件入口。
+// 不自动尝试多个方案，也不缓存认证结果或持有资源关闭责任。
 package httpauth
