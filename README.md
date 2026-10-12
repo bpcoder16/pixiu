@@ -152,6 +152,7 @@ Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/d
 
 | 包 | 能力 | 典型用途 |
 | --- | --- | --- |
+| [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
 | [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，运行管理器与 HTTP 服务构造 | 声明实例、登记关闭栈；应用持有 Manager 并注册 HTTP 服务，日志最后关闭 |
 | [`biz/httpconfig`](biz/httpconfig/doc.go) | 嵌入 baseconfig，严格解析 HTTP 应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/httpconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
