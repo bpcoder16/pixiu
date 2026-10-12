@@ -13,6 +13,62 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func TestRequestContextFallback(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		timeout time.Duration
+		wantErr error
+	}{
+		{
+			name:    "请求取消",
+			timeout: time.Hour,
+			wantErr: context.Canceled,
+		},
+		{
+			name:    "请求超时",
+			timeout: -time.Second,
+			wantErr: context.DeadlineExceeded,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			deadline := time.Now().Add(tt.timeout)
+			parent, cancel := context.WithDeadline(context.Background(), deadline)
+			defer cancel()
+			r, err := New(Config{DisableAccessLog: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// 模拟业务层只接收 context.Context,handler 直接传入 c。
+			handle := func(ctx context.Context) {
+				if got, ok := ctx.Deadline(); !ok || !got.Equal(deadline) {
+					t.Errorf("未透传请求 deadline: got %v, %v, want %v", got, ok, deadline)
+				}
+				if got := ctx.Err(); got != parent.Err() {
+					t.Errorf("请求初始状态不一致: got %v, want %v", got, parent.Err())
+				}
+				cancel()
+				select {
+				case <-ctx.Done():
+				default:
+					t.Error("未透传请求结束信号")
+				}
+				if got := ctx.Err(); got != tt.wantErr {
+					t.Errorf("请求结束原因不一致: got %v, want %v", got, tt.wantErr)
+				}
+			}
+			r.GET("/", func(c *gin.Context) {
+				handle(c)
+				c.Status(http.StatusNoContent)
+			})
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil).WithContext(parent))
+			if w.Code != http.StatusNoContent {
+				t.Fatalf("响应状态: got %d, want %d", w.Code, http.StatusNoContent)
+			}
+		})
+	}
+}
+
 func TestResponseController(t *testing.T) {
 	r, err := New(Config{DisableAccessLog: true})
 	if err != nil {
@@ -58,7 +114,7 @@ func TestRecoveryAndRequestScopes(t *testing.T) {
 		panic("boom")
 	})
 	r.GET("/items/:id", func(c *gin.Context) {
-		logit.AddField(c.Request.Context(), logit.Str("item", c.Param("id")))
+		logit.AddField(c, logit.Str("item", c.Param("id")))
 		c.String(200, "ok")
 	})
 	parent := logit.WithContext(context.Background())
@@ -154,7 +210,7 @@ func TestTraceHeaderPropagation(t *testing.T) {
 			}
 			var contextID string
 			r.GET("/", func(c *gin.Context) {
-				contextID, _ = logit.LogIDFromContext(c.Request.Context())
+				contextID, _ = logit.LogIDFromContext(c)
 				c.Status(http.StatusNoContent)
 			})
 			req := httptest.NewRequest(http.MethodGet, "/", nil)

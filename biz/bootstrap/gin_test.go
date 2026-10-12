@@ -62,7 +62,13 @@ func TestGinEngineReadsConfigurationAtConstruction(t *testing.T) {
 			responseInfo bool
 		}{
 			{name: "零值默认", content: "{}\n", clientIP: "127.0.0.1"},
-			{name: "配置模板", content: string(template), clientIP: "127.0.0.1"},
+			{
+				name:         "配置模板",
+				content:      string(template),
+				clientIP:     "127.0.0.1",
+				requestInfo:  true,
+				responseInfo: true,
+			},
 			{
 				name:        "命名日志与可信代理和请求详情",
 				content:     "trustedProxies: [127.0.0.1]\nloggerName: bootstrap-gin-test\nlogRequestInfo: true\n",

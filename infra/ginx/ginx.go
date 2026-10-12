@@ -83,6 +83,8 @@ func New(cfg Config) (*gin.Engine, error) {
 		}
 	}
 	r := gin.New()
+	// 兼容将 *gin.Context 直接作为 context.Context 传入业务层。
+	r.ContextWithFallback = true
 	// Gin 自动重定向在中间件之前返回;默认让不匹配路径进入可观测的 404 流程。
 	r.RedirectTrailingSlash = false
 	r.RedirectFixedPath = false
