@@ -15,7 +15,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" alt="许可证 Apache-2.0"></a>
 </p>
 
-貔貅将 Go 服务中反复出现的工程能力沉淀为职责清楚、可按需引入的包：从结构化日志、文件轮转和并发任务，到 HTTP、数据库、缓存、消息通信，以及可复用的分布式锁流程。
+貔貅将 Go 服务中反复出现的工程能力沉淀为职责清楚、可按需引入的包：从结构化日志、文件轮转和并发任务，到 HTTP、数据库、缓存、消息通信、JWT 签发验签，以及可复用的分布式锁流程。
 
 你可以只引入一个基础模块，也可以在应用中组合多种能力。资源的创建、业务配置与退出顺序由应用明确掌握。
 
@@ -55,6 +55,7 @@ go get github.com/bpcoder16/pixiu/logit
 ```bash
 go get github.com/bpcoder16/pixiu/rotatefile
 go get github.com/bpcoder16/pixiu/infra/httpcall
+go get github.com/bpcoder16/pixiu/infra/jwtx
 go get github.com/bpcoder16/pixiu/biz/lockx/redislock
 ```
 
@@ -132,6 +133,7 @@ func main() {
 | [`infra/httpcall`](infra/httpcall/doc.go) | 可复用 HTTP 下游客户端、结果日志、请求级耗时 | Resty v2、logit |
 | [`infra/httpserver`](infra/httpserver/doc.go) | 标准 `http.Handler` 服务端、监听、限时关闭 | 标准库 |
 | [`infra/ginx`](infra/ginx/doc.go) | 独立 Gin Engine、请求日志作用域、访问日志与 Recovery | Gin、logit |
+| [`infra/jwtx`](infra/jwtx/doc.go) | HS256 / RS256 / ES256 / PS256 JWT 签发、验签与声明校验 | golang-jwt/jwt v5 |
 | [`infra/taskpool`](infra/taskpool/doc.go) | 本地异步任务、有界队列、worker 扩缩容、重试与排空 | logit |
 | [`infra/lrucache`](infra/lrucache/doc.go) | 泛型有界 LRU、默认 / 单条目 TTL、独立及命名实例 | ttlcache v3 |
 | [`infra/mysqlx`](infra/mysqlx/doc.go) | MySQL 连接池、显式主从选择、查询日志 | GORM、MySQL 驱动、logit |
@@ -163,7 +165,7 @@ Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/d
 
 ### 规划中的能力
 
-本地设计文档还规划了 `cronx`、`jwtx`、`websocketx` 等模块；这些包目前尚未实现，不属于当前可用 API。实际可用能力以上述模块导航为准。
+本地设计文档还规划了 `cronx`、`websocketx` 等模块；这些包目前尚未实现，不属于当前可用 API。实际可用能力以上述模块导航为准。
 
 ## 分层架构
 
@@ -180,6 +182,7 @@ pixiu/
 │   ├── httpcall/           HTTP 下游调用
 │   ├── httpserver/         HTTP 服务端
 │   ├── ginx/               Gin 请求处理
+│   ├── jwtx/               JWT 签发、验签与声明校验
 │   ├── taskpool/           本地异步任务池
 │   ├── lrucache/           LRU / TTL 缓存
 │   ├── mysqlx/             MySQL
@@ -479,6 +482,79 @@ func run() error {
 
 `Submit` 成功只表示任务已接收。任务保存在内存中；需要进程异常退出后的可靠恢复时，应用应选择持久化消息队列。示例通过 `Shutdown` 发起排空，再用 `Wait` 确认 worker 退出；`Wait` 没有等待上限。
 
+### JWT 签发与验签
+
+`jwtx` 提供独立的签发器与验签器，可在初始化后并发复用。下面用 HS256 演示签发与验证，并校验签发者 `iss`、接收方 `aud` 和签发时间 `iat`。示例临时生成 32 字节随机密钥；生产环境应从安全配置读取持久密钥。
+
+<details>
+<summary>展开完整示例</summary>
+
+```go
+package main
+
+import (
+	"crypto/rand"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/bpcoder16/pixiu/infra/jwtx"
+	"github.com/golang-jwt/jwt/v5"
+)
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return err
+	}
+	signer, err := jwtx.NewSigner(jwtx.SignConfig{
+		Algorithm: jwtx.HS256,
+		Secret:    secret,
+	})
+	if err != nil {
+		return err
+	}
+	verifier, err := jwtx.NewVerifier(jwtx.VerifyConfig{
+		Algorithm:     jwtx.HS256,
+		Secret:        secret,
+		Issuer:        "example",
+		Audience:      []string{"api"},
+		CheckIssuedAt: true,
+	})
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	raw, err := signer.Sign(jwt.RegisteredClaims{
+		Issuer:    "example",
+		Subject:   "user-42",
+		Audience:  jwt.ClaimStrings{"api"},
+		IssuedAt:  jwt.NewNumericDate(now),
+		ExpiresAt: jwt.NewNumericDate(now.Add(15 * time.Minute)),
+	})
+	if err != nil {
+		return err
+	}
+	var claims jwt.RegisteredClaims
+	if err := verifier.Verify(raw, &claims); err != nil {
+		return err
+	}
+	fmt.Println("已验证用户:", claims.Subject)
+	return nil
+}
+```
+
+</details>
+
+`Sign` 要求提供 `exp`，原样签名，不补写声明或检查时间；`Verify` 验证签名并要求 `exp` 存在、尚未过期，存在 `nbf` 时校验生效时间。RS256 / PS256 使用至少 2048 位的 RSA 密钥，ES256 使用 P-256；非对称签发通过 `PrivateKeyPEM` 配置私钥，验签通过 `PublicKeyPEM` 配置公钥，不传 `Secret`。自定义 claims 与完整密钥格式见 [`jwtx` 包文档](infra/jwtx/doc.go)。
+
 更多示例：[`ginx` 请求处理](infra/ginx/doc.go)、[`httpserver` 启停](infra/httpserver/doc.go)、[`lrucache` 缓存](infra/lrucache/doc.go)、[`mysqlx` 主从查询](infra/mysqlx/doc.go)、[`natsx` 消息通信](infra/natsx/doc.go)、[`redislock` 锁流程](biz/lockx/redislock/doc.go)。
 
 ## 使用约定
@@ -495,6 +571,7 @@ func run() error {
 | 日志详情 | 各适配包的日志开关与默认值见包文档。开启 Header / Body / SQL / 命令参数等详情时，按包契约保留完整内容，应用需决定记录范围及敏感数据策略。 |
 | 数据库读写 | 事务与要求读己之写的查询显式使用主库；可接受延迟的读取可选择从库。模型迁移由应用决定。 |
 | Redis 锁 | 内置锁使用固定租期，不自动续租。同一资源的竞争者使用相同实现与协议，业务自行响应取消，并结合幂等、事务或数据端版本约束保护结果。 |
+| JWT 验签 | 实例固定算法与密钥。每次验签使用新的空 claims 对象，仅在 `Verify` 返回 nil 后使用身份字段；失败时丢弃可能已解码的不可信内容。会话刷新、撤销与 HTTP 认证适配由应用处理。 |
 | 应用退出 | 先停止入口与生产者，等待任务结束，再关闭下游资源，最后关闭日志。`lifecycle.Stack` 逆序关闭资源，所以日志关闭函数应先登记。 |
 
 文件轮转当前不提供 gzip 压缩；系统时间变化和目录中的未来时段文件不在轮转正确性保证范围。
