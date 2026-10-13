@@ -33,4 +33,16 @@
 // 请求正文在业务中间件之前完整预读并还原,读取失败会记录 body_error 并向业务保留原错误。
 // 响应正文随写出复制,保留 Flush;Header 记录应用提交的快照,不承诺包含传输层自动添加的值。
 // 开启详情会保存完整正文;请求体大小与读取期限由应用约束。
+//
+// Swagger 与 Scalar 由应用显式注册，New 不自动启用；先 blank import 应用生成的文档包：
+//
+//	if err := ginx.RegisterSwagger(&router.RouterGroup); err != nil {
+//		return err
+//	}
+//
+// 根路由组提供 /swagger/index.html、/swagger/doc.json、/docs 和 /docs/assets/api-reference.js。
+// 也可传 router.Group("/internal")，文档与资源 URL 随组前缀调整；组中间件负责访问控制。
+// 只使用 Swag 的默认文档实例，未注册文档时返回错误且不添加路由；生成物须由应用自行维护。
+// Swagger UI 和 Scalar 静态资源内嵌；Scalar 不持久化认证信息，关闭外部字体、遥测、Agent 和代理。
+// 文档请求沿用所在 Engine 的日志策略；LogResponseInfo 会复制并记录完整静态资源，建议关闭。
 package ginx
