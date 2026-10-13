@@ -40,7 +40,8 @@
 //	}
 //
 // 此示例另用标准库 errors、net/http；handler 由应用提供，http.yaml 从 env.ConfigDirPath() 读取。
-// 使用 Gin 的应用可在启动阶段先构造 Engine（另需导入 github.com/gin-gonic/gin 和 pixiu 的 infra/env）：
+// 使用 Gin 的应用可在启动阶段先构造 Engine（另需导入 github.com/gin-gonic/gin 和 pixiu 的 infra/env，
+// debug/test 模式还须 blank import 应用生成的 Swag 文档包）：
 //
 //	gin.SetMode(env.RunMode())
 //	engine, err := bootstrap.NewGinEngine()
@@ -57,9 +58,17 @@
 // 支持 trustedProxies、loggerName、disableAccessLog、logRequestInfo、logResponseInfo；
 // 不接受运行时回调，不注册全局配置或重读文件；缺失、未知字段、错误类型和非法代理均返回错误。
 // 模板见 conf.example/gin.yaml；这些配置不属于 app.yaml 或 httpconfig.AppConfig。
-// 不修改 Gin 全局模式或 Validator，不监听端口或自动注册路由。应用构造一次后持有 Engine，
-// 完成路由和业务中间件注册，再传给 NewHTTPService；模式由应用启动时显式设置。
+// Engine 创建后仅按 env.RunMode() 决定文档路由：debug/test 调用 ginx.RegisterOpenAPI，release 跳过。
+// 自动提供 /openapi/doc.json、/elements 和内嵌静态资源，不读取独立文档配置，不自动增加认证。
+// 应用负责生成文档并 blank import 注册默认 Swag 文档实例，元信息须在构造前设置；
+// 生成目录由应用决定，例如 swag init -o ./openapi。debug/test 未注册文档时返回 nil Engine 和错误，
+// 提示生成、导入文档包并保留底层错误链；release 不要求生成文档。
+// 文档路由在构造时已注册，之后添加的业务中间件不作用于这些路由。
+// 需要自定义文档注册策略的应用可直接使用 ginx.New 和 ginx.RegisterOpenAPI。
+// 不修改 Gin 全局模式或 Validator，不监听端口或自动注册业务路由。应用构造一次后持有 Engine，
+// 完成业务路由和中间件注册，再传给 NewHTTPService；模式由应用启动时显式设置。
 // disableAccessLog 覆盖详情开关；详情完整记录且不脱敏，开启前须在 Engine 外层约束请求体规模及读取期限。
+// logResponseInfo 会记录完整文档 UI 资源，使用文档时建议关闭。
 //
 // NewAppManager() 或 NewAppManager(0) 使用 apprun 默认的 20 秒总关闭期限，
 // 也可传入一个不小于 5 秒的 time.Duration，负值或不足 5 秒的正值返回错误；

@@ -1,5 +1,6 @@
 # 与 app.yaml 放在同一配置目录，由 bootstrap.NewGinEngine 在构造时读取一次。
 # 文件必须存在；使用 {} 可沿用全部默认值。监听和超时仍由 http.yaml 配置。
+# NewGinEngine 在 debug/test 下自动注册 OpenAPI 与 Elements；须先生成并导入 Swag 文档包，release 跳过。
 
 # 可信代理 IP 或 CIDR；空列表不信任代理转发的客户端地址。
 trustedProxies: []

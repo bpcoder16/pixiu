@@ -34,7 +34,7 @@
 // 响应正文随写出复制,保留 Flush;Header 记录应用提交的快照,不承诺包含传输层自动添加的值。
 // 开启详情会保存完整正文;请求体大小与读取期限由应用约束。
 //
-// OpenAPI 文档与 Stoplight Elements 由应用显式注册，New 不自动启用；先 blank import 应用生成的文档包：
+// 直接使用本包时，OpenAPI 文档与 Stoplight Elements 由调用方显式注册，New 不自动启用；先 blank import 应用生成的文档包：
 //
 //	if err := ginx.RegisterOpenAPI(&router.RouterGroup); err != nil {
 //		return err

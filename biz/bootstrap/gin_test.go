@@ -17,7 +17,85 @@ import (
 	"github.com/bpcoder16/pixiu/infra/ginx"
 	"github.com/bpcoder16/pixiu/logit"
 	"github.com/gin-gonic/gin"
+	"github.com/swaggo/swag"
 )
+
+func TestGinEngineOpenAPIRunModes(t *testing.T) {
+	for _, mode := range []string{env.RunModeDebug, env.RunModeTest, env.RunModeRelease} {
+		t.Run(mode, func(t *testing.T) {
+			isolatedLog(t, func() {
+				dir := t.TempDir()
+				if err := env.Init(env.Config{
+					AppName:       "bootstrap-gin-test",
+					RunMode:       mode,
+					TimeLocation:  "UTC",
+					ConfigDirPath: dir,
+					LocalIP:       "127.0.0.1",
+				}); err != nil {
+					t.Fatal(err)
+				}
+				// 故意与 env 不同，文档开关只取决于应用环境，构造也不得改写 Gin 模式。
+				ginMode := gin.ReleaseMode
+				if mode == env.RunModeRelease {
+					ginMode = gin.DebugMode
+				}
+				gin.SetMode(ginMode)
+				writeGinConfig(t, "disableAccessLog: true\n")
+				engine, err := bootstrap.NewGinEngine()
+				if mode != env.RunModeRelease {
+					if err == nil || engine != nil {
+						t.Fatalf("无生成文档时应构造失败: engine=%v, err=%v", engine, err)
+					}
+					if !strings.Contains(err.Error(), "swag init -o ./openapi") || !strings.Contains(err.Error(), "blank import") {
+						t.Fatalf("缺少生成或导入文档包的提示: %v", err)
+					}
+					if errors.Unwrap(err) == nil {
+						t.Fatalf("未保留文档注册错误链: %v", err)
+					}
+				} else if err != nil || engine == nil || len(engine.Routes()) != 0 {
+					t.Fatalf("release 无文档时应构造无路由的 Engine: engine=%v, err=%v", engine, err)
+				}
+				// 旧配置即使非法也不影响注册，文档开关只由 RunMode 决定。
+				if err := os.WriteFile(filepath.Join(dir, "swagger.yaml"), []byte("enabled: ["), 0600); err != nil {
+					t.Fatal(err)
+				}
+				const document = `{"swagger":"2.0","info":{"title":"test API","version":"1.0"},"paths":{}}`
+				swag.Register(swag.Name, &swag.Spec{SwaggerTemplate: document})
+				engine, err = bootstrap.NewGinEngine()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if gin.Mode() != ginMode {
+					t.Fatalf("构造改写了 Gin 模式: %s", gin.Mode())
+				}
+				wantStatus := http.StatusOK
+				if mode == env.RunModeRelease {
+					wantStatus = http.StatusNotFound
+				}
+				for _, path := range []string{
+					"/openapi/doc.json", "/elements",
+					"/elements/assets/web-components.min.js", "/elements/assets/styles.min.css", "/elements/assets/openapi.js",
+				} {
+					r := httptest.NewRecorder()
+					engine.ServeHTTP(r, httptest.NewRequest(http.MethodGet, path, nil))
+					if r.Code != wantStatus {
+						t.Fatalf("%s = %d，预期 %d", path, r.Code, wantStatus)
+					}
+					if path == "/openapi/doc.json" && wantStatus == http.StatusOK && r.Body.String() != document {
+						t.Fatalf("返回了错误的文档内容: %s", r.Body.String())
+					}
+				}
+				for _, path := range []string{"/docs", "/docs/assets/api-reference.js", "/swagger/index.html", "/swagger/doc.json", "/swagger/swagger-ui.css", "/swagger/swagger-ui-bundle.js"} {
+					r := httptest.NewRecorder()
+					engine.ServeHTTP(r, httptest.NewRequest(http.MethodGet, path, nil))
+					if r.Code != http.StatusNotFound {
+						t.Fatalf("已移除的文档入口 %s = %d，预期 404", path, r.Code)
+					}
+				}
+			})
+		})
+	}
+}
 
 func TestGinEngineRejectsInvalidConfiguration(t *testing.T) {
 	isolatedLog(t, func() {
@@ -45,6 +123,7 @@ func TestGinEngineRejectsInvalidConfiguration(t *testing.T) {
 
 func TestGinEngineReadsConfigurationAtConstruction(t *testing.T) {
 	isolatedLog(t, func() {
+		swag.Register(swag.Name, &swag.Spec{SwaggerTemplate: `{"swagger":"2.0","info":{"title":"test API","version":"1.0"},"paths":{}}`})
 		template, err := os.ReadFile("conf.example/gin.yaml")
 		if err != nil {
 			t.Fatal(err)

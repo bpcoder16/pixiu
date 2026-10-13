@@ -3,6 +3,7 @@ env:
   appName: "example-http"
 
   # debug / test / release；必填。
+  # 使用 bootstrap.NewGinEngine 时，debug/test 自动开放 OpenAPI 与 Elements，须先生成并导入文档包；release 关闭。
   runMode: "debug"
 
   # 应用时区，加载时校验并解析；bootstrap 在日志初始化前应用为 time.Local；必填。

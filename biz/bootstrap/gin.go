@@ -21,7 +21,9 @@ type ginConfig struct {
 
 // NewGinEngine 从 env.ConfigDirPath() 下严格读取一次 gin.yaml 并构造独立 Engine。
 // 调用前须初始化 env；不注册全局配置，运行期间不重新读取文件。
-// Gin 模式、路由及业务中间件由应用在启动阶段显式设置；本函数不修改全局 Validator。
+// debug/test 按 env.RunMode() 自动注册 OpenAPI 与 Elements，须先 blank import 应用生成的 Swag 文档包；
+// 未注册文档时返回错误，release 不注册文档路由，也不要求生成文档。
+// Gin 模式、业务路由及业务中间件由应用在启动阶段显式设置；本函数不修改全局 Validator。
 func NewGinEngine() (*gin.Engine, error) {
 	configFile := filepath.Join(env.ConfigDirPath(), "gin.yaml")
 	config, err := configx.Parse[ginConfig](configFile)
@@ -37,6 +39,11 @@ func NewGinEngine() (*gin.Engine, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: create Gin engine from %q: %w", configFile, err)
+	}
+	if env.RunMode() != env.RunModeRelease {
+		if err := ginx.RegisterOpenAPI(&engine.RouterGroup); err != nil {
+			return nil, fmt.Errorf("bootstrap: enable OpenAPI: generate Swag documentation (e.g. swag init -o ./openapi), blank import the generated package and rebuild the application: %w", err)
+		}
 	}
 	return engine, nil
 }
