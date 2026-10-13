@@ -62,5 +62,8 @@
 // JSON 端点仍返回原始文档，补齐仅影响页面内的副本。
 // Elements 的静态资源均内嵌，不依赖运行时 CDN。
 // Elements 沿用上游默认认证持久化，会在浏览器 localStorage 保存并恢复认证输入。
+// Swagger 2.0 的 Authorization apiKey 方案可用扩展 x-pixiu-bearer: true（也接受字符串 "true"）启用前缀补齐。
+// Swag 对应注释为 @x-pixiu-bearer true；仅影响本项目 Elements 的调试请求与代码示例。
+// 输入纯 Token 或完整 Bearer Header 均可，空输入不发送 Authorization；其他 API Key 保持原样。
 // 文档请求沿用所在 Engine 的日志策略；LogResponseInfo 会复制并记录完整静态资源，建议关闭。
 package ginx
