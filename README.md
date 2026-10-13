@@ -137,6 +137,7 @@ func main() {
 | [`infra/taskpool`](infra/taskpool/doc.go) | 本地异步任务、有界队列、worker 扩缩容、重试与排空 | logit |
 | [`infra/lrucache`](infra/lrucache/doc.go) | 泛型有界 LRU、默认 / 单条目 TTL、独立及命名实例 | ttlcache v3 |
 | [`infra/mysqlx`](infra/mysqlx/doc.go) | MySQL 连接池、显式主从选择、查询日志 | GORM、MySQL 驱动、logit |
+| [`infra/gormx`](infra/gormx/doc.go) | Repository 主、从库会话依赖 Sessions | GORM |
 | [`infra/pgsqlx`](infra/pgsqlx/doc.go) | PostgreSQL 连接池、显式主从选择、查询日志 | GORM、pgx、logit |
 | [`infra/clickhousex`](infra/clickhousex/doc.go) | ClickHouse 连接池、显式主从选择、查询日志 | GORM、ClickHouse 驱动、logit |
 | [`infra/sqlitex`](infra/sqlitex/doc.go) | SQLite 单库连接池、常用参数配置、查询日志 | GORM、go-sqlite3、logit |
@@ -187,6 +188,7 @@ pixiu/
 │   ├── taskpool/           本地异步任务池
 │   ├── lrucache/           LRU / TTL 缓存
 │   ├── mysqlx/             MySQL
+│   ├── gormx/              Repository 主、从库会话依赖
 │   ├── pgsqlx/             PostgreSQL
 │   ├── clickhousex/        ClickHouse
 │   ├── sqlitex/            SQLite
