@@ -228,70 +228,84 @@ func TestAccessLogBodiesNotTruncated(t *testing.T) {
 }
 
 func TestAccessLogStreamingResponse(t *testing.T) {
-	output := captureAccessLogs(t)
-	continueResponse := make(chan struct{})
-	observed := make(chan struct{})
-	errorsSeen := make(chan error, 3)
-	router, err := New(Config{
-		LogRequestInfo:  true,
-		LogResponseInfo: true,
-		Observe: func(context.Context, RequestResult) {
-			close(observed)
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	router.POST("/", func(c *gin.Context) {
-		ctrl := http.NewResponseController(c.Writer)
-		errorsSeen <- ctrl.SetReadDeadline(time.Now().Add(3 * time.Second))
-		errorsSeen <- ctrl.SetWriteDeadline(time.Now().Add(3 * time.Second))
-		errorsSeen <- ctrl.EnableFullDuplex()
-		c.Header("X-Reply", "first")
-		c.Writer.Flush()
-		c.Header("X-Reply", "late")
-		_, _ = c.Writer.WriteString("first\n")
-		c.Writer.Flush()
-		select {
-		case <-continueResponse:
-		case <-c.Request.Context().Done():
-			return
-		}
-		_, _ = c.Writer.Write([]byte("second\n"))
-	})
-	server := httptest.NewServer(router)
-	defer server.Close()
-	client := server.Client()
-	client.Timeout = 3 * time.Second
-	resp, err := client.Post(server.URL, "text/plain", strings.NewReader("request"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	reader := bufio.NewReader(resp.Body)
-	first, err := reader.ReadString('\n')
-	close(continueResponse)
-	if err != nil || first != "first\n" {
-		t.Fatalf("Flush 未立即发送首段: %q %v", first, err)
-	}
-	rest, err := io.ReadAll(reader)
-	if err != nil || string(rest) != "second\n" {
-		t.Fatalf("后续响应: %q %v", rest, err)
-	}
-	select {
-	case <-observed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("未收到请求结果")
-	}
-	for range 3 {
-		if err := <-errorsSeen; err != nil {
-			t.Errorf("ResponseController 能力丢失: %v", err)
-		}
-	}
-	record := accessLogRecords(t, output)[0]
-	response := record["response_info"].(map[string]any)
-	if response["body"] != "first\nsecond\n" || response["headers"].(map[string]any)["X-Reply"].([]any)[0] != "first" {
-		t.Fatalf("流式响应详情不准确: %v", response)
+	for _, disabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("关闭日志=%t", disabled), func(t *testing.T) {
+			output := captureAccessLogs(t)
+			continueResponse := make(chan struct{})
+			observed := make(chan struct{})
+			errorsSeen := make(chan error, 3)
+			router, err := New(Config{
+				DisableAccessLog: disabled,
+				LogRequestInfo:   true,
+				LogResponseInfo:  true,
+				Observe: func(context.Context, RequestResult) {
+					close(observed)
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			router.POST("/", func(c *gin.Context) {
+				ctrl := http.NewResponseController(c.Writer)
+				errorsSeen <- ctrl.SetReadDeadline(time.Now().Add(3 * time.Second))
+				errorsSeen <- ctrl.SetWriteDeadline(time.Now().Add(3 * time.Second))
+				errorsSeen <- ctrl.EnableFullDuplex()
+				c.Header("X-Reply", "first")
+				c.Writer.Flush()
+				c.Header("X-Reply", "late")
+				_, _ = c.Writer.WriteString("first\n")
+				c.Writer.Flush()
+				select {
+				case <-continueResponse:
+				case <-c.Request.Context().Done():
+					return
+				}
+				_, _ = c.Writer.Write([]byte("second\n"))
+			})
+			server := httptest.NewServer(router)
+			defer server.Close()
+			client := server.Client()
+			client.Timeout = 3 * time.Second
+			resp, err := client.Post(server.URL, "text/plain", strings.NewReader("request"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			reader := bufio.NewReader(resp.Body)
+			first, err := reader.ReadString('\n')
+			close(continueResponse)
+			if err != nil || first != "first\n" {
+				t.Fatalf("Flush 未立即发送首段: %q %v", first, err)
+			}
+			rest, err := io.ReadAll(reader)
+			if err != nil || string(rest) != "second\n" {
+				t.Fatalf("后续响应: %q %v", rest, err)
+			}
+			select {
+			case <-observed:
+			case <-time.After(3 * time.Second):
+				t.Fatal("未收到请求结果")
+			}
+			for range 3 {
+				if err := <-errorsSeen; err != nil {
+					t.Errorf("ResponseController 能力丢失: %v", err)
+				}
+			}
+			records := accessLogRecords(t, output)
+			if disabled {
+				if len(records) != 0 {
+					t.Fatalf("关闭访问日志后仍有记录: %v", records)
+				}
+				return
+			}
+			if len(records) != 1 {
+				t.Fatalf("访问日志数量: got %d, want 1", len(records))
+			}
+			response := records[0]["response_info"].(map[string]any)
+			if response["body"] != "first\nsecond\n" || response["headers"].(map[string]any)["X-Reply"].([]any)[0] != "first" {
+				t.Fatalf("流式响应详情不准确: %v", response)
+			}
+		})
 	}
 }
 

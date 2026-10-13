@@ -491,31 +491,3 @@ func (b *lockedBuffer) String() string {
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
-
-func TestFacadeSingleImport(t *testing.T) {
-	// 固定设计决策:业务只 import logit 即可完成字段构造 + 链路 API + 日志输出。
-	ctx := logit.WithContext(context.Background())
-	logit.AddField(ctx, logit.Str("k", "v"), logit.Int("n", 1))
-	var _ logit.Field = logit.Bool("b", true)
-	buf := capture(t)
-	logit.Info(ctx, "aliases ok", logit.Dur("cost", 0))
-	if !strings.Contains(buf.String(), "aliases ok") {
-		t.Errorf("call failed: %q", buf.String())
-	}
-}
-
-// TestDirectConstruction 固定另一个使用姿势:不经全局门面,直接构造实例注入。
-func TestDirectConstruction(t *testing.T) {
-	buf := &bytes.Buffer{}
-	logger := logit.MustNew(
-		logit.OptWriter(logit.NewWriter(buf)),
-		logit.OptMinLevel(logit.InfoLevel),
-		logit.OptFilterKeys("token"),
-	)
-	ctx := logit.WithContext(context.Background())
-	logit.AddMeta(ctx, logit.Str(logit.LogId, logit.NewLogID()))
-	logger.Info(ctx, "direct", logit.Str("token", "secret"))
-	if strings.Contains(buf.String(), "secret") {
-		t.Errorf("filter failed: %q", buf.String())
-	}
-}

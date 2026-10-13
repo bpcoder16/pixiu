@@ -69,35 +69,6 @@ func TestRequestContextFallback(t *testing.T) {
 	}
 }
 
-func TestResponseController(t *testing.T) {
-	r, err := New(Config{DisableAccessLog: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	results := make(chan []error, 1)
-	r.POST("/", func(c *gin.Context) {
-		ctrl := http.NewResponseController(c.Writer)
-		results <- []error{
-			ctrl.SetReadDeadline(time.Now().Add(time.Second)),
-			ctrl.SetWriteDeadline(time.Now().Add(time.Second)),
-			ctrl.EnableFullDuplex(),
-		}
-		c.Status(http.StatusNoContent)
-	})
-	server := httptest.NewServer(r)
-	defer server.Close()
-	resp, err := server.Client().Post(server.URL, "text/plain", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-	for i, err := range <-results {
-		if err != nil {
-			t.Errorf("ResponseController 操作 %d: %v", i, err)
-		}
-	}
-}
-
 func TestRecoveryAndRequestScopes(t *testing.T) {
 	var records []RequestResult
 	var output bytes.Buffer

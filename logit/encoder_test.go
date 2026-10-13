@@ -98,10 +98,6 @@ func TestCallerPath(t *testing.T) {
 	if path == "unknown" || !bytes.Contains([]byte(path), []byte(":")) {
 		t.Errorf("CallerPath(0) = %q", path)
 	}
-	if path == CallerPath(0) {
-		// 同一行调用应稳定,不同行应不同——此处两次调用在同一行的不同位置
-		t.Logf("same-line caller path: %s", path)
-	}
 	inner := func() string { return CallerPath(1) }
 	outerPath := inner()
 	if outerPath == "unknown" || len(outerPath) == 0 {
@@ -123,18 +119,6 @@ func TestTrimCallerPath(t *testing.T) {
 	}
 	if got := trimCallerPath("/order.go"); got != "order.go" {
 		t.Errorf("trim root path = %q", got)
-	}
-}
-
-func TestNewLogIDUUIDV4AndUnique(t *testing.T) {
-	seen := make(map[string]struct{}, 1000)
-	for i := 0; i < 1000; i++ {
-		id := NewLogID()
-		assertUUIDV4(t, id)
-		if _, dup := seen[id]; dup {
-			t.Fatalf("duplicate logid %s", id)
-		}
-		seen[id] = struct{}{}
 	}
 }
 

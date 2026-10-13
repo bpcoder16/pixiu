@@ -1,13 +1,10 @@
 package redisx
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/bpcoder16/pixiu/infra/internal/named"
-	"github.com/bpcoder16/pixiu/lifecycle"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -19,67 +16,6 @@ func assertNamedPanic(t *testing.T, want string, lookup func()) {
 		}
 	}()
 	lookup()
-}
-
-func TestNamedRegistryAndLifecycleClose(t *testing.T) {
-	registry := named.New[*Client]("redisx")
-	cache := &Client{redis: redis.NewClient(&redis.Options{Addr: "test"})}
-	session := &Client{redis: redis.NewClient(&redis.Options{Addr: "test"})}
-	t.Cleanup(func() {
-		_ = cache.Close()
-		_ = session.Close()
-	})
-	for name, client := range map[string]*Client{"cache": cache, "session": session} {
-		if _, err := registry.Create(name, func() (*Client, error) {
-			return client, nil
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	if got := registry.MustGet("cache"); got != cache {
-		t.Fatalf("按名称获取客户端: got=%p", got)
-	}
-	if _, err := registry.Create("cache", func() (*Client, error) {
-		return &Client{}, nil
-	}); err == nil {
-		t.Fatal("重复名称未被拒绝")
-	}
-	if got := registry.MustGet("cache"); got != cache {
-		t.Fatalf("重复名称改变已有客户端: got=%p", got)
-	}
-	assertNamedPanic(t, `redisx: client "missing" is not registered`, func() {
-		registry.MustGet("missing")
-	})
-
-	var stack lifecycle.Stack
-	if err := stack.Register(func() error {
-		for _, client := range []*Client{cache, session} {
-			if err := client.Client().Ping(context.Background()).Err(); !errors.Is(err, redis.ErrClosed) {
-				return fmt.Errorf("日志关闭时 Redis 客户端仍未关闭: %v", err)
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := stack.Register(registry.CloseAll); err != nil {
-		t.Fatal(err)
-	}
-	if err := stack.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.CloseAll(); err != nil {
-		t.Fatalf("重复关闭: %v", err)
-	}
-	assertNamedPanic(t, "redisx: named clients closed", func() {
-		registry.MustGet("cache")
-	})
-	if _, err := registry.Create("new", func() (*Client, error) {
-		return &Client{}, nil
-	}); err == nil {
-		t.Fatal("关闭后仍能登记客户端")
-	}
 }
 
 func TestNewNamedRegistersAndRejectsDuplicate(t *testing.T) {

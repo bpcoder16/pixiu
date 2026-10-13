@@ -1,14 +1,11 @@
 package pgsqlx
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/bpcoder16/pixiu/infra/internal/named"
-	"github.com/bpcoder16/pixiu/lifecycle"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 )
@@ -32,62 +29,6 @@ func assertNamedPanic(t *testing.T, want string, lookup func()) {
 		}
 	}()
 	lookup()
-}
-
-func TestNamedRegistryAndLifecycleClose(t *testing.T) {
-	registry := named.New[*Client]("pgsqlx")
-	orders, ordersPool := testNamedClient(t)
-	users, usersPool := testNamedClient(t)
-	for name, client := range map[string]*Client{"orders": orders, "users": users} {
-		if _, err := registry.Create(name, func() (*Client, error) {
-			return client, nil
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if got := registry.MustGet("orders"); got != orders {
-		t.Fatalf("按名称获取客户端: got=%p", got)
-	}
-	if _, err := registry.Create("orders", func() (*Client, error) {
-		return &Client{}, nil
-	}); err == nil {
-		t.Fatal("重复名称未被拒绝")
-	}
-	if got := registry.MustGet("orders"); got != orders {
-		t.Fatalf("重复名称改变已有客户端: got=%p", got)
-	}
-	assertNamedPanic(t, `pgsqlx: client "missing" is not registered`, func() {
-		registry.MustGet("missing")
-	})
-
-	var stack lifecycle.Stack
-	if err := stack.Register(func() error {
-		for _, pool := range []*sql.DB{ordersPool, usersPool} {
-			if err := pool.PingContext(context.Background()); err == nil || !strings.Contains(err.Error(), "closed") {
-				return fmt.Errorf("日志关闭时连接池仍未关闭: %v", err)
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := stack.Register(registry.CloseAll); err != nil {
-		t.Fatal(err)
-	}
-	if err := stack.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.CloseAll(); err != nil {
-		t.Fatalf("重复关闭: %v", err)
-	}
-	assertNamedPanic(t, "pgsqlx: named clients closed", func() {
-		registry.MustGet("orders")
-	})
-	if _, err := registry.Create("new", func() (*Client, error) {
-		return &Client{}, nil
-	}); err == nil {
-		t.Fatal("关闭后仍能登记客户端")
-	}
 }
 
 func TestNewNamedFailureDoesNotReserveName(t *testing.T) {

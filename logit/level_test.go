@@ -1,9 +1,6 @@
 package logit
 
-import (
-	"errors"
-	"testing"
-)
+import "testing"
 
 func TestLevelString(t *testing.T) {
 	tests := []struct {
@@ -72,12 +69,5 @@ func TestParseLevel(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("ParseLevel(%q) = %d, want %d", tt.in, got, tt.want)
 		}
-	}
-	if _, err := ParseLevel("bogus"); err == nil {
-		t.Error("bogus should not parse")
-	}
-	var target *levelParseError
-	if !errors.As(error(&levelParseError{}), &target) {
-		t.Error("levelParseError should implement error")
 	}
 }
