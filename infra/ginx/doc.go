@@ -34,15 +34,21 @@
 // 响应正文随写出复制,保留 Flush;Header 记录应用提交的快照,不承诺包含传输层自动添加的值。
 // 开启详情会保存完整正文;请求体大小与读取期限由应用约束。
 //
-// Swagger 与 Scalar 由应用显式注册，New 不自动启用；先 blank import 应用生成的文档包：
+// OpenAPI 文档与 Stoplight Elements 由应用显式注册，New 不自动启用；先 blank import 应用生成的文档包：
 //
-//	if err := ginx.RegisterSwagger(&router.RouterGroup); err != nil {
+//	if err := ginx.RegisterOpenAPI(&router.RouterGroup); err != nil {
 //		return err
 //	}
 //
-// 根路由组提供 /swagger/index.html、/swagger/doc.json、/docs 和 /docs/assets/api-reference.js。
+// 根路由组提供 /elements，页面读取 /openapi/doc.json。
+// Elements 资源及加载脚本位于 /elements/assets/ 下的 web-components.min.js、styles.min.css 和 openapi.js。
+// Elements 使用 hash 导航，刷新详情页不需要服务端路径回退。
 // 也可传 router.Group("/internal")，文档与资源 URL 随组前缀调整；组中间件负责访问控制。
 // 只使用 Swag 的默认文档实例，未注册文档时返回错误且不添加路由；生成物须由应用自行维护。
-// Swagger UI 和 Scalar 静态资源内嵌；Scalar 不持久化认证信息，关闭外部字体、遥测、Agent 和代理。
+// 文档内容在注册路由时固定，应用须在此之前完成文档元信息设置。
+// 页面按浏览器获取文档的地址补齐 Swagger 2.0 缺省的 host/schemes，保留 basePath 与显式配置；
+// JSON 端点仍返回原始文档，补齐仅影响页面内的副本。
+// Elements 的静态资源均内嵌，不依赖运行时 CDN。
+// Elements 沿用上游默认认证持久化，会在浏览器 localStorage 保存并恢复认证输入。
 // 文档请求沿用所在 Engine 的日志策略；LogResponseInfo 会复制并记录完整静态资源，建议关闭。
 package ginx
