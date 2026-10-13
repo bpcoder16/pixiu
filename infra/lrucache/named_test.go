@@ -36,7 +36,7 @@ func TestNewNamedSharesInstance(t *testing.T) {
 	}
 }
 
-func TestNamedRejectsInvalidAndDuplicateRegistration(t *testing.T) {
+func TestNamedReusesRegistrationAndRejectsInvalidTypes(t *testing.T) {
 	name := t.Name()
 	t.Cleanup(func() {
 		namedCaches.Delete(name)
@@ -54,8 +54,18 @@ func TestNamedRejectsInvalidAndDuplicateRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewNamed(name, Config[string, int]{Capacity: 2}); err == nil {
-		t.Fatal("duplicate registration replaced the cache")
+	created.Set("first", 1)
+	for _, cfg := range []Config[string, int]{
+		{Capacity: 2},
+		{},
+	} {
+		if got, err := NewNamed(name, cfg); err != nil || got != created {
+			t.Fatalf("duplicate registration must return the first cache: %p, %v", got, err)
+		}
+	}
+	created.Set("second", 2)
+	if created.Has("first") || !created.Has("second") {
+		t.Fatal("duplicate registration changed the original capacity")
 	}
 	if _, err := NewNamed(name, Config[string, string]{Capacity: 1}); err == nil {
 		t.Fatal("same name with another type was accepted")
@@ -85,22 +95,25 @@ func TestNewNamedConcurrentRegistration(t *testing.T) {
 		err   error
 	}
 	results := make(chan result, workers)
+	start := make(chan struct{})
 	for range workers {
 		go func() {
+			<-start
 			cache, err := NewNamed(name, Config[string, int]{Capacity: 1})
 			results <- result{cache: cache, err: err}
 		}()
 	}
+	close(start)
 	var winner *Cache[string, int]
 	for range workers {
 		got := <-results
-		if got.err == nil {
-			if winner != nil {
-				t.Fatal("more than one concurrent registration succeeded")
-			}
+		if got.err != nil || got.cache == nil {
+			t.Fatalf("concurrent registration failed: %p, %v", got.cache, got.err)
+		}
+		if winner == nil {
 			winner = got.cache
-		} else if got.cache != nil {
-			t.Fatal("failed registration returned a cache")
+		} else if got.cache != winner {
+			t.Fatal("concurrent registration returned different caches")
 		}
 	}
 	if winner == nil {

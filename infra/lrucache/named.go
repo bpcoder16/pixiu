@@ -8,19 +8,30 @@ import (
 // namedCaches 保存进程内的命名缓存实例；同一个名字只允许注册一次。
 var namedCaches sync.Map // name → *Cache[K, V]
 
-// NewNamed 创建并注册命名缓存。名称不能为空，重复名称不会替换已有实例。
+// namedCacheInitMu 串行化首次创建，避免并发注册构造多个实例；已注册名称读取无需此锁。
+var namedCacheInitMu sync.Mutex
+
+// NewNamed 首次创建并注册命名缓存，后续同名、同类型调用返回已有实例，忽略传入配置。
+// 名称不能为空；类型不匹配返回错误。创建失败不占用名称，可用有效配置重试。
 // 各名称的容量、TTL、条目和统计互不影响。
 func NewNamed[K comparable, V any](name string, cfg Config[K, V]) (*Cache[K, V], error) {
 	if name == "" {
 		return nil, fmt.Errorf("lrucache: cache name must not be empty")
 	}
+	if _, ok := namedCaches.Load(name); ok {
+		return Named[K, V](name)
+	}
+	namedCacheInitMu.Lock()
+	defer namedCacheInitMu.Unlock()
+	// 等待锁期间其他调用可能已完成注册，须再次检查再创建。
+	if _, ok := namedCaches.Load(name); ok {
+		return Named[K, V](name)
+	}
 	cache, err := New(cfg)
 	if err != nil {
 		return nil, err
 	}
-	if _, loaded := namedCaches.LoadOrStore(name, cache); loaded {
-		return nil, fmt.Errorf("lrucache: cache %q is already registered", name)
-	}
+	namedCaches.Store(name, cache)
 	return cache, nil
 }
 
