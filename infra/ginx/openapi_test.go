@@ -11,17 +11,26 @@ import (
 	"github.com/swaggo/swag"
 )
 
-func TestRegisterOpenAPI(t *testing.T) {
-	// Swag 的默认文档没有注销入口，独立进程保证缺失文档和重复测试均不受全局状态影响。
+func isolatedOpenAPI(t *testing.T, run func()) {
+	t.Helper()
+	// Swag 没有注销入口，独立进程保证缺失文档和重复测试均不受全局状态影响。
 	const marker = "PIXIU_OPENAPI_TEST"
-	if os.Getenv(marker) != "1" {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestRegisterOpenAPI$")
-		cmd.Env = append(os.Environ(), marker+"=1")
+	if os.Getenv(marker) != t.Name() {
+		cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
+		cmd.Env = append(os.Environ(), marker+"="+t.Name())
 		if output, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("OpenAPI 独立进程测试失败: %v\n%s", err, output)
 		}
 		return
 	}
+	run()
+}
+
+func TestRegisterOpenAPI(t *testing.T) {
+	isolatedOpenAPI(t, func() { testRegisterOpenAPI(t) })
+}
+
+func testRegisterOpenAPI(t *testing.T) {
 	router, err := New(Config{DisableAccessLog: true})
 	if err != nil {
 		t.Fatal(err)

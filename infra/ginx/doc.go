@@ -40,11 +40,23 @@
 //		return err
 //	}
 //
-// 根路由组提供 /elements，页面读取 /openapi/doc.json。
+// 不传模块时，根路由组提供 /elements，页面读取默认实例的 /openapi/doc.json。
+// 需要多个模块时，传入命名文档（由 swag init --instanceName 生成）：
+//
+//	if err := ginx.RegisterOpenAPI(&router.RouterGroup,
+//		ginx.OpenAPIModule{Name: "app", Title: "App"},
+//		ginx.OpenAPIModule{Name: "admin", Title: "Admin"},
+//	); err != nil {
+//		return err
+//	}
+//
+// 模块模式提供 /openapi/<Name>.json、/elements/<Name> 和顶部切换导航，/elements 展示首个模块。
+// 模块名非空且只允许 ASCII 字母、数字、下划线和连字符，名称重复时返回错误。
+// Title 为空时使用 Name；页面文字和链接均按 HTML 转义。
 // Elements 资源及加载脚本位于 /elements/assets/ 下的 web-components.min.js、styles.min.css 和 openapi.js。
 // Elements 使用 hash 导航，刷新详情页不需要服务端路径回退。
 // 也可传 router.Group("/internal")，文档与资源 URL 随组前缀调整；组中间件负责访问控制。
-// 只使用 Swag 的默认文档实例，未注册文档时返回错误且不添加路由；生成物须由应用自行维护。
+// 全部模块通过校验且读取成功后才注册路由，文档缺失时返回错误且不添加路由；生成物须由应用自行维护。
 // 文档内容在注册路由时固定，应用须在此之前完成文档元信息设置。
 // 页面按浏览器获取文档的地址补齐 Swagger 2.0 缺省的 host/schemes，保留 basePath 与显式配置；
 // JSON 端点仍返回原始文档，补齐仅影响页面内的副本。

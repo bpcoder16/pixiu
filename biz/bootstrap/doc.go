@@ -59,8 +59,18 @@
 // 不接受运行时回调，不注册全局配置或重读文件；缺失、未知字段、错误类型和非法代理均返回错误。
 // 模板见 conf.example/gin.yaml；这些配置不属于 app.yaml 或 httpconfig.AppConfig。
 // Engine 创建后仅按 env.RunMode() 决定文档路由：debug/test 调用 ginx.RegisterOpenAPI，release 跳过。
-// 自动提供 /openapi/doc.json、/elements 和内嵌静态资源，不读取独立文档配置，不自动增加认证。
-// 应用负责生成文档并 blank import 注册默认 Swag 文档实例，元信息须在构造前设置；
+// 不传参数时提供默认文档 /openapi/doc.json、/elements 和内嵌静态资源。
+// 需要多个模块时，由应用显式声明名称和标题（另需导入 infra/ginx）：
+//
+//	engine, err := bootstrap.NewGinEngine(
+//		ginx.OpenAPIModule{Name: "app", Title: "App"},
+//		ginx.OpenAPIModule{Name: "admin", Title: "Admin"},
+//	)
+//
+// 此时每个模块提供 /openapi/<Name>.json 与 /elements/<Name>，/elements 展示首个模块。
+// 页面共用静态资源并提供顶部模块导航；模块列表由代码提供，不读取独立文档配置，不自动增加认证。
+// 应用负责生成文档并 blank import 注册同名 Swag 文档实例，元信息须在构造前设置；
+// 多模块使用 swag init 的 --instanceName 与 --tags 等参数分别生成所需文档。
 // 生成目录由应用决定，例如 swag init -o ./openapi。debug/test 未注册文档时返回 nil Engine 和错误，
 // 提示生成、导入文档包并保留底层错误链；release 不要求生成文档。
 // 文档路由在构造时已注册，之后添加的业务中间件不作用于这些路由。
