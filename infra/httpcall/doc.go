@@ -7,6 +7,7 @@
 //
 //	client := httpcall.New("inventory",
 //	    httpcall.OptLogDetails(true), // 按需记录请求和响应的详细信息
+//	    httpcall.OptPropagateLogID(true), // 按需向下游传递已有 logId
 //	    httpcall.OptResty(func(r *resty.Client) {
 //	        // 克隆默认 Transport，保留 Resty 的其他传输配置。
 //	        transport := r.GetClient().Transport.(*http.Transport).Clone()
@@ -66,6 +67,10 @@
 // Resty() 追加回调，若回调 panic，可能使同一次调用产生两条结果日志。
 // 公共认证和请求头可在 OptResty 中通过 SetAuthToken、SetHeader 设置；
 // 仅针对单次调用的值应设置在 Request(ctx) 返回的请求上。
+// OptPropagateLogID 默认关闭；开启后从 context 的 meta 读取已有 logId，
+// 经 TraceHeader（PIXIU-Log-Id）传给下游，与 ginx 的入口约定一致。
+// 请求或客户端显式设置的同名 Header 优先，含空值，键名忽略大小写；
+// 不生成 ID 或改写调用方的日志作用域，重试沿用请求 Header。
 // 请求 context 可设置更短的截止时间，但不能放宽单次尝试的上限。
 // 开启 Resty 重试后,整次调用可能超过单次尝试上限;需要总截止时间时为请求 context 设置超时。
 // 每次调用通过 logit 记录统一的 downstream_type、downstream_duration_ms、

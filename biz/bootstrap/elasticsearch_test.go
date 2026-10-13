@@ -263,6 +263,7 @@ func TestElasticsearchVersionsTemplatesAndLifecycle(t *testing.T) {
 					}
 					content := strings.Replace(string(template), "version: 8", fmt.Sprintf("version: %d", version), 1)
 					content = strings.Replace(content, "https://es.example.com:9200", s.URL, 1)
+					content = strings.Replace(content, `username: ""`, `username: "biucards"`, 1)
 					content = strings.Replace(content, `password: ""`, `password: "secret"`, 1)
 					content = strings.Replace(content, `caCertFile: ""`, fmt.Sprintf("caCertFile: %q", certPath), 1)
 					name := fmt.Sprintf("v%d", version)

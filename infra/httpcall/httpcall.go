@@ -7,6 +7,9 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
+// TraceHeader 是与 HTTP 服务入口约定一致的链路 ID 请求头。
+const TraceHeader = "PIXIU-Log-Id"
+
 // Client 是可复用的 HTTP 下游客户端。运行期可以并发发请求，Resty 配置应在启动期完成。
 type Client struct {
 	name           string
@@ -14,6 +17,7 @@ type Client struct {
 	resty          *resty.Client
 	logRequests    bool
 	logDetails     bool
+	propagateLogID bool
 }
 
 // Option 配置下游客户端，创建后不应在运行期并发修改配置。
@@ -37,6 +41,12 @@ func OptLogDetails(enabled bool) Option {
 // 关闭时仍记录请求级耗时，Resty 自身的 stderr 诊断不受影响。
 func OptLogRequests(enabled bool) Option {
 	return func(c *Client) { c.logRequests = enabled }
+}
+
+// OptPropagateLogID 控制是否经 TraceHeader 传递 context 中已有的 logId，默认关闭。
+// 请求或客户端已显式设置的同名 Header（含空值）优先；没有 logId 时不生成。
+func OptPropagateLogID(enabled bool) Option {
+	return func(c *Client) { c.propagateLogID = enabled }
 }
 
 // New 创建下游客户端。默认每次 HTTP 尝试最长 60 秒，不自动重试。

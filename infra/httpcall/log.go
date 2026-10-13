@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/bpcoder16/pixiu/logit"
@@ -33,7 +34,22 @@ func (l restyStderrLogger) write(level, format string, args ...any) {
 
 func (c *Client) onBeforeRequest(_ *resty.Client, req *resty.Request) error {
 	c.markStart(req)
+	// 只在首次发送时补充，跳过 curl 预处理并让重试沿用请求头；不修改共享客户端。
+	if c.propagateLogID && req.Attempt == 1 && !hasTraceHeader(req.Header) && !hasTraceHeader(c.resty.Header) {
+		if id, ok := logit.LogIDFromContext(req.Context()); ok {
+			req.SetHeader(TraceHeader, id)
+		}
+	}
 	return nil
+}
+
+func hasTraceHeader(header http.Header) bool {
+	for key := range header {
+		if strings.EqualFold(key, TraceHeader) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) onSuccess(_ *resty.Client, resp *resty.Response) {

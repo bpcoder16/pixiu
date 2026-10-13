@@ -33,7 +33,7 @@ func TestBuildClusterRegistersEndpointsInOrder(t *testing.T) {
 	}
 	if !slices.Equal(endpoints, []*gormlib.DB{master, slaveA, slaveB}) || cluster.master != master ||
 		len(cluster.slaves) != 2 || cluster.slaves[0] != slaveA || cluster.slaves[1] != slaveB {
-		t.Fatalf("主从登记顺序错误: endpoints=%v cluster=%+v", endpoints, cluster)
+		t.Fatalf("主从登记顺序错误: endpoints=%v cluster=%+v", endpoints, &cluster)
 	}
 	if err := cluster.Close(); err != nil {
 		t.Fatal(err)
