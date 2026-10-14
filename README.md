@@ -146,13 +146,13 @@ func main() {
 | [`infra/natsx`](infra/natsx/doc.go) | NATS 发布 / 请求 / 订阅、JetStream 发布与消费、统一日志 | nats.go、logit |
 | [`infra/elasticsearchx`](infra/elasticsearchx/doc.go) | Elasticsearch 通用操作、Bulk、默认及命名实例、结果日志与版本适配 | 官方 Elasticsearch SDK、logit |
 | [`infra/aliyun/ossx`](infra/aliyun/ossx/doc.go) | OSS 固定 Bucket 的流与文件上传、独立账号、结果日志与生命周期 | 阿里云 OSS SDK V2、credentials-go、logit |
-| [`infra/aliyun/esx`](infra/aliyun/esx/doc.go) | 阿里云 ES 同义词清单、完整清单更新、实例查询 | 阿里云 Elasticsearch 管理 SDK、credentials-go、logit |
+| [`infra/aliyun/esx`](infra/aliyun/esx/doc.go) | 阿里云 ES 固定 InstanceID 的同义词清单、完整清单更新、实例查询 | 阿里云 Elasticsearch 管理 SDK、credentials-go、logit |
 
 Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/doc.go)、[`v8`](infra/elasticsearchx/v8/doc.go) 或 [`v9`](infra/elasticsearchx/v9/doc.go) 适配包；共用操作位于 `infra/elasticsearchx`。各版本的 `NewDefault` / `NewNamed` 共用注册表，通过 `elasticsearchx.Default()` / `Named(name)` 获取实例，应用统一调用 `CloseAll()` 关闭；独立 `New` 创建的实例仍需自行关闭。
 
 独立 Elasticsearch 客户端默认关闭请求结果日志，通过 `OptLogRequests(true)` 开启；请求体和响应详情还需开启 `OptLogDetails(true)`。context 已调用 `logit.WithStart` 时，关闭结果日志仍会记录请求级下游耗时。`Search` 超时或分片失败会保留已有结果并返回 `PartialSearchError`；`Bulk` 动作失败返回 `BulkError` 并保留成功数与失败项，调用方应检查错误后再决定是否接受结果或重试。
 
-`infra/aliyun/ossx` 和 `infra/aliyun/esx` 分别定义配置，独立持有凭据、连接池和命名注册表，可使用不同账号。两个包均支持在 Config 中成对填写 `AccessKeyID` / `AccessKeySecret`，由 `New` 内部封装为固定凭据，仍可注入互斥的 `Credential`。公共校验、凭据构造和 HTTP 连接策略复用 `infra/internal/aliyun`，各实例仍独立。OSS 每个实例固定一个 `Config.Bucket`，多 Bucket 创建多个实例。上传请求中的 `Bucket` 须移到 `Config`。两者的 `New` 只构造，不联网验活；支持 `NewNamed` / `NewDefault` / `CloseAll`，结果日志默认关闭。`UpdateSynonymsDicts` 提交完整目标清单，遗漏已有文件会删除它；API 成功不代表分发或索引加载完成。本次不提供官方 reload 和发布流程编排。
+`infra/aliyun/ossx` 和 `infra/aliyun/esx` 分别定义配置，独立持有凭据、连接池和命名注册表，可使用不同账号。两个包均支持在 Config 中成对填写 `AccessKeyID` / `AccessKeySecret`，由 `New` 内部封装为固定凭据，仍可注入互斥的 `Credential`。公共校验、凭据构造和 HTTP 连接策略复用 `infra/internal/aliyun`，各实例仍独立。OSS 每个实例固定一个 `Config.Bucket`，多 Bucket 创建多个实例。上传请求中的 `Bucket` 须移到 `Config`。阿里云 ES 每个客户端固定一个 `Config.InstanceID`，旧查询参数和更新请求中的 `InstanceID` 须移到 `Config`；`ListSynonymsDicts(ctx)`、`DescribeInstance(ctx)` 不再接收实例 ID。通过 `bootstrap.MustRegisterAliyunES(name, isDefault)` 声明并读取 `aliyunesx.<name>.yaml`（[配置模板](biz/bootstrap/conf.example/aliyunesx.example.yaml)），接入统一资源栈；日志类型及耗时前缀统一为 `AliyunES`。两者的 `New` 只构造，不联网验活；支持 `NewNamed` / `NewDefault` / `CloseAll`，结果日志默认关闭。`UpdateSynonymsDicts` 提交完整目标清单，遗漏已有文件会删除它；API 成功不代表分发或索引加载完成。本次不提供官方 reload 和发布流程编排。
 
 ### 通用业务功能 · biz
 
@@ -166,7 +166,7 @@ Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/d
 
 `biz/internal/baseconfig` 供 biz 内部共用环境与日志配置；业务项目通过 `httpconfig.AppConfig` 的嵌入字段使用，无需直接导入内部包。
 
-`httpconfig.MustLoadAppConfig` 使用 `configx.Parse`，支持 YAML / TOML / JSON，拒绝未知字段和弱类型转换；配置只返回给调用方，环境由 `env.Init` 一次性发布。应用配置文件所在目录作为 `env.ConfigDirPath()`，供 bootstrap 查找实例配置。加载配置不会初始化日志或修改 `time.Local`；`bootstrap.MustBaseInit` 在日志创建前应用环境时区，再依次初始化日志、MySQL、Redis、Elasticsearch、OSS 和 NATS，仅初始化已声明的组件实例。
+`httpconfig.MustLoadAppConfig` 使用 `configx.Parse`，支持 YAML / TOML / JSON，拒绝未知字段和弱类型转换；配置只返回给调用方，环境由 `env.Init` 一次性发布。应用配置文件所在目录作为 `env.ConfigDirPath()`，供 bootstrap 查找实例配置。加载配置不会初始化日志或修改 `time.Local`；`bootstrap.MustBaseInit` 在日志创建前应用环境时区，再依次初始化日志、MySQL、Redis、Elasticsearch、OSS、阿里云 ES 和 NATS，仅初始化已声明的组件实例。
 
 初始化完成后，应用可调用 `bootstrap.NewAppManager()` 创建默认总关闭期限为 20 秒的管理器，也可传入不小于 5 秒的自定义时长，传入 0 仍使用默认值。`bootstrap.NewHTTPService(handler)` 从 `env.ConfigDirPath()` 下严格加载 `http.yaml` 并返回可注册的 `apprun.Service`，HTTP 关闭期限默认 15 秒。应用显式调用 `manager.Register(service)` 和 `manager.RunSignals()`，管理器返回后再关闭共享资源栈。
 
@@ -228,7 +228,7 @@ pixiu/
 
 ### 应用配置与多实例初始化
 
-将 [`app.yaml`](biz/httpconfig/conf.example/app.yaml) 复制到应用的 `conf/app.yaml`。本例还声明四个组件实例，需将对应模板复制到同一配置目录，并填写实际连接信息：
+将 [`app.yaml`](biz/httpconfig/conf.example/app.yaml) 复制到应用的 `conf/app.yaml`。本例还声明五个组件实例，需将对应模板复制到同一配置目录，并填写实际连接信息：
 
 | 声明 | 配置文件 | 模板 |
 | --- | --- | --- |
@@ -236,6 +236,7 @@ pixiu/
 | `MustRegisterRedis("cache", true)` | `conf/redis.cache.yaml` | [Redis](biz/bootstrap/conf.example/redis.example.yaml) |
 | `MustRegisterElasticsearch("search", true)` | `conf/elasticsearch.search.yaml` | [Elasticsearch](biz/bootstrap/conf.example/elasticsearch.example.yaml) |
 | `MustRegisterAliyunOSS("assets", true)` | `conf/aliyunossx.assets.yaml` | [阿里云 OSS](biz/bootstrap/conf.example/aliyunossx.example.yaml) |
+| `MustRegisterAliyunES("search-control", true)` | `conf/aliyunesx.search-control.yaml` | [阿里云 ES 管理端](biz/bootstrap/conf.example/aliyunesx.example.yaml) |
 
 实例名与默认标记只在代码中声明，实例文件不接受 `name` / `isDefault`。Elasticsearch 文件的 `version` 必须与部署主版本一致，支持 7 / 8 / 9；`caCertFile` 相对路径基于配置目录。只需某个组件时，保留对应声明与配置文件即可；未声明的实例不会加载。
 
@@ -269,6 +270,7 @@ func main() {
 	bootstrap.MustRegisterRedis("cache", true)
 	bootstrap.MustRegisterElasticsearch("search", true)
 	bootstrap.MustRegisterAliyunOSS("assets", true)
+	bootstrap.MustRegisterAliyunES("search-control", true)
 	bootstrap.MustBaseInit(&cfg.AppConfig, &resources)
 	logit.Info(context.Background(), "应用初始化完成")
 }
@@ -279,6 +281,8 @@ func main() {
 各组件独立选择默认实例，`Default()` 与 `Named(默认名称)` 返回同一客户端。共享组件由 bootstrap 各登记一次 `CloseAll`，业务无需重复登记单个客户端关闭；应用退出前先停止并等待业务任务，再关闭资源栈。配置或初始化失败会 panic，提前登记的 defer 负责回收已创建资源；初始化只在启动阶段串行执行，失败后不支持重试。
 
 OSS 文件必填 `region`、`bucket`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`requestTimeout` 默认 60s，`slowThreshold` 默认 500ms，`logRequests` 默认关闭。初始化不联网校验 Bucket 或权限，业务通过 `ossx.Default()` / `Named(name)` 取得固定 Bucket 的实例。
+
+阿里云 ES 管理端文件必填 `region`、`instanceID`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`requestTimeout` 默认 60s，`slowThreshold` 默认 200ms，`logRequests` 默认关闭。初始化不联网验证实例或权限，业务通过 `esx.Default()` / `Named(name)` 取得固定 InstanceID 的客户端。
 
 Elasticsearch 经 bootstrap 创建时，省略 `logRequests` 默认开启结果日志，`logDetails` 默认关闭；这与直接调用版本适配包 `New` 默认关闭结果日志不同。Redis 模板显式开启 `logCommands`，省略该字段则关闭正常命令日志，慢调用和错误日志仍会输出。完整参数与边界见 [`bootstrap` 包文档](biz/bootstrap/doc.go)。
 
