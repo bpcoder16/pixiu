@@ -140,6 +140,15 @@ func (c *Client) Close() error {
 // 避免 dara 的全局客户端缓存共享账号生命周期及修改 HTTP Client 引发竞态。
 type sdkHTTPClient struct{ client *http.Client }
 
+type responseStatusKey struct{}
+
 func (c *sdkHTTPClient) Call(req *http.Request, _ *http.Transport) (*http.Response, error) {
-	return c.client.Do(req)
+	response, err := c.client.Do(req)
+	if response != nil {
+		// 在 SDK 读取和解析正文前保存状态；指针属于当前同步调用，不跨请求共享。
+		if status, ok := req.Context().Value(responseStatusKey{}).(*int); ok {
+			*status = response.StatusCode
+		}
+	}
+	return response, err
 }

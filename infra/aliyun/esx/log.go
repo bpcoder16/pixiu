@@ -19,7 +19,10 @@ func (c *Client) finish(ctx context.Context, operation, requestID string, status
 	}
 	code := ""
 	if sdkErr, ok := errors.AsType[*tea.SDKError](err); ok {
-		status, code = tea.IntValue(sdkErr.StatusCode), tea.StringValue(sdkErr.Code)
+		if status == 0 {
+			status = tea.IntValue(sdkErr.StatusCode)
+		}
+		code = tea.StringValue(sdkErr.Code)
 		// SDK 把请求 ID 放在 Data 中；只解析必要字段，禁止输出整个错误或 Data。
 		var data struct {
 			RequestID string `json:"RequestId"`

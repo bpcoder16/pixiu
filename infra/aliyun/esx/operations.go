@@ -171,15 +171,13 @@ func (c *Client) ListSynonymsDicts(ctx context.Context) (result ListSynonymsDict
 	callCtx, cancel := context.WithTimeout(ctx, c.requestTimeout)
 	defer cancel()
 	status := 0
+	callCtx = context.WithValue(callCtx, responseStatusKey{}, &status)
 	defer func() {
 		c.finish(ctx, "ListSynonymsDicts", result.RequestID, status, err, time.Since(start))
 	}()
 	response, callErr := c.sdk.ListDictsWithContext(callCtx, new(c.instanceID), &essdk.ListDictsRequest{AnalyzerType: new("SYNONYMS")}, nil, &dara.RuntimeOptions{})
 	if callErr != nil {
 		return result, fmt.Errorf("esx: ListSynonymsDicts: %w", callErr)
-	}
-	if response != nil {
-		status = int(dara.Int32Value(response.StatusCode))
 	}
 	if response == nil || response.Body == nil || dara.StringValue(response.Body.RequestId) == "" || response.Body.Result == nil {
 		return result, errors.New("esx: incomplete ListSynonymsDicts response")
@@ -215,6 +213,7 @@ func (c *Client) UpdateSynonymsDicts(ctx context.Context, req UpdateSynonymsDict
 	callCtx, cancel := context.WithTimeout(ctx, c.requestTimeout)
 	defer cancel()
 	status := 0
+	callCtx = context.WithValue(callCtx, responseStatusKey{}, &status)
 	defer func() {
 		c.finish(ctx, "UpdateSynonymsDicts", result.RequestID, status, err, time.Since(start))
 	}()
@@ -224,9 +223,6 @@ func (c *Client) UpdateSynonymsDicts(ctx context.Context, req UpdateSynonymsDict
 	}, nil, &dara.RuntimeOptions{})
 	if callErr != nil {
 		return result, fmt.Errorf("esx: UpdateSynonymsDicts: %w", callErr)
-	}
-	if response != nil {
-		status = int(dara.Int32Value(response.StatusCode))
 	}
 	if response == nil || response.Body == nil || dara.StringValue(response.Body.RequestId) == "" || response.Body.Result == nil {
 		return result, errors.New("esx: incomplete UpdateSynonymsDicts response")
@@ -256,15 +252,13 @@ func (c *Client) DescribeInstance(ctx context.Context) (result DescribeInstanceR
 	callCtx, cancel := context.WithTimeout(ctx, c.requestTimeout)
 	defer cancel()
 	status := 0
+	callCtx = context.WithValue(callCtx, responseStatusKey{}, &status)
 	defer func() {
 		c.finish(ctx, "DescribeInstance", result.RequestID, status, err, time.Since(start))
 	}()
 	response, callErr := c.sdk.DescribeInstanceWithContext(callCtx, new(c.instanceID), nil, &dara.RuntimeOptions{})
 	if callErr != nil {
 		return result, fmt.Errorf("esx: DescribeInstance: %w", callErr)
-	}
-	if response != nil {
-		status = int(dara.Int32Value(response.StatusCode))
 	}
 	if response == nil || response.Body == nil || response.Body.Result == nil {
 		return result, errors.New("esx: incomplete DescribeInstance response")
