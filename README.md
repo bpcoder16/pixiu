@@ -132,7 +132,7 @@ func main() {
 | [`infra/env`](infra/env/doc.go) | 通用应用环境、IP 校验与补齐、一次初始化与全局读取 | 标准库、netx |
 | [`infra/httpcall`](infra/httpcall/doc.go) | 可复用 HTTP 下游客户端、结果日志、请求级耗时 | Resty v2、logit |
 | [`infra/httpserver`](infra/httpserver/doc.go) | 标准 `http.Handler` 服务端、监听、限时关闭 | 标准库 |
-| [`infra/ginx`](infra/ginx/doc.go) | 独立 Gin Engine、请求日志作用域、访问日志与 Recovery | Gin、logit |
+| [`infra/ginx`](infra/ginx/doc.go) | 独立 Gin Engine、请求日志作用域、访问日志、Recovery 与 OpenAPI / Elements 文档 | Gin、Swag、logit |
 | [`infra/jwtx`](infra/jwtx/doc.go) | HS256 / RS256 / ES256 / PS256 JWT 签发、验签与声明校验 | golang-jwt/jwt v5 |
 | [`infra/taskpool`](infra/taskpool/doc.go) | 本地异步任务、有界队列、worker 扩缩容、重试与排空 | logit |
 | [`infra/lrucache`](infra/lrucache/doc.go) | 泛型有界 LRU、默认 / 单条目 TTL、独立及命名实例 | ttlcache v3 |
@@ -152,14 +152,16 @@ Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/d
 
 独立 Elasticsearch 客户端默认关闭请求结果日志，通过 `OptLogRequests(true)` 开启；请求体和响应详情还需开启 `OptLogDetails(true)`。context 已调用 `logit.WithStart` 时，关闭结果日志仍会记录请求级下游耗时。`Search` 超时或分片失败会保留已有结果并返回 `PartialSearchError`；`Bulk` 动作失败返回 `BulkError` 并保留成功数与失败项，调用方应检查错误后再决定是否接受结果或重试。
 
-`infra/aliyun/ossx` 和 `infra/aliyun/esx` 分别定义配置，独立持有凭据、连接池和命名注册表，可使用不同账号。两个包均支持在 Config 中成对填写 `AccessKeyID` / `AccessKeySecret`，由 `New` 内部封装为固定凭据，仍可注入互斥的 `Credential`。公共校验、凭据构造和 HTTP 连接策略复用 `infra/internal/aliyun`，各实例仍独立。OSS 每个实例固定一个 `Config.Bucket`，多 Bucket 创建多个实例。上传请求中的 `Bucket` 须移到 `Config`。阿里云 ES 每个客户端固定一个 `Config.InstanceID`，旧查询参数和更新请求中的 `InstanceID` 须移到 `Config`；`ListSynonymsDicts(ctx)`、`DescribeInstance(ctx)` 不再接收实例 ID。通过 `bootstrap.MustRegisterAliyunES(name, isDefault)` 声明并读取 `aliyunesx.<name>.yaml`（[配置模板](biz/bootstrap/conf.example/aliyunesx.example.yaml)），接入统一资源栈；日志类型及耗时前缀统一为 `AliyunES`。两者的 `New` 只构造，不联网验活；支持 `NewNamed` / `NewDefault` / `CloseAll`，结果日志默认关闭。`UpdateSynonymsDicts` 提交完整目标清单，遗漏已有文件会删除它；API 成功不代表分发或索引加载完成。本次不提供官方 reload 和发布流程编排。
+`infra/aliyun/ossx` 和 `infra/aliyun/esx` 独立持有配置、凭据、连接池和命名注册表，可使用不同账号。两者均支持成对配置 `AccessKeyID` / `AccessKeySecret`，或注入与其互斥的 `Credential`；`New` 只构造，不联网验活，结果日志默认关闭。共享实例使用 `NewNamed` / `NewDefault` 创建并统一 `CloseAll`；独立 `New` 创建的实例自行关闭。
+
+OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实例固定一个 `Config.InstanceID`。`UpdateSynonymsDicts` 提交完整目标清单，遗漏已有文件会删除它；API 成功不代表分发或索引加载完成。凭据、上传及词典更新的完整边界见对应包文档。
 
 ### 通用业务功能 · biz
 
 | 包 | 能力 | 典型用途 |
 | --- | --- | --- |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
-| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，运行管理器与 HTTP 服务构造 | 声明实例、登记关闭栈；应用持有 Manager 并注册 HTTP 服务，日志最后关闭 |
+| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，运行管理器、Gin / HTTP 服务构造与显式 MySQL 迁移入口 | 声明实例、登记关闭栈；应用持有 Manager 并注册 HTTP 服务，日志最后关闭 |
 | [`biz/httpconfig`](biz/httpconfig/doc.go) | 嵌入 baseconfig，严格解析 HTTP 应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/httpconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
@@ -185,6 +187,8 @@ pixiu/
 ├── jsonx/                 JSON 首值解码
 ├── netx/                  网络基础能力
 ├── infra/                 通用技术能力与 SDK 适配
+│   ├── apprun/             常驻服务运行监督与关闭
+│   ├── configx/            结构体配置解析与命名获取
 │   ├── env/                通用应用运行环境
 │   ├── httpcall/           HTTP 下游调用
 │   ├── httpserver/         HTTP 服务端
@@ -194,6 +198,7 @@ pixiu/
 │   ├── lrucache/           LRU / TTL 缓存
 │   ├── mysqlx/             MySQL
 │   ├── gormx/              Repository 主、从库会话依赖
+│   ├── schemamigrate/      显式表结构迁移与 MySQL 表注释
 │   ├── pgsqlx/             PostgreSQL
 │   ├── clickhousex/        ClickHouse
 │   ├── sqlitex/            SQLite
@@ -207,6 +212,8 @@ pixiu/
 ├── biz/
 │   ├── bootstrap/          组件初始化、运行管理器与 HTTP 服务构造
 │   ├── httpconfig/         HTTP 应用配置加载与环境初始化
+│   ├── httpauth/           命名认证方案与统一身份
+│   │   └── ginauth/        Gin 认证中间件
 │   ├── internal/           biz 内部共用实现
 │   │   └── baseconfig/     各类应用共用的环境与日志配置
 │   └── lockx/              锁契约与业务执行流程
@@ -226,9 +233,87 @@ pixiu/
 
 下面的示例可分别保存为独立程序，安装相应包后运行。每个示例展示一种组合方式；完整配置与边界请阅读对应包文档。
 
+### 最小 HTTP 应用
+
+这个示例无需数据库等外部服务，使用标准 `http.Handler` 提供健康检查，并通过管理器接收停机信号、等待 HTTP 排空，最后关闭共享资源与日志。
+
+将 [`app.yaml`](biz/httpconfig/conf.example/app.yaml) 和 [`http.yaml`](biz/bootstrap/conf.example/http.yaml) 复制到应用的 `conf/` 目录，修改应用名称。保存以下代码为 `main.go`，安装 `biz/bootstrap` 后执行 `go run .`，再访问 `http://127.0.0.1:8888/healthz`，应返回 HTTP 204；在终端按 Ctrl+C 关闭。
+
+<details>
+<summary>展开完整示例（无需外部服务）</summary>
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+
+	"github.com/bpcoder16/pixiu/biz/bootstrap"
+	"github.com/bpcoder16/pixiu/biz/httpconfig"
+	"github.com/bpcoder16/pixiu/lifecycle"
+)
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() (runErr error) {
+	cfg := httpconfig.MustLoadAppConfig("./conf/app.yaml")
+	var resources lifecycle.Stack
+	defer func() {
+		runErr = errors.Join(runErr, resources.Close())
+	}()
+	bootstrap.MustBaseInit(&cfg.AppConfig, &resources)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	manager, err := bootstrap.NewAppManager()
+	if err != nil {
+		return err
+	}
+	service, err := bootstrap.NewHTTPService(mux)
+	if err != nil {
+		return err
+	}
+	if err := manager.Register(service); err != nil {
+		return errors.Join(err, service.Shutdown())
+	}
+	return manager.RunSignals()
+}
+```
+
+</details>
+
+`NewHTTPService` 构造时不监听端口；`RunSignals` 启动服务，并在收到 SIGINT / SIGTERM 时关闭。注册成功的服务由管理器关闭，无需重复登记到资源栈。HTTP 排空默认 15 秒，管理器总关闭期限默认 20 秒；超时后可能仍有未退出的 handler，应用需处理返回错误并尽力清理后退出。共享资源清理时间不计入管理器总期限。
+
+通过 bootstrap 初始化后，业务日志默认写入 `<dir>/<appName>/biz/` 下的 `debug.log`、`info.log`、`wf.log`，分别对应 Debug、Info 和 Warn / Error / Fatal；命名 Logger 增加 `<name>.` 文件前缀。`dir` 默认 `./log`，相对应用启动目录解析；release 输出 Info 及以上，debug/test 输出 Debug 及以上。
+
+`log.hookStd` 省略时默认开启，模板也显式开启：stdout / stderr 原始输出分别追加到 `<dir>/<appName>/std/stdout.log` 和 `stderr.log`，文件不轮转，重定向持续至进程退出。该能力仅支持 Linux/macOS；其他平台或需要保留终端标准输出时，在 `app.yaml` 的 `log` 段显式设置 `hookStd: false`。业务日志仍按上述文件分流。
+
+### Gin 与 OpenAPI 文档
+
+使用 Gin 时，在初始化环境后显式调用 `gin.SetMode(env.RunMode())`，通过 `bootstrap.NewGinEngine()` 构造 Engine，注册业务路由，再将 Engine 传给 `bootstrap.NewHTTPService`。需额外导入 Gin 和 `infra/env`；将 [`gin.yaml`](biz/bootstrap/conf.example/gin.yaml) 放在同一配置目录。文件必须存在，内容为 `{}` 时沿用默认值。
+
+`NewGinEngine` 根据应用环境决定文档路由：
+
+- **debug/test**：自动注册 OpenAPI 与内嵌的 Stoplight Elements。应用须先使用 Swag CLI 生成文档（例如 `swag init -o ./openapi`），并在入口 blank import 生成包；未注册文档时构造返回错误。默认页面为 `/elements`，文档为 `/openapi/doc.json`。
+- **release**：不自动注册文档路由，也不要求生成文档。
+
+多模块应用可向 `NewGinEngine` 传入 `ginx.OpenAPIModule`，以 `Name` 对应 Swag 的命名文档实例，`Title` 作为导航标题。每个模块提供 `/openapi/<Name>.json` 和 `/elements/<Name>`，`/elements` 展示首个模块。生成参数、Bearer 前缀补齐等用法见 [`ginx` 包文档](infra/ginx/doc.go)。
+
+文档路由在 Engine 构造时注册，之后添加的业务中间件不会作用于它们，也不会自动增加认证。需要控制文档访问时，可使用 `ginx.New`，在带认证中间件的路由组调用 `ginx.RegisterOpenAPI`。`gin.yaml` 模板开启完整请求和响应详情；使用文档 UI 时建议关闭 `logResponseInfo`，避免记录完整静态资源。
+
 ### 应用配置与多实例初始化
 
-将 [`app.yaml`](biz/httpconfig/conf.example/app.yaml) 复制到应用的 `conf/app.yaml`。本例还声明五个组件实例，需将对应模板复制到同一配置目录，并填写实际连接信息：
+将 [`app.yaml`](biz/httpconfig/conf.example/app.yaml) 复制到应用的 `conf/app.yaml`。本例声明六个组件实例，需将对应模板复制到同一配置目录，并填写实际连接信息：
 
 | 声明 | 配置文件 | 模板 |
 | --- | --- | --- |
@@ -237,6 +322,7 @@ pixiu/
 | `MustRegisterElasticsearch("search", true)` | `conf/elasticsearch.search.yaml` | [Elasticsearch](biz/bootstrap/conf.example/elasticsearch.example.yaml) |
 | `MustRegisterAliyunOSS("assets", true)` | `conf/aliyunossx.assets.yaml` | [阿里云 OSS](biz/bootstrap/conf.example/aliyunossx.example.yaml) |
 | `MustRegisterAliyunES("search-control", true)` | `conf/aliyunesx.search-control.yaml` | [阿里云 ES 管理端](biz/bootstrap/conf.example/aliyunesx.example.yaml) |
+| `MustRegisterNATS("events", true)` | `conf/nats.events.yaml` | [NATS](biz/bootstrap/conf.example/nats.example.yaml) |
 
 实例名与默认标记只在代码中声明，实例文件不接受 `name` / `isDefault`。Elasticsearch 文件的 `version` 必须与部署主版本一致，支持 7 / 8 / 9；`caCertFile` 相对路径基于配置目录。只需某个组件时，保留对应声明与配置文件即可；未声明的实例不会加载。
 
@@ -271,6 +357,7 @@ func main() {
 	bootstrap.MustRegisterElasticsearch("search", true)
 	bootstrap.MustRegisterAliyunOSS("assets", true)
 	bootstrap.MustRegisterAliyunES("search-control", true)
+	bootstrap.MustRegisterNATS("events", true)
 	bootstrap.MustBaseInit(&cfg.AppConfig, &resources)
 	logit.Info(context.Background(), "应用初始化完成")
 }
@@ -280,11 +367,21 @@ func main() {
 
 各组件独立选择默认实例，`Default()` 与 `Named(默认名称)` 返回同一客户端。共享组件由 bootstrap 各登记一次 `CloseAll`，业务无需重复登记单个客户端关闭；应用退出前先停止并等待业务任务，再关闭资源栈。配置或初始化失败会 panic，提前登记的 defer 负责回收已创建资源；初始化只在启动阶段串行执行，失败后不支持重试。
 
+此示例只展示初始化；常驻 HTTP 应用还需接入上面的服务管理器。使用 NATS 消费时，在回调依赖就绪后注册订阅，消费者在启动时保存客户端引用，排空期间不再查询 `Default` / `Named`。先停止并等待外部生产者，再由资源栈排空 NATS，随后关闭数据库等依赖，日志最后关闭。
+
 OSS 文件必填 `region`、`bucket`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`requestTimeout` 默认 60s，`slowThreshold` 默认 500ms，`logRequests` 默认关闭。初始化不联网校验 Bucket 或权限，业务通过 `ossx.Default()` / `Named(name)` 取得固定 Bucket 的实例。
 
 阿里云 ES 管理端文件必填 `region`、`instanceID`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`requestTimeout` 默认 60s，`slowThreshold` 默认 200ms，`logRequests` 默认关闭。初始化不联网验证实例或权限，业务通过 `esx.Default()` / `Named(name)` 取得固定 InstanceID 的客户端。
 
 Elasticsearch 经 bootstrap 创建时，省略 `logRequests` 默认开启结果日志，`logDetails` 默认关闭；这与直接调用版本适配包 `New` 默认关闭结果日志不同。Redis 模板显式开启 `logCommands`，省略该字段则关闭正常命令日志，慢调用和错误日志仍会输出。完整参数与边界见 [`bootstrap` 包文档](biz/bootstrap/doc.go)。
+
+### 显式执行 MySQL 表结构迁移
+
+项目维护 `[]schemamigrate.Table` 模型清单，在 `MustBaseInit` 完成后、业务服务启动前调用 `bootstrap.RunMySQLMigration("orders", tables)`，并检查返回的报告与错误。名称对应已声明的 MySQL 实例，迁移在其主库执行；失败时停止启动，不忽略错误后开放业务入口。
+
+将 [`migrate.example.yaml`](biz/bootstrap/conf.example/migrate.example.yaml) 复制为 `conf/migrate.orders.yaml`。调用迁移入口时文件必须存在，`enabled` 默认 false，显式开启后执行；`timeout` 默认 5 分钟。迁移不会自动挂到 `MustBaseInit` 或连接构造中，关闭或空清单不获取数据库。
+
+每张表通过 `Model` 登记，可选 `Name` 指定物理表名、`Comment` 管理 MySQL 表注释。只迁移显式登记的表，关联表和多对多中间表须单独登记，不自动创建关联外键。没有跨实例迁移锁，发布时应避免多实例同时执行；DDL 失败或超时可能已部分生效，不能保证整批回滚。完整样例与报告语义见 [`schemamigrate` 包文档](infra/schemamigrate/doc.go)。
 
 ### 日志写入轮转文件
 
@@ -574,6 +671,8 @@ func run() error {
 
 `Sign` 要求提供 `exp`，原样签名，不补写声明或检查时间；`Verify` 验证签名并要求 `exp` 存在、校验过期时间，存在 `nbf` 时校验生效时间；时间校验可通过 `Leeway` 配置容差。RS256 / PS256 使用至少 2048 位的 RSA 密钥，ES256 使用 P-256；非对称签发通过 `PrivateKeyPEM` 配置私钥，验签通过 `PublicKeyPEM` 配置公钥，不传 `Secret`。自定义 claims 与完整密钥格式见 [`jwtx` 包文档](infra/jwtx/doc.go)。
 
+接入 HTTP 认证时，应用实现 [`httpauth.Authenticator`](biz/httpauth/doc.go)，通过 `httpauth.BearerToken` 提取凭证，再调用 jwtx 验签器的 `Verify`，成功后返回 `Principal`。按名称注册认证方案，再用 [`ginauth`](biz/httpauth/ginauth/doc.go) 的 `Require(name)` 绑定路由；业务从请求 Context 读取身份。刷新、撤销和授权规则由应用实现，认证成功不自动代表具备业务权限。
+
 更多示例：[`ginx` 请求处理](infra/ginx/doc.go)、[`httpserver` 启停](infra/httpserver/doc.go)、[`lrucache` 缓存](infra/lrucache/doc.go)、[`mysqlx` 主从查询](infra/mysqlx/doc.go)、[`natsx` 消息通信](infra/natsx/doc.go)、[`redislock` 锁流程](biz/lockx/redislock/doc.go)。
 
 ## 使用约定
@@ -590,7 +689,7 @@ func run() error {
 | 日志详情 | 各适配包的日志开关与默认值见包文档。开启 Header / Body / SQL / 命令参数等详情时，按包契约保留完整内容，应用需决定记录范围及敏感数据策略。 |
 | 数据库读写 | 事务与要求读己之写的查询显式使用主库；可接受延迟的读取可选择从库。模型迁移由应用决定。 |
 | Redis 锁 | 内置锁使用固定租期，不自动续租。同一资源的竞争者使用相同实现与协议，业务自行响应取消，并结合幂等、事务或数据端版本约束保护结果。 |
-| JWT 验签 | 实例固定算法与密钥。每次验签使用新的空 claims 对象，仅在 `Verify` 返回 nil 后使用身份字段；失败时丢弃可能已解码的不可信内容。会话刷新、撤销与 HTTP 认证适配由应用处理。 |
+| JWT 验签 | 实例固定算法与密钥。每次验签使用新的空 claims 对象，仅在 `Verify` 返回 nil 后使用身份字段；失败时丢弃可能已解码的不可信内容。HTTP 认证可组合 httpauth / ginauth，会话刷新、撤销与授权规则由应用处理。 |
 | 应用退出 | 先停止入口与生产者，等待任务结束，再关闭下游资源，最后关闭日志。`lifecycle.Stack` 逆序关闭资源，所以日志关闭函数应先登记。 |
 
 文件轮转当前不提供 gzip 压缩；系统时间变化和目录中的未来时段文件不在轮转正确性保证范围。
