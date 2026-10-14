@@ -23,9 +23,9 @@
 | `LICENSE` | `d45c17f7ecc80e0deab3372ff352c7d00b7d573755c3c672088c21a376673698` |
 | `web-components.min.js.LICENSE.txt` | `58b2f880c6e49cc6eb9ef1b8752a22db028c373c3acf6f7ebeb1d6316c7c3294` |
 
-JS/CSS 通过 Go embed 编译进程序。不声明模块时，页面位于 `/elements`，读取同一路由组的 `/openapi/doc.json`。
-声明命名模块时，`/elements/<Name>` 分别读取 `/openapi/<Name>.json`，页面顶部提供模块导航，`/elements` 展示首个模块。所有模块共用 `/elements/assets/` 的静态资源。
-项目加载脚本位于 `../openapi.js`，通过 `/elements/assets/openapi.js` 提供。
+JS/CSS 通过 Go embed 编译进程序。不声明模块时，页面位于 `/docs`，读取同一路由组的 `/openapi/doc.json`。
+声明命名模块时，`/docs/<Name>` 分别读取 `/openapi/<Name>.json`，页面顶部提供模块导航，`/docs` 展示首个模块。所有模块共用 `/docs/assets/` 的静态资源；旧 `/elements` 及其子路径不注册，也不重定向。
+项目加载脚本位于 `../openapi.js`，通过 `/docs/assets/openapi.js` 提供。
 该脚本按浏览器最终获取文档的地址补齐 Swagger 2.0 缺省或空的 `host/schemes`，使在线调试保留 `basePath`；显式服务器配置不变。
 补齐只影响页面内副本，JSON 端点保持原始文档；文档 URL 仍传给 Elements 用于解析相对引用。
 使用 hash 导航，刷新接口详情页不需要服务端路径回退；启用在线调试，不配置外部代理。

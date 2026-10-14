@@ -57,10 +57,10 @@ func testRegisterOpenAPI(t *testing.T) {
 			contentType string
 		}{
 			{"/openapi/doc.json", document, "application/json"},
-			{"/elements", "<elements-api", "text/html"},
-			{"/elements/assets/web-components.min.js", "elements-api", "javascript"},
-			{"/elements/assets/styles.min.css", ".sl-elements", "text/css"},
-			{"/elements/assets/openapi.js", "apiDescriptionDocument", "javascript"},
+			{"/docs", "<elements-api", "text/html"},
+			{"/docs/assets/web-components.min.js", "elements-api", "javascript"},
+			{"/docs/assets/styles.min.css", ".sl-elements", "text/css"},
+			{"/docs/assets/openapi.js", "apiDescriptionDocument", "javascript"},
 		} {
 			r := httptest.NewRecorder()
 			router.ServeHTTP(r, httptest.NewRequest(http.MethodGet, prefix+tc.path, nil))
@@ -73,13 +73,13 @@ func testRegisterOpenAPI(t *testing.T) {
 			if tc.path == "/openapi/doc.json" && r.Body.String() != document {
 				t.Fatal("JSON 端点不应改写原始文档的服务器字段")
 			}
-			if tc.path == "/elements" {
+			if tc.path == "/docs" {
 				body := r.Body.String()
 				for _, want := range []string{
 					`data-document-url="` + prefix + `/openapi/doc.json"`,
-					`src="` + prefix + `/elements/assets/web-components.min.js"`,
-					`src="` + prefix + `/elements/assets/openapi.js"`,
-					`href="` + prefix + `/elements/assets/styles.min.css"`,
+					`src="` + prefix + `/docs/assets/web-components.min.js"`,
+					`src="` + prefix + `/docs/assets/openapi.js"`,
+					`href="` + prefix + `/docs/assets/styles.min.css"`,
 					`router="hash"`,
 				} {
 					if !strings.Contains(body, want) {
@@ -96,12 +96,20 @@ func testRegisterOpenAPI(t *testing.T) {
 		method, path string
 		status       int
 	}{
-		{http.MethodGet, "/docs", http.StatusNotFound},
+		{http.MethodGet, "/elements", http.StatusNotFound},
+		{http.MethodGet, "/elements/", http.StatusNotFound},
+		{http.MethodGet, "/elements/assets/web-components.min.js", http.StatusNotFound},
+		{http.MethodGet, "/elements/assets/styles.min.css", http.StatusNotFound},
+		{http.MethodGet, "/elements/assets/openapi.js", http.StatusNotFound},
+		{http.MethodPost, "/elements", http.StatusNotFound},
+		{http.MethodGet, "/internal/elements", http.StatusNotFound},
+		{http.MethodGet, "/internal/elements/assets/web-components.min.js", http.StatusNotFound},
+		{http.MethodGet, "/internal/elements/assets/styles.min.css", http.StatusNotFound},
+		{http.MethodGet, "/internal/elements/assets/openapi.js", http.StatusNotFound},
 		{http.MethodGet, "/docs/", http.StatusNotFound},
 		{http.MethodGet, "/docs/assets/api-reference.js", http.StatusNotFound},
 		{http.MethodGet, "/docs/assets/missing.js", http.StatusNotFound},
-		{http.MethodPost, "/docs", http.StatusNotFound},
-		{http.MethodGet, "/internal/docs", http.StatusNotFound},
+		{http.MethodPost, "/docs", http.StatusMethodNotAllowed},
 		{http.MethodGet, "/internal/docs/assets/api-reference.js", http.StatusNotFound},
 		{http.MethodGet, "/swagger/index.html", http.StatusNotFound},
 		{http.MethodGet, "/swagger/doc.json", http.StatusNotFound},
@@ -111,12 +119,9 @@ func testRegisterOpenAPI(t *testing.T) {
 		{http.MethodGet, "/internal/swagger/doc.json", http.StatusNotFound},
 		{http.MethodGet, "/openapi/doc.json/", http.StatusNotFound},
 		{http.MethodPost, "/openapi/doc.json", http.StatusMethodNotAllowed},
-		{http.MethodGet, "/elements/", http.StatusNotFound},
-		{http.MethodGet, "/elements/assets/missing.js", http.StatusNotFound},
-		{http.MethodPost, "/elements", http.StatusMethodNotAllowed},
-		{http.MethodPost, "/elements/assets/web-components.min.js", http.StatusMethodNotAllowed},
-		{http.MethodPost, "/elements/assets/styles.min.css", http.StatusMethodNotAllowed},
-		{http.MethodPost, "/elements/assets/openapi.js", http.StatusMethodNotAllowed},
+		{http.MethodPost, "/docs/assets/web-components.min.js", http.StatusMethodNotAllowed},
+		{http.MethodPost, "/docs/assets/styles.min.css", http.StatusMethodNotAllowed},
+		{http.MethodPost, "/docs/assets/openapi.js", http.StatusMethodNotAllowed},
 	} {
 		r := httptest.NewRecorder()
 		router.ServeHTTP(r, httptest.NewRequest(tc.method, tc.path, nil))

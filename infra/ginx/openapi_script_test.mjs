@@ -10,7 +10,7 @@ async function loadDocument(spec, options = {}) {
   const requests = [];
   await vm.runInNewContext(source, {
     URL,
-    window: { location: { href: "https://docs.example:8443/internal/elements#/operations/ping" } },
+    window: { location: { href: "https://docs.example:8443/internal/docs#/operations/ping" } },
     document: {
       querySelector: () => element,
       getElementById: () => error,

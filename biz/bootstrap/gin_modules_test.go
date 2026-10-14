@@ -41,7 +41,7 @@ func TestGinEngineOpenAPIModules(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				for _, path := range []string{"/elements", "/elements/app", "/elements/admin", "/openapi/app.json", "/openapi/admin.json", "/elements/assets/openapi.js"} {
+				for _, path := range []string{"/docs", "/docs/app", "/docs/admin", "/openapi/app.json", "/openapi/admin.json", "/docs/assets/openapi.js"} {
 					response := httptest.NewRecorder()
 					engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 					want := http.StatusOK

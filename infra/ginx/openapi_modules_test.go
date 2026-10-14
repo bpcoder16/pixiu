@@ -33,22 +33,22 @@ func TestRegisterOpenAPIModules(t *testing.T) {
 			for _, tc := range []struct{ path, contains string }{
 				{"/openapi/app.json", app},
 				{"/openapi/admin.json", admin},
-				{"/elements", `data-document-url="` + prefix + `/openapi/app.json"`},
-				{"/elements/app", `data-document-url="` + prefix + `/openapi/app.json"`},
-				{"/elements/admin", `data-document-url="` + prefix + `/openapi/admin.json"`},
-				{"/elements/assets/openapi.js", "apiDescriptionDocument"},
+				{"/docs", `data-document-url="` + prefix + `/openapi/app.json"`},
+				{"/docs/app", `data-document-url="` + prefix + `/openapi/app.json"`},
+				{"/docs/admin", `data-document-url="` + prefix + `/openapi/admin.json"`},
+				{"/docs/assets/openapi.js", "apiDescriptionDocument"},
 			} {
 				response := httptest.NewRecorder()
 				router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, prefix+tc.path, nil))
 				if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), tc.contains) {
 					t.Fatalf("%s%s = %d %s", prefix, tc.path, response.Code, response.Body.String())
 				}
-				if tc.path == "/elements/admin" {
+				if tc.path == "/docs/admin" {
 					for _, want := range []string{
-						`href="` + prefix + `/elements/app"`,
-						`href="` + prefix + `/elements/admin" aria-current="page"`,
+						`href="` + prefix + `/docs/app"`,
+						`href="` + prefix + `/docs/admin" aria-current="page"`,
 						"Admin &lt;&amp;&gt;",
-						`src="` + prefix + `/elements/assets/web-components.min.js"`,
+						`src="` + prefix + `/docs/assets/web-components.min.js"`,
 					} {
 						if !strings.Contains(response.Body.String(), want) {
 							t.Fatalf("页面缺少导航、转义或共享资源: %s", want)
@@ -56,11 +56,15 @@ func TestRegisterOpenAPIModules(t *testing.T) {
 					}
 				}
 			}
-			for _, path := range []string{"/elements/missing", "/openapi/missing.json", "/openapi/doc.json"} {
+			for _, path := range []string{
+				"/docs/missing", "/openapi/missing.json", "/openapi/doc.json",
+				"/elements", "/elements/app", "/elements/admin",
+				"/elements/assets/web-components.min.js", "/elements/assets/styles.min.css", "/elements/assets/openapi.js",
+			} {
 				response := httptest.NewRecorder()
 				router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, prefix+path, nil))
 				if response.Code != http.StatusNotFound {
-					t.Fatalf("未声明的模块 %s = %d", path, response.Code)
+					t.Fatalf("未注册的文档路径 %s%s = %d，预期 404", prefix, path, response.Code)
 				}
 			}
 		}

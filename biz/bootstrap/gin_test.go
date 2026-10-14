@@ -73,8 +73,8 @@ func TestGinEngineOpenAPIRunModes(t *testing.T) {
 					wantStatus = http.StatusNotFound
 				}
 				for _, path := range []string{
-					"/openapi/doc.json", "/elements",
-					"/elements/assets/web-components.min.js", "/elements/assets/styles.min.css", "/elements/assets/openapi.js",
+					"/openapi/doc.json", "/docs",
+					"/docs/assets/web-components.min.js", "/docs/assets/styles.min.css", "/docs/assets/openapi.js",
 				} {
 					r := httptest.NewRecorder()
 					engine.ServeHTTP(r, httptest.NewRequest(http.MethodGet, path, nil))
@@ -85,7 +85,10 @@ func TestGinEngineOpenAPIRunModes(t *testing.T) {
 						t.Fatalf("返回了错误的文档内容: %s", r.Body.String())
 					}
 				}
-				for _, path := range []string{"/docs", "/docs/assets/api-reference.js", "/swagger/index.html", "/swagger/doc.json", "/swagger/swagger-ui.css", "/swagger/swagger-ui-bundle.js"} {
+				for _, path := range []string{
+					"/elements", "/elements/assets/web-components.min.js", "/elements/assets/styles.min.css", "/elements/assets/openapi.js",
+					"/docs/assets/api-reference.js", "/swagger/index.html", "/swagger/doc.json", "/swagger/swagger-ui.css", "/swagger/swagger-ui-bundle.js",
+				} {
 					r := httptest.NewRecorder()
 					engine.ServeHTTP(r, httptest.NewRequest(http.MethodGet, path, nil))
 					if r.Code != http.StatusNotFound {

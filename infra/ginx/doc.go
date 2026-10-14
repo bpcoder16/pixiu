@@ -40,7 +40,7 @@
 //		return err
 //	}
 //
-// 不传模块时，根路由组提供 /elements，页面读取默认实例的 /openapi/doc.json。
+// 不传模块时，根路由组提供 /docs，页面读取默认实例的 /openapi/doc.json。
 // 需要多个模块时，传入命名文档（由 swag init --instanceName 生成）：
 //
 //	if err := ginx.RegisterOpenAPI(&router.RouterGroup,
@@ -50,10 +50,11 @@
 //		return err
 //	}
 //
-// 模块模式提供 /openapi/<Name>.json、/elements/<Name> 和顶部切换导航，/elements 展示首个模块。
+// 模块模式提供 /openapi/<Name>.json、/docs/<Name> 和顶部切换导航，/docs 展示首个模块。
 // 模块名非空且只允许 ASCII 字母、数字、下划线和连字符，名称重复时返回错误。
 // Title 为空时使用 Name；页面文字和链接均按 HTML 转义。
-// Elements 资源及加载脚本位于 /elements/assets/ 下的 web-components.min.js、styles.min.css 和 openapi.js。
+// Elements 资源及加载脚本位于 /docs/assets/ 下的 web-components.min.js、styles.min.css 和 openapi.js。
+// 不注册旧 /elements 路径，也不提供重定向。
 // Elements 使用 hash 导航，刷新详情页不需要服务端路径回退。
 // 也可传 router.Group("/internal")，文档与资源 URL 随组前缀调整；组中间件负责访问控制。
 // 全部模块通过校验且读取成功后才注册路由，文档缺失时返回错误且不添加路由；生成物须由应用自行维护。

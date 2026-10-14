@@ -32,8 +32,9 @@ type OpenAPIModule struct {
 var openAPIModuleName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // RegisterOpenAPI 注册 Swag 文档与 Elements 页面。
-// 未传 modules 时沿用默认文档的 /openapi/doc.json 和 /elements。
-// 传入模块时提供 /openapi/<Name>.json、/elements/<Name> 和模块导航，/elements 展示首个模块。
+// 未传 modules 时提供默认文档的 /openapi/doc.json 和 /docs。
+// 传入模块时提供 /openapi/<Name>.json、/docs/<Name> 和模块导航，/docs 展示首个模块。
+// 页面与静态资源均位于 /docs 下，不注册 /elements 或重定向。
 // 调用方须先通过 blank import 注册全部文档；校验或读取失败时不添加任何路由。
 // 本函数只在启动阶段调用，不读取配置，也不自动增加认证；访问控制由调用方的路由组负责。
 func RegisterOpenAPI(r *gin.RouterGroup, modules ...OpenAPIModule) error {
@@ -59,10 +60,10 @@ func RegisterOpenAPI(r *gin.RouterGroup, modules ...OpenAPIModule) error {
 		documents[i] = []byte(document)
 	}
 	for i, module := range modules {
-		documentPath, pagePath := "/openapi/doc.json", "/elements"
+		documentPath, pagePath := "/openapi/doc.json", "/docs"
 		var navigation string
 		if named {
-			documentPath, pagePath = "/openapi/"+module.Name+".json", "/elements/"+module.Name
+			documentPath, pagePath = "/openapi/"+module.Name+".json", "/docs/"+module.Name
 			navigation = openAPINavigation(r.BasePath(), modules, module.Name)
 		}
 		documentJSON := documents[i]
@@ -72,9 +73,9 @@ func RegisterOpenAPI(r *gin.RouterGroup, modules ...OpenAPIModule) error {
 		// 所有动态文字和 URL 均转义；模块页共用静态资源和加载脚本。
 		elementsPage := []byte(fmt.Sprintf(elementsHTML,
 			html.EscapeString(module.title()),
-			html.EscapeString(path.Join(r.BasePath(), "elements/assets/styles.min.css")),
-			html.EscapeString(path.Join(r.BasePath(), "elements/assets/web-components.min.js")),
-			html.EscapeString(path.Join(r.BasePath(), "elements/assets/openapi.js")),
+			html.EscapeString(path.Join(r.BasePath(), "docs/assets/styles.min.css")),
+			html.EscapeString(path.Join(r.BasePath(), "docs/assets/web-components.min.js")),
+			html.EscapeString(path.Join(r.BasePath(), "docs/assets/openapi.js")),
 			navigation,
 			html.EscapeString(path.Join(r.BasePath(), documentPath)),
 		))
@@ -83,16 +84,16 @@ func RegisterOpenAPI(r *gin.RouterGroup, modules ...OpenAPIModule) error {
 		}
 		r.GET(pagePath, pageHandler)
 		if named && i == 0 {
-			r.GET("/elements", pageHandler)
+			r.GET("/docs", pageHandler)
 		}
 	}
-	r.GET("/elements/assets/web-components.min.js", func(c *gin.Context) {
+	r.GET("/docs/assets/web-components.min.js", func(c *gin.Context) {
 		c.Data(http.StatusOK, "application/javascript; charset=utf-8", elementsScript)
 	})
-	r.GET("/elements/assets/styles.min.css", func(c *gin.Context) {
+	r.GET("/docs/assets/styles.min.css", func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/css; charset=utf-8", elementsStyles)
 	})
-	r.GET("/elements/assets/openapi.js", func(c *gin.Context) {
+	r.GET("/docs/assets/openapi.js", func(c *gin.Context) {
 		c.Data(http.StatusOK, "application/javascript; charset=utf-8", elementsLoader)
 	})
 	return nil
@@ -114,7 +115,7 @@ func openAPINavigation(basePath string, modules []OpenAPIModule, selected string
 			current = ` aria-current="page"`
 		}
 		fmt.Fprintf(&nav, `<a href="%s"%s>%s</a>`,
-			html.EscapeString(path.Join(basePath, "elements", module.Name)), current, html.EscapeString(module.title()))
+			html.EscapeString(path.Join(basePath, "docs", module.Name)), current, html.EscapeString(module.title()))
 	}
 	nav.WriteString(`</nav>`)
 	return nav.String()
