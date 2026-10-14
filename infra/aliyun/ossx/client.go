@@ -62,6 +62,9 @@ func New(cfg Config, opts ...Option) (*Client, error) {
 	if err := aliyun.ValidateConfig(cfg.Name, cfg.Region, cfg.Endpoint, cfg.RequestTimeout, cfg.SlowThreshold); err != nil {
 		return nil, fmt.Errorf("ossx: %w", err)
 	}
+	if !oss.IsValidRegion(cfg.Region) {
+		return nil, fmt.Errorf("ossx: %w", oss.NewErrParamInvalid("Region"))
+	}
 	if !oss.IsValidBucketName(&cfg.Bucket) {
 		return nil, fmt.Errorf("ossx: %w", oss.NewErrParamInvalid("Bucket"))
 	}

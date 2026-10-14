@@ -69,6 +69,26 @@ func TestConfigValidation(t *testing.T) {
 	}
 }
 
+func TestRegionValidation(t *testing.T) {
+	for _, endpoint := range []string{"", "http://127.0.0.1:1"} {
+		for _, region := range []string{"CN-Hangzhou", "cn_hangzhou", "cn/hangzhou"} {
+			t.Run(endpoint+"/"+region, func(t *testing.T) {
+				cfg := testConfig(endpoint)
+				cfg.Region = region
+				c, err := New(cfg)
+				if err == nil {
+					_ = c.Close()
+					t.Fatal("非法 Region 应在初始化时拒绝，自定义 Endpoint 不应跳过校验")
+				}
+				var paramErr oss.InvalidParamError
+				if !errors.As(err, &paramErr) || paramErr.Field() != "Region" {
+					t.Fatalf("应返回指向 Region 的 SDK 参数错误: %v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestBucketAndCredentialValidation(t *testing.T) {
 	for _, bucket := range []string{"", "INVALID BUCKET", "ab", "-bucket"} {
 		t.Run("bucket="+bucket, func(t *testing.T) {

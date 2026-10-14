@@ -262,3 +262,30 @@ func TestCancellationAndTimeout(t *testing.T) {
 		})
 	}
 }
+
+func TestErrorResponseBodyTimeoutPreservesErrorChain(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("x-oss-request-id", "timeout-id")
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(http.StatusForbidden)
+		// 先发送错误响应头，再阻塞正文，覆盖 SDK 已开始解析服务错误的超时路径。
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer s.Close()
+	cfg := testConfig(s.URL)
+	cfg.RequestTimeout = 200 * time.Millisecond
+	c := newTestClient(t, cfg)
+	_, err := c.PutObject(context.Background(), PutObjectRequest{
+		Key:  "test.txt",
+		Body: strings.NewReader("data"),
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("错误响应正文超时应保留 context 原因: %v", err)
+	}
+	var sdkErr *oss.ServiceError
+	if !errors.As(err, &sdkErr) || sdkErr.StatusCode != http.StatusForbidden || sdkErr.RequestID != "timeout-id" {
+		t.Fatalf("补充超时原因后仍须保留 SDK 错误及响应信息: %v", err)
+	}
+}

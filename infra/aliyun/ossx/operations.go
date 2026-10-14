@@ -112,6 +112,10 @@ func (c *Client) put(ctx context.Context, operation string, req PutObjectRequest
 		}
 	}
 	if err != nil {
+		// SDK 解析错误响应正文时可能只保留取消原因的文本，补充原因但不丢弃 SDK 错误链。
+		if ctxErr := callCtx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
+			err = errors.Join(err, ctxErr)
+		}
 		return result, fmt.Errorf("ossx: %s: %w", operation, err)
 	}
 	return result, nil

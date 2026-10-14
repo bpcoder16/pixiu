@@ -2,12 +2,13 @@
 // 导入路径为 github.com/bpcoder16/pixiu/infra/aliyun/ossx。
 // 配置、凭据、连接池和命名注册表独立于 esx，可分别使用不同账号。
 // Name、Region、Bucket 必填；每个实例固定一个 Bucket，多 Bucket 创建多个实例。
+// New 按 SDK 规则校验 Region 语法和 Bucket 命名。
 // 固定 AK/SK 通过 AccessKeyID、AccessKeySecret 提供，New 内部构造凭据；
 // 也可手动注入 Credential，但与 AK/SK 字段互斥。RequestTimeout 默认 60 秒，SlowThreshold 默认 500 毫秒。
 // New 只构造，不联网验活；Endpoint 可选，须为不含凭据、查询或非根路径的 HTTP(S) URL。
 // 不自动重试或跟随重定向，保留 SDK 的 CRC64 校验；PutObject 不关闭调用方的 Reader。
 // 普通 PUT 遵循 OSS 单对象上传限制，不提供分片上传；Key 原样传递，不改变对象 ACL。
-// SDK 错误可用 errors.As 识别，超时不代表远端没有写入。
+// SDK 错误可用 errors.As 识别；失败时保留 context 取消或超时原因供 errors.Is 判定，超时不代表远端没有写入。
 //
 // OptLogRequests(true) 开启脱敏结果日志，默认关闭；不提供正文日志。
 // logit.WithStart(ctx) 启用请求级耗时，登记与结果日志开关无关。
