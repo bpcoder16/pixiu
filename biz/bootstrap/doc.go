@@ -188,6 +188,7 @@
 // 项目可在 MustBaseInit 后、业务启动前调用 RunMySQLMigration(name, tables)，
 // tables 使用 infra/schemamigrate.Table；严格读取 migrate.<name>.yaml，文件必需。
 // enabled 默认 false；开启后逐表执行 GORM AutoMigrate，内部创建 Context，timeout 默认 5m。
+// 只迁移显式登记的表，忽略模型关联及其外键；关联表和多对多中间表须单独登记。
 // 关闭或空清单不取数据库；迁移核心从 mysqlx.Named(name) 获取主库，失败返回错误与部分报告。
 // 迁移不会自动挂到 MustBaseInit 或连接构造中；没有迁移锁，发布时避免多实例同时执行。
 // 模板见 conf.example/migrate.example.yaml，详细契约见 docs/schemamigrate-design.md。

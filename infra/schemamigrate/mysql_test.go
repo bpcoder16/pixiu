@@ -13,6 +13,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"gorm.io/gorm/schema"
 )
 
 type queryLog struct {
@@ -88,7 +89,7 @@ func TestMySQLAutoMigrateShardsAndComments(t *testing.T) {
 		{
 			Model:     &card{},
 			Name:      "cards_01",
-			Comment:   `卡片'注释\路径?`,
+			Comment:   `卡片'注释\路径? @Name @Alias @Raw`,
 			Charset:   "utf8mb4",
 			Collation: "utf8mb4_0900_ai_ci",
 		},
@@ -112,7 +113,7 @@ func TestMySQLAutoMigrateShardsAndComments(t *testing.T) {
 			t.Fatalf("不应依赖指纹状态或迁移锁: %s", query)
 		}
 	}
-	tables[0].Comment = `新注释'\?`
+	tables[0].Comment = `新注释'\? @Name @Alias @Raw`
 	// 在同一连接上更改 SQL mode，验证注释转义不依赖连接池恰好归还同一连接。
 	if err := db.Connection(func(conn *gorm.DB) error {
 		var original string
@@ -152,5 +153,70 @@ func TestMySQLMigrationFailureReturnsPartialReport(t *testing.T) {
 	}
 	if !db.Migrator().HasTable("first") || db.Migrator().HasTable("later") {
 		t.Fatal("应保留已完成结果，并在失败后停止")
+	}
+}
+
+type migrationParent struct {
+	ID    uint64 `gorm:"primaryKey"`
+	Title string `gorm:"size:64"`
+}
+
+type migrationChild struct {
+	ID       uint64 `gorm:"primaryKey"`
+	ParentID uint64
+	Parent   migrationParent
+}
+
+func TestMySQLOnlyMigratesDeclarationsWithOwnOptions(t *testing.T) {
+	for _, configured := range []int{0, 1} {
+		t.Run([]string{"child configured", "parent configured"}[configured], func(t *testing.T) {
+			db, _ := liveDB(t)
+			master := func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }
+			// 关联表可以后登记；每张表只使用自己的建表选项。
+			tables := []Table{{Model: &migrationChild{}}, {Model: &migrationParent{}}}
+			tables[configured].Charset = "latin1"
+			tables[configured].Collation = "latin1_swedish_ci"
+			if _, err := Apply(context.Background(), master, tables[:1]); err != nil {
+				t.Fatal(err)
+			}
+			if db.Migrator().HasTable(&migrationParent{}) {
+				t.Fatal("不应创建未登记的关联表")
+			}
+			for range 2 {
+				report, err := Apply(context.Background(), master, tables)
+				if err != nil || len(report.Tables) != 2 || report.Tables[0].Name != "migration_children" || report.Tables[1].Name != "migration_parents" {
+					t.Fatalf("应按清单顺序迁移显式登记的表: %+v %v", report, err)
+				}
+			}
+			for i, name := range []string{"migration_children", "migration_parents"} {
+				want := "utf8mb4_0900_ai_ci"
+				if i == configured {
+					want = "latin1_swedish_ci"
+				}
+				var actual string
+				if err := db.Raw("SELECT TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?", name).Scan(&actual).Error; err != nil || actual != want {
+					t.Fatalf("表 %s 排序规则应为 %s，实际为 %q: %v", name, want, actual, err)
+				}
+			}
+			if db.Migrator().HasConstraint(&migrationChild{}, "Parent") {
+				t.Fatal("重复迁移已有表也不应自动创建关联外键")
+			}
+		})
+	}
+}
+
+func TestMySQLRejectsCurrentDatabasePrefixBeforeSQL(t *testing.T) {
+	db, log := liveDB(t)
+	db.NamingStrategy = schema.NamingStrategy{TablePrefix: db.Migrator().CurrentDatabase() + "."}
+	log.take()
+	report, err := Apply(context.Background(), func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }, []Table{
+		{Model: &migrationParent{}, Name: "untouched"},
+		{Model: &migrationParent{}, Comment: "带当前库前缀的表"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "table name") || len(report.Tables) != 0 {
+		t.Fatalf("当前库前缀也应在预检时拒绝: %+v %v", report, err)
+	}
+	if queries := log.take(); len(queries) != 0 {
+		t.Fatalf("表名预检不应查询当前库或执行 DDL: %v", queries)
 	}
 }

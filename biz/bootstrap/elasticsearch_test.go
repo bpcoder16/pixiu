@@ -251,7 +251,7 @@ func TestElasticsearchVersionsTemplatesAndLifecycle(t *testing.T) {
 				cfg := loadLogConfig(t, "release", "log:\n  format: text\n")
 				var servers []*bootstrapESServer
 				for _, version := range []int{7, 8, 9} {
-					s := newBootstrapESServer(t, version, true, "Basic Yml1Y2FyZHM6c2VjcmV0", 0)
+					s := newBootstrapESServer(t, version, true, "Basic dGVzdHVzZXI6c2VjcmV0", 0)
 					servers = append(servers, s)
 					cert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: s.Certificate().Raw})
 					certPath := filepath.Join(env.ConfigDirPath(), fmt.Sprintf("ca%d.pem", version))
@@ -263,7 +263,7 @@ func TestElasticsearchVersionsTemplatesAndLifecycle(t *testing.T) {
 					}
 					content := strings.Replace(string(template), "version: 8", fmt.Sprintf("version: %d", version), 1)
 					content = strings.Replace(content, "https://es.example.com:9200", s.URL, 1)
-					content = strings.Replace(content, `username: ""`, `username: "biucards"`, 1)
+					content = strings.Replace(content, `username: ""`, `username: "testuser"`, 1)
 					content = strings.Replace(content, `password: ""`, `password: "secret"`, 1)
 					content = strings.Replace(content, `caCertFile: ""`, fmt.Sprintf("caCertFile: %q", certPath), 1)
 					name := fmt.Sprintf("v%d", version)

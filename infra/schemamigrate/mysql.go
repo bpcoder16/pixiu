@@ -35,7 +35,7 @@ func tableOptions(db *gorm.DB, table Table) (string, error) {
 	return options.String(), nil
 }
 
-// 与 decard01 一样单独维护表注释；只有注释变化时才执行 ALTER TABLE。
+// 单独维护表注释；只有注释变化时才执行 ALTER TABLE。
 func ensureMySQLComment(db *gorm.DB, name, comment string) error {
 	update := func(conn *gorm.DB) error {
 		var rows []struct {
@@ -58,7 +58,8 @@ WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`, name).Scan(&rows).Error; er
 			literal = strings.ReplaceAll(literal, `\`, `\\`)
 		}
 		literal = strings.ReplaceAll(literal, "'", "''")
-		quotedName := "`" + strings.ReplaceAll(name, "`", "``") + "`"
+		// 不向 Exec 传结构体参数，避免注释中的 @Name 等文本被当成命名参数替换。
+		quotedName := conn.Statement.Quote(name)
 		return conn.Exec("ALTER TABLE " + quotedName + " COMMENT = '" + literal + "'").Error
 	}
 	if _, pinned := db.Statement.ConnPool.(*sql.Conn); pinned {

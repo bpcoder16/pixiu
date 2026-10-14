@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"gorm.io/gorm"
 )
 
 // Table 声明项目维护的表。Name 为空时沿用 GORM 命名；非空时用于指定物理分表。
+// 只迁移显式登记的表；最终表名不得包含点号，不支持库名或 schema 限定名。
 // Comment、Charset、Collation 为可选 MySQL 设置；空 Comment 表示不管理表注释。
 // Charset/Collation 仅用于建表，不转换已有表。
 type Table struct {
@@ -46,7 +48,7 @@ type declaration struct {
 var identifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
 // Apply 通过已有主库执行 GORM AutoMigrate，不创建连接池、状态表或迁移锁。
-// 项目只登记 Model，迁移策略集中在本包，后续可在不改变项目入口的前提下优化。
+// 仅按清单顺序迁移登记表，忽略模型关联及其外键，不修改调用方的 GORM 配置。
 // 空清单不调用 masterDB；错误保留底层错误链，调用方负责整体超时和启动失败处理。
 func Apply(ctx context.Context, masterDB func(context.Context) *gorm.DB, tables []Table) (Report, error) {
 	if ctx == nil {
@@ -72,6 +74,8 @@ func Apply(ctx context.Context, masterDB func(context.Context) *gorm.DB, tables 
 		return Report{}, fmt.Errorf("schemamigrate: external transaction is not supported")
 	}
 	db := base.Session(&gorm.Session{NewDB: true, Context: ctx})
+	// Session 已复制 Config；仅在本次迁移中禁止关联展开和关联外键 DDL。
+	db.IgnoreRelationshipsWhenMigrating = true
 	declarations, err := prepare(db, tables)
 	if err != nil {
 		return Report{}, err
@@ -120,6 +124,9 @@ func prepare(db *gorm.DB, tables []Table) ([]declaration, error) {
 			return nil, fmt.Errorf("schemamigrate: parse model: %w", err)
 		}
 		resolvedName := stmt.Schema.Table
+		if strings.ContainsRune(resolvedName, '.') {
+			return nil, fmt.Errorf("schemamigrate: qualified table name %q is not supported", resolvedName)
+		}
 		if seen[resolvedName] {
 			return nil, fmt.Errorf("schemamigrate: duplicate table %q", resolvedName)
 		}
