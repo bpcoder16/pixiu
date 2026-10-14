@@ -185,4 +185,10 @@
 // 接入后台任务后，应用必须先停止入口并等待任务退出，再关闭下游资源；
 // 取消 context 不能代替等待。注册及 MustBaseInit 仅供启动期串行调用；
 // 参数校验通过即封闭注册，重复初始化或失败后重试会 panic。
+// 项目可在 MustBaseInit 后、业务启动前调用 RunMySQLMigration(name, tables)，
+// tables 使用 infra/schemamigrate.Table；严格读取 migrate.<name>.yaml，文件必需。
+// enabled 默认 false；开启后逐表执行 GORM AutoMigrate，内部创建 Context，timeout 默认 5m。
+// 关闭或空清单不取数据库；迁移核心从 mysqlx.Named(name) 获取主库，失败返回错误与部分报告。
+// 迁移不会自动挂到 MustBaseInit 或连接构造中；没有迁移锁，发布时避免多实例同时执行。
+// 模板见 conf.example/migrate.example.yaml，详细契约见 docs/schemamigrate-design.md。
 package bootstrap

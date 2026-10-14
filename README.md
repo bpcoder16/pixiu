@@ -138,6 +138,7 @@ func main() {
 | [`infra/lrucache`](infra/lrucache/doc.go) | 泛型有界 LRU、默认 / 单条目 TTL、独立及命名实例 | ttlcache v3 |
 | [`infra/mysqlx`](infra/mysqlx/doc.go) | MySQL 连接池、显式主从选择、查询日志 | GORM、MySQL 驱动、logit |
 | [`infra/gormx`](infra/gormx/doc.go) | Repository 主、从库会话依赖 Sessions | GORM |
+| [`infra/schemamigrate`](infra/schemamigrate/doc.go) | 统一 AutoMigrate 入口、物理分表与 MySQL 表注释 | GORM |
 | [`infra/pgsqlx`](infra/pgsqlx/doc.go) | PostgreSQL 连接池、显式主从选择、查询日志 | GORM、pgx、logit |
 | [`infra/clickhousex`](infra/clickhousex/doc.go) | ClickHouse 连接池、显式主从选择、查询日志 | GORM、ClickHouse 驱动、logit |
 | [`infra/sqlitex`](infra/sqlitex/doc.go) | SQLite 单库连接池、常用参数配置、查询日志 | GORM、go-sqlite3、logit |
