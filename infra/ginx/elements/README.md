@@ -28,11 +28,13 @@ JS/CSS 通过 Go embed 编译进程序。不声明模块时，页面位于 `/doc
 项目加载脚本位于 `../openapi.js`，通过 `/docs/assets/openapi.js` 提供。
 该脚本按浏览器最终获取文档的地址补齐 Swagger 2.0 缺省或空的 `host/schemes`，使在线调试保留 `basePath`；显式服务器配置不变。
 补齐只影响页面内副本，JSON 端点保持原始文档；文档 URL 仍传给 Elements 用于解析相对引用。
+加载脚本还将 Swagger 2.0 的 `in: formData`、`type: file` 参数转换为 `type: string`、`format: binary`，复用当前 bundle 的文件控件与 multipart 发送能力。覆盖操作级、路径级公共参数和根级 `parameters` 定义，保留其他参数信息及 `consumes`；业务仍使用 `@Accept mpfd`、`@Param file formData file true "上传文件"`，JSON 端点保留原始 `type: file`。
+文件适配仅修改页面副本中的参数定义，不递归修改 schema、示例或扩展，不处理响应文件或文件数组；OpenAPI 3 保持原样。`$ref` 对象保持原样，文档内参数引用通过已适配的定义生效，外部引用文件不由加载脚本获取或转换。文件适配不修改 bundle，不影响下述 Bearer 补丁及校验值。
 使用 hash 导航，刷新接口详情页不需要服务端路径回退；启用在线调试，不配置外部代理。
 Elements 沿用上游默认行为，将认证输入保存在浏览器 localStorage 的 `TryIt_securitySchemeValues` 中；刷新后会恢复输入。
 Swagger 2.0 的 `apiKey` Header 认证可通过扩展 `x-pixiu-bearer: true` 显式启用前缀补齐，Header 名须为 `Authorization`（不区分大小写）。Swag 注释为 `@x-pixiu-bearer true`，其生成的字符串 `"true"` 也受支持。
 只输入 Token 或粘贴完整的 `Bearer <token>` 均可，空输入不发送该 Header。调试请求与代码示例使用同一构造逻辑，普通 API Key 保留原行为；扩展只由本项目的 Elements 补丁解释，其他文档工具仍按 apiKey 原样发送输入值。
 加载页面和内置资源不需要访问 CDN，也不需要在应用构建或运行时安装 Node/npm。
 `patch-bearer.mjs` 记录对共用认证 Header 构造逻辑的最小修改；上游 JS 的 SHA-256 为 `3908d0e9f6425c9224a88d393550729a38dd4e1e49ab23609ca23382a6e941eb`。在仓库根目录执行 `node infra/ginx/elements/patch-bearer.mjs` 可从上游文件重放补丁，重复执行只校验；加 `--check` 仅检查补丁及其余内容未变。
-升级时显式替换固定版本，同步许可证与校验值，重新核对补丁入口和测试中的 bundle 入口，并验证 Swagger 2.0 文档、认证、调试和带前缀的页面导航。补丁脚本遇到未知版本或其他内容变化会报错，不会静默替换。
+升级时显式替换固定版本，同步许可证与校验值，重新核对补丁入口和测试中的 bundle 入口（包括文件参数转换器与文件控件判断），并验证 Swagger 2.0 文档、认证、文件上传调试和带前缀的页面导航。补丁脚本遇到未知版本或其他内容变化会报错，不会静默替换。
 回归测试使用 Node 内置测试器，在仓库根目录执行 `node --test infra/ginx/openapi_script_test.mjs infra/ginx/elements/bearer_auth_test.mjs`，无需安装 npm 依赖。

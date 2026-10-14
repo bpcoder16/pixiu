@@ -60,7 +60,10 @@
 // 全部模块通过校验且读取成功后才注册路由，文档缺失时返回错误且不添加路由；生成物须由应用自行维护。
 // 文档内容在注册路由时固定，应用须在此之前完成文档元信息设置。
 // 页面按浏览器获取文档的地址补齐 Swagger 2.0 缺省的 host/schemes，保留 basePath 与显式配置；
-// JSON 端点仍返回原始文档，补齐仅影响页面内的副本。
+// 页面还将 Swagger 2.0 的 formData/file 参数适配为 string/binary，启用文件选择控件；
+// 覆盖操作级、路径级及根级公共参数定义，保留 consumes、必填标记和文档内引用。
+// 上传接口继续使用 @Accept mpfd 和 @Param file formData file true "上传文件"。
+// JSON 端点仍返回原始文档，补齐及文件适配仅影响页面内的副本；OpenAPI 3 保持原样，外部引用文件不做适配。
 // Elements 的静态资源均内嵌，不依赖运行时 CDN。
 // Elements 沿用上游默认认证持久化，会在浏览器 localStorage 保存并恢复认证输入。
 // Swagger 2.0 的 Authorization apiKey 方案可用扩展 x-pixiu-bearer: true（也接受字符串 "true"）启用前缀补齐。

@@ -41,7 +41,20 @@ func testRegisterOpenAPI(t *testing.T) {
 	if len(router.Routes()) != 0 {
 		t.Fatal("注册失败不应留下部分文档路由")
 	}
-	const document = `{"swagger":"2.0","info":{"title":"test API","version":"1.0"},"basePath":"/v2","paths":{"/ping":{"get":{"responses":{"200":{"description":"OK"}}}}}}`
+	const document = `{
+  "swagger": "2.0",
+  "info": {"title": "test API", "version": "1.0"},
+  "basePath": "/v2",
+  "paths": {
+    "/upload": {
+      "post": {
+        "consumes": ["multipart/form-data"],
+        "parameters": [{"name": "file", "in": "formData", "type": "file", "required": true}],
+        "responses": {"200": {"description": "OK"}}
+      }
+    }
+  }
+}`
 	swag.Register(swag.Name, &swag.Spec{SwaggerTemplate: document})
 	for _, prefix := range []string{"", "/internal"} {
 		if err := RegisterOpenAPI(router.Group(prefix)); err != nil {
@@ -71,7 +84,7 @@ func testRegisterOpenAPI(t *testing.T) {
 				t.Fatal("文档应经过请求作用域")
 			}
 			if tc.path == "/openapi/doc.json" && r.Body.String() != document {
-				t.Fatal("JSON 端点不应改写原始文档的服务器字段")
+				t.Fatal("JSON 端点应逐字节保留原始文档，包括服务器字段和文件类型")
 			}
 			if tc.path == "/docs" {
 				body := r.Body.String()

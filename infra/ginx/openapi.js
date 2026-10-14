@@ -12,6 +12,25 @@
       if (!Array.isArray(description.schemes) || description.schemes.length === 0) {
         description.schemes = [documentURL.protocol.slice(0, -1)];
       }
+      // 当前 Elements 未转换 Swagger 的 file 类型；binary 会进入其原有文件控件和 multipart 发送链路。
+      function normalizeFileParameters(parameters) {
+        if (!Array.isArray(parameters)) return;
+        for (const parameter of parameters) {
+          if (parameter?.in === "formData" && parameter.type === "file" && !("$ref" in parameter)) {
+            parameter.type = "string";
+            parameter.format = "binary";
+          }
+        }
+      }
+      // 只遍历规范中的参数位置，保留引用对象、示例、扩展及响应 schema。
+      normalizeFileParameters(Object.values(description.parameters ?? {}));
+      for (const [path, pathItem] of Object.entries(description.paths ?? {})) {
+        if (!path.startsWith("/")) continue;
+        normalizeFileParameters(pathItem?.parameters);
+        for (const method of ["get", "put", "post", "delete", "options", "head", "patch"]) {
+          normalizeFileParameters(pathItem?.[method]?.parameters);
+        }
+      }
     }
     await customElements.whenDefined("elements-api");
     // 先提供内容，避免组件再次请求未补齐的文档；URL 仍用于解析相对引用。
