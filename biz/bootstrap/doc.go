@@ -1,4 +1,4 @@
-// Package bootstrap 提供日志、MySQL、Redis、Elasticsearch 和 NATS 多实例的通用初始化入口，
+// Package bootstrap 提供日志、MySQL、Redis、Elasticsearch、OSS 和 NATS 多实例的通用初始化入口，
 // 以及应用运行管理器、Gin Engine 和 HTTP 服务的构造方法，供项目自己的 bootstrap 组装。设计见 docs/bootstrap-design.md。
 //
 // 应用负责加载配置、创建资源关闭栈，并在初始化前登记关闭流程：
@@ -14,6 +14,7 @@
 //	bootstrap.MustRegisterMySQL("reports", false)
 //	bootstrap.MustRegisterRedis("orders", true)
 //	bootstrap.MustRegisterElasticsearch("orders", true)
+//	bootstrap.MustRegisterAliyunOSS("assets", true)
 //	bootstrap.MustRegisterNATS("orders", true)
 //	bootstrap.MustBaseInit(&config.AppConfig, &resources)
 //	logit.Info(context.Background(), "application initialized")
@@ -125,7 +126,7 @@
 // 创建首个实例前只登记一次 redisx.CloseAll，单个失败实例由 redisx 立即清理；
 // 此前成功的 Redis、MySQL 与日志交给应用资源栈关闭，不重复登记单个客户端 Close。
 // 关闭前先停止并等待外部生产者及业务管理的订阅；NATS 托管消费由其 CloseAll 排空，
-// 再关闭 Elasticsearch、Redis、MySQL 与日志。消费者仍使用的项目资源也必须晚于 NATS 关闭。
+// 再关闭 OSS、Elasticsearch、Redis、MySQL 与日志。消费者仍使用的项目资源也必须晚于 NATS 关闭。
 //
 // Elasticsearch 使用 MustRegisterElasticsearch(name, isDefault) 声明，与 MySQL、Redis 独立判重。
 // Redis 初始化后读取 elasticsearch.<name>.yaml，文件前缀统一小写；未声明时跳过。
@@ -140,7 +141,20 @@
 // 失败实例由底层清理，先前成功实例交给应用栈；只登记模块 CloseAll，不重复登记 Client.Close。
 // 关闭前先停止并等待业务任务，沿用底层 SDK 关闭行为，不新增关闭期限。
 //
-// NATS 使用 MustRegisterNATS(name, isDefault) 声明，Elasticsearch 之后读取 nats.<name>.yaml。
+// 阿里云 OSS 使用 MustRegisterAliyunOSS(name, isDefault) 声明，一个实例固定对应一个 Bucket。
+// Elasticsearch 之后、NATS 之前读取 aliyunossx.<name>.yaml，未声明时跳过。
+// 模板见 conf.example/aliyunossx.example.yaml；文件不接受 name、isDefault。
+// region、bucket、accessKeyID、accessKeySecret 必填，固定 AK/SK 由 ossx.New 内部封装。
+// endpoint 可选，空值按 Region 推导；自定义值须为不含凭据、查询或非根路径的 HTTP(S) URL。
+// requestTimeout 零值默认 60s，slowThreshold 零值默认 500ms，负值无效；时间须带单位。
+// logRequests 默认 false，关闭全部结果日志；下游耗时登记独立生效。
+// 全部文件先严格解析，再由 ossx.New 校验语义并构造；不联网验证 Bucket 或权限，没有 initTimeout。
+// 文件不替换环境变量占位符；动态凭据仍可通过底层 ossx.Config.Credential 注入，与 AK/SK 互斥。
+// 首个实例创建前只登记一次 ossx.CloseAll，部分失败由应用栈回收已完成的实例。
+// ossx.Default() 与 ossx.Named(默认名称) 返回同一实例，上传请求不再指定 Bucket。
+// 退出时先停止并等待使用方，NATS 排空后才关闭 OSS，日志最后关闭；Close 不排空在途上传。
+//
+// NATS 使用 MustRegisterNATS(name, isDefault) 声明，OSS 之后读取 nats.<name>.yaml。
 // 全部 NATS 文件严格解析并转换后，登记一次 natsx.CloseAll，再创建默认或命名客户端；
 // 未声明时跳过。模板见 conf.example/nats.example.yaml；文件不接受 name、isDefault。
 // 转换阶段检查 URL 解析及内嵌凭据，通用参数由 natsx 在构造时校验；
