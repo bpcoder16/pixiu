@@ -43,6 +43,27 @@
 // 三者均拒绝通配符和索引列表。HTTPError 的 Reason、RootCause、CausedBy 可显式用于诊断，
 // Error() 文本和概要日志仍只包含状态与类型。
 //
+// ReloadSearchAnalyzers 重载单个具体索引的搜索分析器，成功后仅清理 request cache。
+// 调用前须将同义词文件更新到所有数据节点，过滤器设置 updateable: true 且仅用于搜索分析器。
+// 两次请求共用 ctx，分别记录日志和耗时；任一步失败即停止，不重试或回滚。
+// 返回的 ReloadSearchAnalyzersResult 保留 Shards、ReloadDetails 和 CacheShards；
+// CacheShards 为 nil 表示没有有效的缓存清理响应。
+// 分片失败、关闭失败或后续缓存清理失败时保留已经完整解析的结果，调用方仍须处理错误。
+// nil 错误不保证存在可重载的分析器，应检查 ReloadDetails 中是否包含预期分析器。
+// client 为已创建的客户端，products 为实际索引名（不使用别名或数据流）：
+//
+//	result, err := client.ReloadSearchAnalyzers(ctx, "products")
+//	if err != nil {
+//	    // 可检查已完成阶段的结果，诊断部分失败；不要将整个调用视为没有生效。
+//	    return err
+//	}
+//	for _, detail := range result.ReloadDetails {
+//	    _ = detail.Index
+//	    _ = detail.ReloadedAnalyzers
+//	    _ = detail.ReloadedNodeIDs
+//	}
+//	return nil
+//
 // 下例还需导入 errors、time、github.com/bpcoder16/pixiu/infra/elasticsearchx/v8：
 //
 //	client, err := v8.New(elasticsearchx.Config{
