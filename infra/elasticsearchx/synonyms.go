@@ -29,7 +29,8 @@ type ReloadSearchAnalyzersResult struct {
 
 // ReloadSearchAnalyzers 重载单个具体索引的搜索分析器，成功后清理该索引的 request cache。
 // 调用方须预先更新所有数据节点的同义词文件，过滤器须设置 updateable: true 且仅用于搜索分析器。
-// index 须为实际索引名；不解析别名或数据流。两个请求共用 ctx，任一步失败即停止，不重试或回滚。
+// index 须为实际索引名；不解析别名或数据流。两个请求共用 ctx，不重试或回滚。
+// 完整响应中存在成功节点时，即使分片或关闭失败也尽力清理缓存，并保留两阶段错误；ctx 取消后停止。
 // nil 错误只表示两次请求成功，是否重载了预期分析器应检查 ReloadDetails。
 func (c *Client) ReloadSearchAnalyzers(ctx context.Context, index string) (ReloadSearchAnalyzersResult, error) {
 	if err := validateConcreteIndex(index); err != nil {
@@ -40,7 +41,7 @@ func (c *Client) ReloadSearchAnalyzers(ctx context.Context, index string) (Reloa
 		name:  "reload_search_analyzers",
 		index: index,
 	}
-	requestErr := c.request(ctx, http.MethodPost, "_reload_search_analyzers", op, nil, "", func(reader io.Reader) error {
+	reloadErr := c.request(ctx, http.MethodPost, "_reload_search_analyzers", op, nil, "", func(reader io.Reader) error {
 		var payload struct {
 			Shards        synonymShards  `json:"_shards"`
 			ReloadDetails []ReloadDetail `json:"reload_details"`
@@ -68,11 +69,15 @@ func (c *Client) ReloadSearchAnalyzers(ctx context.Context, index string) (Reloa
 		}
 		return nil
 	})
-	if requestErr != nil {
-		return result, requestErr
+	// 完整解析后已有节点成功时，新分析器可能已经生效，不能因部分失败而留下旧缓存。
+	if reloadErr != nil && result.Shards.Successful == 0 {
+		return result, reloadErr
+	}
+	if err := ctx.Err(); err != nil {
+		return result, errors.Join(reloadErr, err)
 	}
 	op.name = "clear_request_cache"
-	requestErr = c.request(ctx, http.MethodPost, "_cache/clear?request=true", op, nil, "", func(reader io.Reader) error {
+	cacheErr := c.request(ctx, http.MethodPost, "_cache/clear?request=true", op, nil, "", func(reader io.Reader) error {
 		var payload struct {
 			Shards synonymShards `json:"_shards"`
 		}
@@ -89,7 +94,7 @@ func (c *Client) ReloadSearchAnalyzers(ctx context.Context, index string) (Reloa
 		}
 		return nil
 	})
-	return result, requestErr
+	return result, errors.Join(reloadErr, cacheErr)
 }
 
 // 指针字段区分缺失与合法零值，两阶段共用广播响应的计数校验。

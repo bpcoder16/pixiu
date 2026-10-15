@@ -45,7 +45,9 @@
 //
 // ReloadSearchAnalyzers 重载单个具体索引的搜索分析器，成功后仅清理 request cache。
 // 调用前须将同义词文件更新到所有数据节点，过滤器设置 updateable: true 且仅用于搜索分析器。
-// 两次请求共用 ctx，分别记录日志和耗时；任一步失败即停止，不重试或回滚。
+// 两次请求共用 ctx，分别记录日志和耗时，不重试或回滚。
+// reload 完整响应中存在成功节点时，即使分片或关闭失败也尽力清理缓存，并保留两阶段错误。
+// 未取得有效响应或失败时没有成功节点则直接返回；清理前发现 ctx 已取消时停止，并合并取消错误。
 // 返回的 ReloadSearchAnalyzersResult 保留 Shards、ReloadDetails 和 CacheShards；
 // CacheShards 为 nil 表示没有有效的缓存清理响应。
 // 分片失败、关闭失败或后续缓存清理失败时保留已经完整解析的结果，调用方仍须处理错误。

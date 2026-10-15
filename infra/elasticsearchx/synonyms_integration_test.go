@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,8 +28,26 @@ func TestVersionFactoriesReloadSearchAnalyzers(t *testing.T) {
 		{9, elasticsearchxv9.New},
 	}
 	for _, factory := range factories {
-		for _, cancelStage := range []int{0, 1, 2} {
-			t.Run(fmt.Sprintf("v%d/cancel_stage_%d", factory.major, cancelStage), func(t *testing.T) {
+		for _, scenario := range []struct {
+			name        string
+			cancelStage int
+			partial     bool
+		}{
+			{name: "success"},
+			{
+				name:        "cancel_reload",
+				cancelStage: 1,
+			},
+			{
+				name:        "cancel_cache",
+				cancelStage: 2,
+			},
+			{
+				name:    "partial_reload",
+				partial: true,
+			},
+		} {
+			t.Run(fmt.Sprintf("v%d/%s", factory.major, scenario.name), func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				var calls atomic.Int32
@@ -42,6 +61,9 @@ func TestVersionFactoriesReloadSearchAnalyzers(t *testing.T) {
 					stage := int(calls.Add(1))
 					path, query := "/products/_reload_search_analyzers", ""
 					response := `{"_shards":{"total":1,"successful":1,"failed":0},"reload_details":[{"index":"products","reloaded_analyzers":["search_synonyms"],"reloaded_node_ids":["node-a"]}]}`
+					if scenario.partial {
+						response = strings.Replace(response, `"total":1,"successful":1,"failed":0`, `"total":2,"successful":1,"failed":1`, 1)
+					}
 					if stage == 2 {
 						path, query = "/products/_cache/clear", "request=true"
 						response = `{"_shards":{"total":2,"successful":2,"failed":0}}`
@@ -50,7 +72,7 @@ func TestVersionFactoriesReloadSearchAnalyzers(t *testing.T) {
 					if stage > 2 || err != nil || len(body) != 0 || req.Method != http.MethodPost || req.URL.Path != path || req.URL.RawQuery != query {
 						t.Errorf("请求或顺序错误: stage=%d method=%s url=%s body=%s err=%v", stage, req.Method, req.URL, body, err)
 					}
-					if stage == cancelStage {
+					if stage == scenario.cancelStage {
 						// 请求已到达服务端再取消，验证官方 SDK 的在途 HTTP 取消及阶段结果保留。
 						cancel()
 						select {
@@ -72,15 +94,18 @@ func TestVersionFactoriesReloadSearchAnalyzers(t *testing.T) {
 				}
 				defer client.Close()
 				result, err := client.ReloadSearchAnalyzers(ctx, "products")
-				if cancelStage == 0 {
-					if err != nil || calls.Load() != 2 || result.Shards.Successful != 1 || len(result.ReloadDetails) != 1 || result.CacheShards == nil || result.CacheShards.Successful != 2 {
+				if scenario.cancelStage == 0 {
+					if (err != nil) != scenario.partial || calls.Load() != 2 || result.Shards.Successful != 1 || len(result.ReloadDetails) != 1 || result.CacheShards == nil || result.CacheShards.Successful != 2 {
 						t.Fatalf("重载结果错误: result=%+v err=%v calls=%d", result, err, calls.Load())
+					}
+					if scenario.partial && (result.Shards.Failed != 1 || !strings.Contains(err.Error(), "reload search analyzers: failed_shards=1")) {
+						t.Fatalf("缓存清理成功掩盖了部分重载失败: result=%+v err=%v", result, err)
 					}
 					detail := result.ReloadDetails[0]
 					if detail.Index != "products" || len(detail.ReloadedAnalyzers) != 1 || detail.ReloadedAnalyzers[0] != "search_synonyms" || len(detail.ReloadedNodeIDs) != 1 || detail.ReloadedNodeIDs[0] != "node-a" {
 						t.Fatalf("重载详情错误: %+v", detail)
 					}
-				} else if !errors.Is(err, context.Canceled) || int(calls.Load()) != cancelStage || result.CacheShards != nil || (result.ReloadDetails != nil) != (cancelStage == 2) {
+				} else if !errors.Is(err, context.Canceled) || int(calls.Load()) != scenario.cancelStage || result.CacheShards != nil || (result.ReloadDetails != nil) != (scenario.cancelStage == 2) {
 					t.Fatalf("取消未生效或丢失已完成结果: result=%+v err=%v calls=%d", result, err, calls.Load())
 				}
 			})
