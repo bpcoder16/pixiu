@@ -17,8 +17,12 @@ import (
 
 // CreateIndexResult 是完整解析的创建响应；未确认不等于索引未创建，不应直接重试。
 type CreateIndexResult struct {
-	Index              string
-	Acknowledged       bool
+	// Index 是响应中的具体索引名，与请求创建的索引名一致。
+	Index string
+	// Acknowledged 表示索引创建是否在超时前获得集群确认；false 不代表索引未创建。
+	Acknowledged bool
+	// ShardsAcknowledged 表示每个分片所需数量的副本是否在超时前启动，默认只等待主分片。
+	// false 时分片仍可能随后就绪，不应据此重试创建索引。
 	ShardsAcknowledged bool
 }
 

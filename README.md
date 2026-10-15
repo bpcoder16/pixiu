@@ -162,6 +162,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | --- | --- | --- |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
 | [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，运行管理器、Gin / HTTP 服务构造与显式 MySQL 迁移入口 | 声明实例、登记关闭栈；应用持有 Manager 并注册 HTTP 服务，日志最后关闭 |
+| [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
 | [`biz/httpconfig`](biz/httpconfig/doc.go) | 嵌入 baseconfig，严格解析 HTTP 应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/httpconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
@@ -211,6 +212,7 @@ pixiu/
 │   └── internal/           infra 内部共用实现
 ├── biz/
 │   ├── bootstrap/          组件初始化、运行管理器与 HTTP 服务构造
+│   ├── elasticsearchservice/ 同义词库索引验证与临时资源清理
 │   ├── httpconfig/         HTTP 应用配置加载与环境初始化
 │   ├── httpauth/           命名认证方案与统一身份
 │   │   └── ginauth/        Gin 认证中间件
