@@ -37,6 +37,11 @@
 // 需要时同步恢复解析、映射和测试；使用 terminate_after 时按需启用 TerminatedEarly。
 // Hits、Aggregations 和 Shards.Failures 保留原始 JSON，业务解析时应使用明确的字段类型
 // 或 json.Decoder.UseNumber 保持整数精度。
+// CreateIndex 创建具体索引，返回的两个确认标记均须由调用方检查；未确认不能直接重试。
+// 完整创建结果在 Body 关闭失败时仍保留。DeleteIndex 只删除具体索引并要求确认，
+// 索引缺失仍返回 HTTPError。Analyze 使用索引上的命名分析器处理单段文本，返回 tokens 数组。
+// 三者均拒绝通配符和索引列表。HTTPError 的 Reason、RootCause、CausedBy 可显式用于诊断，
+// Error() 文本和概要日志仍只包含状态与类型。
 //
 // 下例还需导入 errors、time、github.com/bpcoder16/pixiu/infra/elasticsearchx/v8：
 //

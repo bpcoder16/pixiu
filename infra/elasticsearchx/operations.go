@@ -18,8 +18,18 @@ var ErrNotFound = errors.New("elasticsearchx: document not found")
 
 // HTTPError 表示 Elasticsearch 返回非成功的 HTTP 状态。
 type HTTPError struct {
-	Status int
-	Type   string
+	Status    int
+	Type      string
+	Reason    string
+	RootCause []ErrorCause
+	CausedBy  *ErrorCause
+}
+
+// ErrorCause 保留 ES 返回的结构化原因，供调用方显式诊断；不自动进入错误文本或概要日志。
+type ErrorCause struct {
+	Type     string      `json:"type"`
+	Reason   string      `json:"reason"`
+	CausedBy *ErrorCause `json:"caused_by"`
 }
 
 func (e *HTTPError) Error() string {

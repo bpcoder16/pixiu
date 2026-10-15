@@ -44,7 +44,10 @@ func (c *Client) request(ctx context.Context, method, suffix string, op operatio
 	if strings.TrimSpace(op.index) == "" || strings.Contains(op.index, "/") {
 		return errors.New("elasticsearchx: invalid index")
 	}
-	path := "/" + url.PathEscape(op.index) + "/" + suffix
+	path := "/" + url.PathEscape(op.index)
+	if suffix != "" {
+		path += "/" + suffix
+	}
 	req, err := http.NewRequestWithContext(ctx, method, path, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("elasticsearchx: build %s request: %w", op.name, err)
@@ -93,11 +96,18 @@ func decodeHTTPError(reader io.Reader, status int, get bool) error {
 	var payload struct {
 		Found *bool `json:"found"`
 		Error struct {
-			Type string `json:"type"`
+			ErrorCause
+			RootCause []ErrorCause `json:"root_cause"`
 		} `json:"error"`
 	}
 	err := jsonx.DecodeOne(io.LimitReader(reader, 64<<10), &payload)
-	httpErr := &HTTPError{Status: status, Type: payload.Error.Type}
+	httpErr := &HTTPError{
+		Status:    status,
+		Type:      payload.Error.Type,
+		Reason:    payload.Error.Reason,
+		RootCause: payload.Error.RootCause,
+		CausedBy:  payload.Error.CausedBy,
+	}
 	// 无错误体也可按状态识别 HTTP 错误；读取或解析失败则同时保留两类错误。
 	if err != nil && err != io.EOF {
 		return errors.Join(httpErr, fmt.Errorf("elasticsearchx: decode HTTP error response: %w", err))
