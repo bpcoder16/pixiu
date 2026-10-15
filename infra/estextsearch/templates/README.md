@@ -1,32 +1,26 @@
 # estextsearch 索引模板
 
-这里保存基于 `Profile.Definition()` 生成的静态 JSON 模板，将主字段搜索链统一为同义词分析器，增加
-`es_update_at`，移除 `mappings._meta` 并设置 `dynamic: "strict"`，方便其他项目查看、复制和创建索引。
+`ik.json` 和 `standard.json` 是独立维护的索引定义，直接编辑 JSON 后创建索引。
+Go 模块仅构建查询 DSL，不生成、读取或校验这些模板，也不处理数据写入。
 
-| 文件 | 配置档 | 依赖 |
+| 文件 | 主字段分词方式 | 依赖 |
 | --- | --- | --- |
-| [ik.json](ik.json) | `DefaultConfig(AnalyzerIK)` 加模板扩展 | 与 ES 版本匹配的 IK 插件、所有数据节点上的同义词文件 |
-| [standard.json](standard.json) | `DefaultConfig(AnalyzerStandard)` 加模板扩展 | ES 内置分词器、所有数据节点上的同义词文件 |
+| [ik.json](ik.json) | 索引使用 ik_max_word，搜索使用 ik_smart 与同义词 | 匹配 ES 版本的 IK 插件、所有数据节点上的同义词文件 |
+| [standard.json](standard.json) | 索引和搜索使用 standard，搜索增加同义词 | ES 内置分词器、所有数据节点上的同义词文件 |
 
-两份文件的默认主字段均为 `query_text`，开启 `contains`、`contains_unigram`，关闭 `prefix`、
-`exact`，不包含版本元数据与 schema 指纹。主字段保留 BM25；辅助字段由查询构造器用于召回。
-选择与查询 Profile 相同的配置档。Prefix/Exact、自定义字段名等配置需要通过对应 Profile 重新生成。
-`Profile.Definition()` 仍返回元数据，当前不生成同义词分析器和 `es_update_at`；
-`SchemaFingerprint()` 只覆盖该方法生成的定义，不能代表静态模板的完整 analysis/mapping 或词典内容。
+两份模板默认主字段均为 `query_text`，包含 `contains`、`contains_unigram`，不包含 `prefix`、
+`exact` 或 `_meta`。使用 `estextsearch.Query("query_text", text)` 构建查询，无需初始化或选择模式。
+全文和包含都使用 ES 原生评分；过滤、排序和分页由业务决定。
 
-静态模板省略 `text` 字段的默认值 `index_options: "positions"`、`norms: true` 和
+模板省略 `text` 字段默认值 `index_options: "positions"`、`norms: true` 和
 `position_increment_gap: 100`，保留 contains 子字段的非默认配置 `norms: false`。
-当前 analyzer 未覆盖位置间隔，省略上述参数不改变索引行为；`Profile.Definition()` 仍显式返回这些参数，schema 指纹不变。
 
-模板包含通用短文本定义，并配置 6 个主分片、1 个副本；分片和副本可按部署需要调整。
-模板设置 `mappings.dynamic: "strict"`，写入未定义字段时 ES 会拒绝整条文档。
-写入商品 ID、价格、状态等业务字段前，必须先在 `mappings.properties` 中显式定义；刷新周期、别名由项目按需补充。
-`Profile.Definition()` 本身不指定 `dynamic`，通过 Go 创建索引时需显式设置该策略。
-输入限额和单字符开关在 Go 侧执行，JSON mapping 本身不会代替 `Values` / `Query` 的校验。
+模板配置 6 个主分片、1 个副本，可按部署需要修改。`mappings.dynamic` 为 `"strict"`，
+业务字段须先在 `mappings.properties` 中显式定义；刷新周期和别名由项目补充。
 
 `es_update_at` 使用 `date`，接受 `yyyy-MM-dd HH:mm:ss`、`strict_date_optional_time` 和
-`epoch_millis`，显式设置 `index: false`、`doc_values: true`。该字段可用于排序与聚合；
-mapping 不会自动填写或刷新时间，写入方负责赋值，字段也不是必填项。
+`epoch_millis`，显式设置 `index: false`、`doc_values: true`，可用于排序与聚合。
+时间值由应用写入，mapping 不会自动填写或刷新。
 
 ## 同义词搜索
 
@@ -48,7 +42,8 @@ pc, personal computer
 `synonyms_path` 相对于 ES 的 config 目录，不是 Go 程序本机路径。暂不配置规则时准备空词典，
 不能省略文件；创建索引时仍需要加载文件。
 
-查询沿用字段 mapping 中的搜索分析器，不传 analyzer 或同义词开关。同一请求适用于两份模板：
+Query 的全文分支沿用字段 mapping 中的搜索分析器，不传 analyzer 或同义词开关。
+以下展示全文分支的请求形式；实际返回的子句还包含字面匹配与适用的分段组合：
 
 ```json
 {
@@ -74,11 +69,10 @@ pc, personal computer
 仅更新已接入的词典内容无需重建索引；旧索引首次接入这些分析器需要单独更新索引配置，不能仅调用 reload。
 参见 [重载要求](https://www.elastic.co/guide/en/elasticsearch/reference/7.17/indices-reload-analyzers.html)。
 
-FullText 将完整输入交给分析器；Hybrid 仍先按空白分段，同义词只作用于各普通片段的全文分支，
-不支持跨片段的短语规则。Contains 保持字面匹配。空词典兼容原分词效果不代表任意规则都保留
-原召回：`a => b` 会替换原词，需要保留时写 `a => a, b` 或使用双向等价规则。
-
-本轮落地模板调整；Go Definition 的后续对齐与查询整体设计见 `docs/estextsearch-design.md` 第 14 节。
+Query 保留完整普通文本的全文分支，因此可应用跨词同义词规则，同时增加分段 AND 作为召回路径。
+单字符或含标点、符号的输入只做字面包含；包含分支不使用同义词。
+例如单向规则 `mobile => phone` 会替换全文分支的原词，字面包含分支仍可能命中 mobile；
+最终召回由全文与包含组合决定，应使用业务样本验证。查询契约见包文档及 `docs/estextsearch-design.md`。
 
 ## 创建单个索引
 
@@ -113,104 +107,22 @@ curl --fail-with-body -X PUT "$ES_URL/_index_template/your-project-search-v1?cre
 新建索引；涉及字段索引内容的变更时，已有数据可能需要回填或重建。省略 `_meta` 本身
 不要求重建。参见 [ES 索引模板 API](https://www.elastic.co/guide/en/elasticsearch/reference/7.17/indices-put-template.html)。
 
-## 同步与重新生成
+## 手工调整与接入
 
-生成来源为当前包的 `DefaultConfig` 和 `Definition()`，替换主字段搜索分析器并增加 `es_update_at`，
-输出前移除 `mappings._meta` 及上述默认参数，设置 `dynamic: "strict"` 并补充部署参数。
-变更 analysis/mapping 后，应重新生成对应文件并按默认值补齐后的语义核对分词器与字段映射；仅变更查询策略版本无需更新这些静态模板。
-复制到业务项目后，保持 `query_text` 的 analysis/mapping 与查询 Profile 配套，并另行核对部署参数与 IK 词典。
+修改主字段名时，同时修改 JSON 的 `mappings.properties` 和 `Query` 的第一个参数。
+Query 固定使用主字段、`.contains` 和 `.contains_unigram`，须保留对应字段及配套的分析链。
+同一套查询可用于两份模板，不需要 Go 层的分词器配置或能力开关。
 
-将以下程序保存到仓库目录外的临时 `.go` 文件，在 Pixiu 根目录运行 `go run <临时文件>`，
-会重新生成这两份 JSON：
+单字符默认支持；`i`、`ip`、`iph` 通过包含字段召回，不需要额外的 prefix 字段。
+查询不设置输入长度上限，业务在调用前校验搜索框长度和请求规模。不同片段超过 16 个时只保留整句查询。
 
-生成示例仅用于这两种默认配置。若启用 Prefix，须为 prefix 字段另配字面搜索链，避免
-删除主字段旧分析器后留下悬空引用；不能直接复用同义词分析器改变前缀语义。
+修改模板后，按业务需要发布新索引或变更已有索引配置，并在真实 ES 上验证实际召回与评分。
+数据清洗、写入和回填均由应用负责；模板由人工维护，不通过 Go 生成。
 
-```go
-package main
+## 测试范围
 
-import (
-    "encoding/json"
-    "os"
-    "path/filepath"
+Go 单元测试验证 DSL、非法输入、整句/分段组合与并发隔离，不做模板生成一致性比较。
+可选 ES 集成测试直接读取模板，覆盖分片为 1、副本为 0 后创建临时索引，验证查询召回并清理索引。
+测试环境须提前在所有数据节点准备空的 `config/analysis/search-synonyms.txt`；非空词典会改变固定样本的预期召回。
 
-    "github.com/bpcoder16/pixiu/infra/estextsearch"
-)
-
-func main() {
-    for _, analyzer := range []estextsearch.Analyzer{
-        estextsearch.AnalyzerIK,
-        estextsearch.AnalyzerStandard,
-    } {
-        profile, err := estextsearch.New(estextsearch.DefaultConfig(analyzer))
-        if err != nil {
-            panic(err)
-        }
-        definition := profile.Definition()
-        delete(definition.Mappings, "_meta")
-        definition.Mappings["dynamic"] = "strict"
-        definition.Settings["number_of_shards"] = 6
-        definition.Settings["number_of_replicas"] = 1
-        analysis := definition.Settings["analysis"].(map[string]any)
-        filters, ok := analysis["filter"].(map[string]any)
-        if !ok {
-            filters = make(map[string]any)
-            analysis["filter"] = filters
-        }
-        filters["px_qt_v1_synonyms"] = map[string]any{
-            "type":          "synonym_graph",
-            "synonyms_path": "analysis/search-synonyms.txt",
-            "updateable":    true,
-            "lenient":       false,
-        }
-        searchTokenizer := "standard"
-        if analyzer == estextsearch.AnalyzerIK {
-            searchTokenizer = "ik_smart"
-        }
-        analyzers := analysis["analyzer"].(map[string]any)
-        baseSearch := "px_qt_v1_" + string(analyzer) + "_search"
-        delete(analyzers, baseSearch)
-        analyzers[baseSearch+"_synonyms"] = map[string]any{
-            "type":      "custom",
-            "tokenizer": searchTokenizer,
-            "filter":    []string{"lowercase", "px_qt_v1_synonyms"},
-        }
-        definition.Mappings["properties"].(map[string]any)["es_update_at"] = map[string]any{
-            "type":       "date",
-            "format":     "yyyy-MM-dd HH:mm:ss||strict_date_optional_time||epoch_millis",
-            "index":      false,
-            "doc_values": true,
-        }
-        main := definition.Mappings["properties"].(map[string]any)["query_text"].(map[string]any)
-        main["search_analyzer"] = baseSearch + "_synonyms"
-        fields := []map[string]any{main}
-        for _, field := range main["fields"].(map[string]any) {
-            fields = append(fields, field.(map[string]any))
-        }
-        // 默认配置档未自定义 analyzer 的位置间隔，只省略与 ES 默认值一致的参数。
-        for _, field := range fields {
-            for key, value := range map[string]any{
-                "index_options":          "positions",
-                "norms":                  true,
-                "position_increment_gap": 100,
-            } {
-                if field[key] == value {
-                    delete(field, key)
-                }
-            }
-        }
-        data, err := json.MarshalIndent(definition, "", "  ")
-        if err != nil {
-            panic(err)
-        }
-        path := filepath.Join("infra", "estextsearch", "templates", string(analyzer)+".json")
-        if err := os.WriteFile(path, append(data, '\n'), 0644); err != nil {
-            panic(err)
-        }
-    }
-}
-```
-
-基础 Profile schema 曾在 ES 7.17.17 的 Standard 和 IK 配置上通过功能集成用例；
-新增的同义词模板、实际词典与重载流程尚未经过真实 ES 集成验证，不沿用该历史结论。
-跨版本兼容性、业务质量与容量需由接入项目继续验收。详细设计见仓库本地的 `docs/estextsearch-design.md`。
+当前重写后的查询与模板组合、实际同义词及重载流程仍需真实环境验收，不沿用旧方案的历史结论。
