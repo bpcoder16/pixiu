@@ -1,7 +1,5 @@
 {
   "settings": {
-    "number_of_shards": 6,
-    "number_of_replicas": 1,
     "analysis": {
       "analyzer": {
         "px_qt_v1_contains": {
@@ -25,12 +23,21 @@
           "tokenizer": "standard",
           "type": "custom"
         },
-        "px_qt_v1_standard_search": {
+        "px_qt_v1_standard_search_synonyms": {
           "filter": [
-            "lowercase"
+            "lowercase",
+            "px_qt_v1_synonyms"
           ],
           "tokenizer": "standard",
           "type": "custom"
+        }
+      },
+      "filter": {
+        "px_qt_v1_synonyms": {
+          "lenient": false,
+          "synonyms_path": "analysis/search-synonyms.txt",
+          "type": "synonym_graph",
+          "updateable": true
         }
       },
       "tokenizer": {
@@ -47,11 +54,19 @@
           "type": "ngram"
         }
       }
-    }
+    },
+    "number_of_replicas": 1,
+    "number_of_shards": 6
   },
   "mappings": {
     "dynamic": "strict",
     "properties": {
+      "es_update_at": {
+        "doc_values": true,
+        "format": "yyyy-MM-dd HH:mm:ss||strict_date_optional_time||epoch_millis",
+        "index": false,
+        "type": "date"
+      },
       "query_text": {
         "analyzer": "px_qt_v1_standard_index",
         "fields": {
@@ -68,7 +83,7 @@
             "type": "text"
           }
         },
-        "search_analyzer": "px_qt_v1_standard_search",
+        "search_analyzer": "px_qt_v1_standard_search_synonyms",
         "type": "text"
       }
     }
