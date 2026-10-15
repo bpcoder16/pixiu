@@ -60,4 +60,86 @@
 // CloseAll 开始后 panic。共享实例统一登记 CloseAll 至 lifecycle.Stack；
 // 独立 New 登记自己的 Close。先停止并等待使用方，再关闭连接，日志最后关闭。
 // Close 幂等，不排空在途请求，不关闭借用凭据，也不影响 ossx。
+//
+// # RAM 权限配置
+//
+// 以下自定义权限策略允许被授权的 RAM 身份管理阿里云 Elasticsearch 资源，
+// 并读取两个指定 Bucket 内的对象及相关元数据。复制 JSON 时替换 Bucket 名称；
+// doc.go 每行开头的 // 是 Go 文档标记，不属于 JSON，粘贴到 RAM 控制台时须去掉。
+//
+//	{
+//	  "Version": "1",
+//	  "Statement": [
+//	    {
+//	      "Effect": "Allow",
+//	      "Action": "elasticsearch:*",
+//	      "Resource": "*"
+//	    },
+//	    {
+//	      "Effect": "Allow",
+//	      "Action": [
+//	        "oss:GetObject",
+//	        "oss:GetObjectMetadata",
+//	        "oss:GetObjectMeta"
+//	      ],
+//	      "Resource": [
+//	        "acs:oss:*:*:demo-public/*",
+//	        "acs:oss:*:*:demo-private/*"
+//	      ]
+//	    }
+//	  ]
+//	}
+//
+// 逐行说明，行号从上述 JSON 的第一个左花括号开始计数：
+//   - 第 1 行：开始整个权限策略对象。
+//   - 第 2 行：Version 是 RAM 权限策略语法版本，固定填写字符串 "1"。
+//   - 第 3 行：Statement 开始授权规则数组，本示例包含 ES 管理和 OSS 读取两条规则。
+//   - 第 4 行：开始第一条规则，用于授权 ES 管理操作。
+//   - 第 5 行：Effect 为 Allow，表示允许本条规则匹配的操作；不能覆盖其他策略的显式 Deny。
+//   - 第 6 行：elasticsearch:* 匹配 ES 的全部 RAM 管理操作，包括创建、修改和删除等操作。
+//   - 第 7 行：Resource 为 *，表示本条规则不限定具体 ES 资源，不限于 Config.InstanceID。
+//   - 第 8 行：结束第一条规则，逗号表示 Statement 数组还有下一条规则。
+//   - 第 9 行：开始第二条规则，用于授权读取 OSS 对象和元数据。
+//   - 第 10 行：Effect 为 Allow，表示允许本条规则列出的 OSS 读取操作。
+//   - 第 11 行：Action 开始允许执行的操作列表，列表内各操作分别授权。
+//   - 第 12 行：oss:GetObject 允许读取或下载对象内容。
+//   - 第 13 行：oss:GetObjectMetadata 用于读取对象元数据，名称沿用官方 ES 服务角色策略。
+//   - 第 14 行：oss:GetObjectMeta 用于读取对象的简化元数据，如 ETag、大小和最后修改时间。
+//   - 第 15 行：结束 Action 列表，逗号表示本条规则还有后续字段。
+//   - 第 16 行：Resource 开始本条规则允许访问的 OSS 资源列表。
+//   - 第 17 行：允许上述读取操作访问 demo-public 内所有 Key，包括带目录前缀的 Key。
+//   - 第 18 行：同样允许访问 demo-private 内所有 Key；两个 Bucket 都须换成实际名称。
+//   - 第 19 行：结束 Resource 列表。
+//   - 第 20 行：结束第二条规则。
+//   - 第 21 行：结束 Statement 规则数组。
+//   - 第 22 行：结束整个权限策略对象。
+//
+// 第一条规则授予的管理权限超出本包的词典清单、词典更新和实例查询接口，
+// 不等于 Elasticsearch 集群内部的索引读写权限；集群内部鉴权需另行配置。
+// 第二条规则中的 acs 表示阿里云资源，oss 表示 OSS 服务，两个 * 分别位于地域和账号位置，
+// 不限定这两个字段；Bucket 名称仍是精确匹配，末尾 /* 匹配该 Bucket 内的全部对象。
+// 如仅需读取某个前缀，可改为 acs:oss:*:*:demo-public/releases/*。
+// 本策略未授予 OSS 上传、删除、列举对象或修改 ACL 的权限。
+// demo-public、demo-private 只是名称示例，不会据此设置公开或私有访问权限。
+// 上述三个 OSS 动作与官方 ES 服务角色策略一致；OSS API 文档将 HeadObject、
+// GetObjectMeta 的访问权限列为 oss:GetObject，接口名称与 RAM Action 不应直接等同。
+//
+// # 在 RAM 中授权并用于 esx
+//
+// 在 RAM 控制台的权限管理 → 权限策略中创建自定义策略，选择脚本编辑并粘贴替换后的 JSON；
+// 创建后还须将策略授予实际调用 ES 管理 API 的 RAM 身份，仅创建策略不会生效。
+// 使用固定 AK/SK 时，授权对象为 Config.AccessKeyID 所属的 RAM 用户。
+//
+// ES 管理 API 的调用身份与 ES 服务读取 OSS 词典的身份分别授权；
+// 将上述策略授予调用方，不会自动授予 ES 服务读取 OSS 对象的权限。
+// 通过 OSS 路径更新词典时，还须按 ES 控制台引导授权普通服务角色
+// AliyunElasticsearchAccessingOSSRole，其可信服务为 elasticsearch.aliyuncs.com。
+// 该角色按词典来源配置 OSS 读取权限，可参照第二条规则限定 Bucket 或 Key 前缀。
+// 本包只调用 ES 管理 API，不创建该角色，也不配置其信任策略或权限策略。
+//
+// 官方参考：
+//   - ES 管理权限：https://help.aliyun.com/zh/ram/developer-reference/aliyunelasticsearchfullaccess
+//   - ES 普通服务角色：https://help.aliyun.com/zh/es/security-and-compliance/es-common-service-role
+//   - ES 读取 OSS 策略：https://help.aliyun.com/zh/ram/developer-reference/aliyunelasticsearchaccessingossrolepolicy
+//   - OSS 授权语法与元素：https://help.aliyun.com/zh/oss/user-guide/authorization-syntax-and-elements
 package esx
