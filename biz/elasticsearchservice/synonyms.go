@@ -19,19 +19,6 @@ const (
 	searchAnalyzer = "pixiu_validation_search"
 )
 
-// Service 借用 ES 客户端组织通用流程，不创建或关闭客户端，可并发使用。
-type Service struct {
-	client *elasticsearchx.Client
-}
-
-// New 创建 service；应用须在所有调用结束后再关闭传入的客户端。
-func New(client *elasticsearchx.Client) (*Service, error) {
-	if client == nil {
-		return nil, errors.New("elasticsearchservice: nil client")
-	}
-	return &Service{client: client}, nil
-}
-
 // ValidationOptions 配置一次通过临时索引执行的同义词验证。
 type ValidationOptions struct {
 	// SynonymsPath 必填，是 ES 节点上的 Solr 格式词库路径，不是本机文件或 URL。
