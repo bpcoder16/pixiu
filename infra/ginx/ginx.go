@@ -40,7 +40,8 @@ type Config struct {
 	// Middlewares 在内置请求作用域、结果观察和 Recovery 之后按顺序注册;元素不能为 nil。
 	Middlewares []gin.HandlerFunc
 
-	// Observe 在请求处理结束时同步接收结果;为 nil 时不调用,成功 Hijack 的请求跳过观察。
+	// Observe 在请求处理结束时同步接收结果;为 nil 时不调用。
+	// RegisterIgnoredRoute 登记的路由和成功 Hijack 的请求跳过观察。
 	// 回调须并发安全并快速完成;回调 panic 会被恢复并记录错误日志。
 	Observe func(context.Context, RequestResult)
 }
@@ -137,6 +138,10 @@ func (w *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 
 func observe(cfg Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if c.GetBool(ignoredObservationKey{}) {
+			c.Next()
+			return
+		}
 		started := time.Now()
 		initialStatus := c.Writer.Status()
 		writer := &responseWriter{ResponseWriter: c.Writer}

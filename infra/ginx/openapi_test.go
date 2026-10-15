@@ -1,6 +1,7 @@
 package ginx
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,7 +32,15 @@ func TestRegisterOpenAPI(t *testing.T) {
 }
 
 func testRegisterOpenAPI(t *testing.T) {
-	router, err := New(Config{DisableAccessLog: true})
+	output := captureAccessLogs(t)
+	var observations int
+	router, err := New(Config{
+		LogRequestInfo:  true,
+		LogResponseInfo: true,
+		Observe: func(context.Context, RequestResult) {
+			observations++
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +84,8 @@ func testRegisterOpenAPI(t *testing.T) {
 			{"/docs/assets/styles.min.css", ".sl-elements", "text/css"},
 			{"/docs/assets/openapi.js", "apiDescriptionDocument", "javascript"},
 		} {
+			output.Reset()
+			observations = 0
 			r := httptest.NewRecorder()
 			router.ServeHTTP(r, httptest.NewRequest(http.MethodGet, prefix+tc.path, nil))
 			if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), tc.contains) || !strings.Contains(r.Header().Get("Content-Type"), tc.contentType) {
@@ -82,6 +93,10 @@ func testRegisterOpenAPI(t *testing.T) {
 			}
 			if r.Header().Get(TraceHeader) == "" {
 				t.Fatal("文档应经过请求作用域")
+			}
+			records := accessLogRecords(t, output)
+			if len(records) != 0 || observations != 0 {
+				t.Fatalf("文档路由未自动忽略: path=%s%s, records=%d, Observe=%d", prefix, tc.path, len(records), observations)
 			}
 			if tc.path == "/openapi/doc.json" && r.Body.String() != document {
 				t.Fatal("JSON 端点应逐字节保留原始文档，包括服务器字段和文件类型")
@@ -136,10 +151,15 @@ func testRegisterOpenAPI(t *testing.T) {
 		{http.MethodPost, "/docs/assets/styles.min.css", http.StatusMethodNotAllowed},
 		{http.MethodPost, "/docs/assets/openapi.js", http.StatusMethodNotAllowed},
 	} {
+		output.Reset()
+		observations = 0
 		r := httptest.NewRecorder()
 		router.ServeHTTP(r, httptest.NewRequest(tc.method, tc.path, nil))
 		if r.Code != tc.status {
 			t.Fatalf("%s %s = %d，预期 %d", tc.method, tc.path, r.Code, tc.status)
+		}
+		if len(accessLogRecords(t, output)) != 1 || observations != 1 {
+			t.Fatalf("未匹配请求被静态资源忽略机制屏蔽: %s %s, Observe=%d", tc.method, tc.path, observations)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package ginx
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +12,15 @@ import (
 
 func TestRegisterOpenAPIModules(t *testing.T) {
 	isolatedOpenAPI(t, func() {
-		router, err := New(Config{DisableAccessLog: true})
+		output := captureAccessLogs(t)
+		var observations int
+		router, err := New(Config{
+			LogRequestInfo:  true,
+			LogResponseInfo: true,
+			Observe: func(context.Context, RequestResult) {
+				observations++
+			},
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -38,10 +47,15 @@ func TestRegisterOpenAPIModules(t *testing.T) {
 				{"/docs/admin", `data-document-url="` + prefix + `/openapi/admin.json"`},
 				{"/docs/assets/openapi.js", "apiDescriptionDocument"},
 			} {
+				output.Reset()
+				observations = 0
 				response := httptest.NewRecorder()
 				router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, prefix+tc.path, nil))
 				if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), tc.contains) {
 					t.Fatalf("%s%s = %d %s", prefix, tc.path, response.Code, response.Body.String())
+				}
+				if output.Len() != 0 || observations != 0 {
+					t.Fatalf("模块文档路由未自动忽略: path=%s%s, Observe=%d", prefix, tc.path, observations)
 				}
 				if tc.path == "/docs/admin" {
 					for _, want := range []string{
@@ -61,10 +75,15 @@ func TestRegisterOpenAPIModules(t *testing.T) {
 				"/elements", "/elements/app", "/elements/admin",
 				"/elements/assets/web-components.min.js", "/elements/assets/styles.min.css", "/elements/assets/openapi.js",
 			} {
+				output.Reset()
+				observations = 0
 				response := httptest.NewRecorder()
 				router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, prefix+path, nil))
 				if response.Code != http.StatusNotFound {
 					t.Fatalf("未注册的文档路径 %s%s = %d，预期 404", prefix, path, response.Code)
+				}
+				if len(accessLogRecords(t, output)) != 1 || observations != 1 {
+					t.Fatalf("未匹配的模块文档请求被忽略: path=%s%s, Observe=%d", prefix, path, observations)
 				}
 			}
 		}

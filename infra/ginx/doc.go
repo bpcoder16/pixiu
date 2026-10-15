@@ -34,6 +34,16 @@
 // 响应正文随写出复制,保留 Flush;Header 记录应用提交的快照,不承诺包含传输层自动添加的值。
 // 开启详情会保存完整正文;请求体大小与读取期限由应用约束。
 //
+// 可在启动阶段显式登记忽略访问日志、两侧详情采集及 Observe 的路由，示例还需导入 net/http：
+//
+//	ginx.RegisterIgnoredRoute(&router.RouterGroup, http.MethodGet, "/assets/app.js", func(c *gin.Context) {
+//		c.Data(http.StatusOK, "application/javascript; charset=utf-8", []byte("console.log('ready');"))
+//	})
+//
+// 匹配沿用 Gin 的方法、路由模板和组前缀，仅影响本次登记的路由；不按后缀或响应状态推断。
+// 请求日志作用域、原组和业务中间件、Recovery 及独立 panic 日志仍执行；未匹配的 404/405 仍正常观察。
+// 不增加配置文件字段；与其他 Gin 路由一样，服务开始处理请求后不再注册。
+//
 // 直接使用本包时，OpenAPI 文档与 Stoplight Elements 由调用方显式注册，New 不自动启用；先 blank import 应用生成的文档包：
 //
 //	if err := ginx.RegisterOpenAPI(&router.RouterGroup); err != nil {
@@ -69,5 +79,6 @@
 // Swagger 2.0 的 Authorization apiKey 方案可用扩展 x-pixiu-bearer: true（也接受字符串 "true"）启用前缀补齐。
 // Swag 对应注释为 @x-pixiu-bearer true；仅影响本项目 Elements 的调试请求与代码示例。
 // 输入纯 Token 或完整 Bearer Header 均可，空输入不发送 Authorization；其他 API Key 保持原样。
-// 文档请求沿用所在 Engine 的日志策略；LogResponseInfo 会复制并记录完整静态资源，建议关闭。
+// RegisterOpenAPI 主动将全部文档 GET 路由登记为忽略访问日志、详情及 Observe。
+// 包括页面、首页别名、JSON 端点和内嵌静态资源；保留请求作用域、组中间件及 Recovery。
 package ginx

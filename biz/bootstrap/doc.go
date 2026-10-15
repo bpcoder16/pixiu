@@ -80,7 +80,8 @@
 // 不修改 Gin 全局模式或 Validator，不监听端口或自动注册业务路由。应用构造一次后持有 Engine，
 // 完成业务路由和中间件注册，再传给 NewHTTPService；模式由应用启动时显式设置。
 // disableAccessLog 覆盖详情开关；详情完整记录且不脱敏，开启前须在 Engine 外层约束请求体规模及读取期限。
-// logResponseInfo 会记录完整文档 UI 资源，使用文档时建议关闭。
+// 全部文档 GET 路由自动忽略访问日志、详情及 Observe，保留 Recovery。
+// 包括文档页面、首页别名、JSON 端点和三个内嵌静态资源。
 //
 // NewAppManager() 或 NewAppManager(0) 使用 apprun 默认的 20 秒总关闭期限，
 // 也可传入一个不小于 5 秒的 time.Duration，负值或不足 5 秒的正值返回错误；

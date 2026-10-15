@@ -35,6 +35,7 @@ var openAPIModuleName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // 未传 modules 时提供默认文档的 /openapi/doc.json 和 /docs。
 // 传入模块时提供 /openapi/<Name>.json、/docs/<Name> 和模块导航，/docs 展示首个模块。
 // 页面与静态资源均位于 /docs 下，不注册 /elements 或重定向。
+// 全部文档 GET 路由主动登记为忽略访问日志、详情采集及 Observe，仍保留 Recovery。
 // 调用方须先通过 blank import 注册全部文档；校验或读取失败时不添加任何路由。
 // 本函数只在启动阶段调用，不读取配置，也不自动增加认证；访问控制由调用方的路由组负责。
 func RegisterOpenAPI(r *gin.RouterGroup, modules ...OpenAPIModule) error {
@@ -67,7 +68,7 @@ func RegisterOpenAPI(r *gin.RouterGroup, modules ...OpenAPIModule) error {
 			navigation = openAPINavigation(r.BasePath(), modules, module.Name)
 		}
 		documentJSON := documents[i]
-		r.GET(documentPath, func(c *gin.Context) {
+		RegisterIgnoredRoute(r, http.MethodGet, documentPath, func(c *gin.Context) {
 			c.Data(http.StatusOK, "application/json; charset=utf-8", documentJSON)
 		})
 		// 所有动态文字和 URL 均转义；模块页共用静态资源和加载脚本。
@@ -82,18 +83,18 @@ func RegisterOpenAPI(r *gin.RouterGroup, modules ...OpenAPIModule) error {
 		pageHandler := func(c *gin.Context) {
 			c.Data(http.StatusOK, "text/html; charset=utf-8", elementsPage)
 		}
-		r.GET(pagePath, pageHandler)
+		RegisterIgnoredRoute(r, http.MethodGet, pagePath, pageHandler)
 		if named && i == 0 {
-			r.GET("/docs", pageHandler)
+			RegisterIgnoredRoute(r, http.MethodGet, "/docs", pageHandler)
 		}
 	}
-	r.GET("/docs/assets/web-components.min.js", func(c *gin.Context) {
+	RegisterIgnoredRoute(r, http.MethodGet, "/docs/assets/web-components.min.js", func(c *gin.Context) {
 		c.Data(http.StatusOK, "application/javascript; charset=utf-8", elementsScript)
 	})
-	r.GET("/docs/assets/styles.min.css", func(c *gin.Context) {
+	RegisterIgnoredRoute(r, http.MethodGet, "/docs/assets/styles.min.css", func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/css; charset=utf-8", elementsStyles)
 	})
-	r.GET("/docs/assets/openapi.js", func(c *gin.Context) {
+	RegisterIgnoredRoute(r, http.MethodGet, "/docs/assets/openapi.js", func(c *gin.Context) {
 		c.Data(http.StatusOK, "application/javascript; charset=utf-8", elementsLoader)
 	})
 	return nil
