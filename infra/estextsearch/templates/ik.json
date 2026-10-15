@@ -1,0 +1,76 @@
+{
+  "settings": {
+    "number_of_shards": 6,
+    "number_of_replicas": 1,
+    "analysis": {
+      "analyzer": {
+        "px_qt_v1_contains": {
+          "filter": [
+            "lowercase"
+          ],
+          "tokenizer": "px_qt_v1_trigram",
+          "type": "custom"
+        },
+        "px_qt_v1_contains_unigram": {
+          "filter": [
+            "lowercase"
+          ],
+          "tokenizer": "px_qt_v1_unigram",
+          "type": "custom"
+        },
+        "px_qt_v1_ik_index": {
+          "filter": [
+            "lowercase"
+          ],
+          "tokenizer": "ik_max_word",
+          "type": "custom"
+        },
+        "px_qt_v1_ik_search": {
+          "filter": [
+            "lowercase"
+          ],
+          "tokenizer": "ik_smart",
+          "type": "custom"
+        }
+      },
+      "tokenizer": {
+        "px_qt_v1_trigram": {
+          "max_gram": 3,
+          "min_gram": 3,
+          "token_chars": [],
+          "type": "ngram"
+        },
+        "px_qt_v1_unigram": {
+          "max_gram": 1,
+          "min_gram": 1,
+          "token_chars": [],
+          "type": "ngram"
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "query_text": {
+        "analyzer": "px_qt_v1_ik_index",
+        "fields": {
+          "contains": {
+            "analyzer": "px_qt_v1_contains",
+            "norms": false,
+            "search_analyzer": "px_qt_v1_contains",
+            "type": "text"
+          },
+          "contains_unigram": {
+            "analyzer": "px_qt_v1_contains_unigram",
+            "norms": false,
+            "search_analyzer": "px_qt_v1_contains_unigram",
+            "type": "text"
+          }
+        },
+        "search_analyzer": "px_qt_v1_ik_search",
+        "type": "text"
+      }
+    }
+  }
+}
