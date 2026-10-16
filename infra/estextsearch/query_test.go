@@ -170,6 +170,38 @@ func TestQueryDeduplicatesOnlyIdenticalSegments(t *testing.T) {
 	}
 }
 
+func TestQueryRepeatedSegmentKeepsWholeAndSingleSegment(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		text    string
+		whole   string
+		segment string
+	}{
+		{
+			name:    "重复编号保留字面包含",
+			text:    "PR-PV02 PR-PV02",
+			whole:   `{"match_phrase":{"query_text.contains":{"query":"PR-PV02 PR-PV02","slop":0}}}`,
+			segment: `{"match_phrase":{"query_text.contains":{"query":"PR-PV02","slop":0}}}`,
+		},
+		{
+			name:    "重复部分词保留全文和包含",
+			text:    "iph iph",
+			whole:   `{"bool":{"should":[{"match":{"query_text":{"query":"iph iph","operator":"and"}}},{"match_phrase":{"query_text.contains":{"query":"iph iph","slop":0}}}],"minimum_should_match":1}}`,
+			segment: `{"bool":{"should":[{"match":{"query_text":{"query":"iph","operator":"and"}}},{"match_phrase":{"query_text.contains":{"query":"iph","slop":0}}}],"minimum_should_match":1}}`,
+		},
+		{
+			name:    "重复单字保留整句内部空白",
+			text:    " \ti\u3000\ti\n",
+			whole:   `{"bool":{"should":[{"match":{"query_text":{"query":"i　\ti","operator":"and"}}},{"match_phrase":{"query_text.contains":{"query":"i　\ti","slop":0}}}],"minimum_should_match":1}}`,
+			segment: `{"match_phrase":{"query_text.contains_unigram":{"query":"i","slop":0}}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertJSON(t, mustQuery(t, "query_text", tc.text), fmt.Sprintf(`{"bool":{"should":[%s,{"bool":{"must":[%s]}}],"minimum_should_match":1}}`, tc.whole, tc.segment))
+		})
+	}
+}
+
 func TestQuerySegmentLimitKeepsCompleteInput(t *testing.T) {
 	parts := make([]string, 17)
 	for i := range parts {
@@ -194,8 +226,6 @@ func TestQuerySegmentLimitKeepsCompleteInput(t *testing.T) {
 	if len(should[1].(map[string]any)["bool"].(map[string]any)["must"].([]any)) != 16 {
 		t.Fatal("重复片段不应消耗分段预算")
 	}
-	got = mustQuery(t, "query_text", "apple apple")
-	assertJSON(t, got, `{"bool":{"should":[{"match":{"query_text":{"query":"apple apple","operator":"and"}}},{"match_phrase":{"query_text.contains":{"query":"apple apple","slop":0}}}],"minimum_should_match":1}}`)
 }
 
 func TestQueryLongInputStillUsesContains(t *testing.T) {

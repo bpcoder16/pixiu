@@ -35,7 +35,8 @@ func Query(field, text string) (map[string]any, error) {
 	}
 	whole := singleQuery(field, text)
 	segments := splitSegments(text)
-	if len(segments) < 2 {
+	// 仅原输入为单片段或超出分段预算时省略分段路径；重复片段去重后仍须参与召回。
+	if len(segments) == 0 || (len(segments) == 1 && segments[0] == text) {
 		return whole, nil
 	}
 	must := make([]any, 0, len(segments))

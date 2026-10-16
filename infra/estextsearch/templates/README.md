@@ -115,6 +115,8 @@ Query 固定使用主字段、`.contains` 和 `.contains_unigram`，须保留对
 
 单字符默认支持；`i`、`ip`、`iph` 通过包含字段召回，不需要额外的 prefix 字段。
 查询不设置输入长度上限，业务在调用前校验搜索框长度和请求规模。不同片段超过 16 个时只保留整句查询。
+重复输入去重后即使只有一个片段，也保留整句和该片段两条路径，例如 `iph iph` 仍可通过 `iph` 召回。
+该修复不改变模板，无需重建索引；重复输入因新增匹配分支可能改变评分。
 
 修改模板后，按业务需要发布新索引或变更已有索引配置，并在真实 ES 上验证实际召回与评分。
 数据清洗、写入和回填均由应用负责；模板由人工维护，不通过 Go 生成。
@@ -122,7 +124,26 @@ Query 固定使用主字段、`.contains` 和 `.contains_unigram`，须保留对
 ## 测试范围
 
 Go 单元测试验证 DSL、非法输入、整句/分段组合与并发隔离，不做模板生成一致性比较。
-可选 ES 集成测试直接读取模板，覆盖分片为 1、副本为 0 后创建临时索引，验证查询召回并清理索引。
-测试环境须提前在所有数据节点准备空的 `config/analysis/search-synonyms.txt`；非空词典会改变固定样本的预期召回。
+`TestElasticsearchIntegration` 直接读取模板，覆盖分片为 1、副本为 0 后创建临时索引，验证查询召回并清理索引。
+该测试须提前在所有数据节点准备空的 `config/analysis/search-synonyms.txt`；非空词典会改变固定样本的预期召回。
 
-当前重写后的查询与模板组合、实际同义词及重载流程仍需真实环境验收，不沿用旧方案的历史结论。
+`TestElasticsearchSynonymsIntegration` 复用同一流程，但仅在临时索引中把 `synonyms_path` 替换为
+内联规则 `pc, personal computer`，无需准备节点词典文件，也不修改文件或执行热重载。
+分词器、过滤器顺序、`lenient`、`updateable` 和 mapping 均沿用所选模板。
+它校验完整命中集合，覆盖双向跨词同义词、编号组合、错误编号、缺失连字符、缺失关键词、
+非连续短语及跨数组元素的负例；同时记录当前 `personal computer PR-PV02` 不会召回
+只有 `pc` 和该编号的文档这一边界，不为通过测试改变查询策略。
+
+在已安装匹配版本 IK 插件的测试 ES 上，分别运行两份模板：
+
+```bash
+for analyzer in standard ik; do
+  PIXIU_ESTEXTSEARCH_TEST_URL=http://127.0.0.1:9200 \
+    PIXIU_ESTEXTSEARCH_TEST_ANALYZER="$analyzer" \
+    go test ./infra/estextsearch -run '^TestElasticsearchSynonymsIntegration$' -count=1 -v
+done
+```
+
+两类集成测试均未配置地址时跳过；省略 analyzer 时仅运行 Standard，指定 IK 后缺少插件会报错，不自动跳过。
+
+固定样本验证不替代目标 ES 版本、业务词典、重载流程和性能验收。
