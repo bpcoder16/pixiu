@@ -24,24 +24,20 @@
 // lifecycle、logit。初始化 panic 原样传播，已登记资源由应用的 defer 关闭。
 // 通用入口接收 *appconfig.AppConfig；HTTP 与 Cron 共用 env/log 配置及初始化流程。
 //
-// 初始化成功后，应用持有管理器，显式登记服务并接管停机信号：
+// 初始化成功后，可将服务构造函数交给 Start，统一登记服务并接管停机信号：
 //
 //	func start(handler http.Handler) error {
-//		manager, err := bootstrap.NewAppManager()
-//		if err != nil {
-//			return err
-//		}
-//		service, err := bootstrap.NewHTTPService(handler)
-//		if err != nil {
-//			return err
-//		}
-//		if err := manager.Register(service); err != nil {
-//			return errors.Join(err, service.Shutdown())
-//		}
-//		return manager.RunSignals()
+//		return bootstrap.Start(func() (apprun.Service, error) {
+//			return bootstrap.NewHTTPService(handler)
+//		})
 //	}
 //
-// 此示例另用标准库 errors、net/http；handler 由应用提供，http.yaml 从 env.ConfigDirPath() 读取。
+// 此示例另用标准库 net/http 和 pixiu 的 infra/apprun；handler 由应用提供，http.yaml 从 env.ConfigDirPath() 读取。
+// ServiceFactory 的签名为 func() (apprun.Service, error)，Start 按传入顺序同步构造并登记，全部成功后运行。
+// 后续构造或登记失败时逆序回收此前成功构造的服务，包括本轮登记失败的服务，并保留原错误与回收错误。
+// 构造函数返回错误时负责自行回收本轮部分资源；nil 构造函数返回错误，无服务时返回 apprun.ErrNoServices。
+// Start 使用管理器默认的 20 秒运行期总关闭预算；进入运行阶段后由管理器逆序关闭服务，不重复回收。
+// 构造及启动前回收不计入运行期关闭预算，信号仅从所有服务登记成功后开始接管。
 // 使用 Gin 的应用可在启动阶段先构造 Engine（另需导入 github.com/gin-gonic/gin 和 pixiu 的 infra/env，
 // debug/test 模式还须 blank import 应用生成的 Swag 文档包）：
 //
@@ -56,17 +52,19 @@
 //	return start(engine)
 //
 // 常用 Gin HTTP 装配可直接使用 NewGinHTTPService，由其设置模式并读取两份配置；
-// 业务只提供路由注册回调和文档模块，返回服务按前述方式登记到管理器（另需导入 infra/apprun、infra/ginx）：
+// 业务只提供路由注册回调和文档模块，通过 Start 接管运行（另需导入 infra/ginx）：
 //
-//	func newHTTPService() (apprun.Service, error) {
-//		return bootstrap.NewGinHTTPService(func(r *gin.Engine) {
-//			r.GET("/healthz", func(c *gin.Context) {
-//				c.Status(http.StatusNoContent)
-//			})
-//		},
-//			ginx.OpenAPIModule{Name: "app", Title: "App"},
-//			ginx.OpenAPIModule{Name: "admin", Title: "Admin"},
-//		)
+//	func startGin() error {
+//		return bootstrap.Start(func() (apprun.Service, error) {
+//			return bootstrap.NewGinHTTPService(func(r *gin.Engine) {
+//				r.GET("/healthz", func(c *gin.Context) {
+//					c.Status(http.StatusNoContent)
+//				})
+//			},
+//				ginx.OpenAPIModule{Name: "app", Title: "App"},
+//				ginx.OpenAPIModule{Name: "admin", Title: "Admin"},
+//			)
+//		})
 //	}
 //
 // 回调在 Engine 和文档路由创建成功后同步调用一次，nil 表示不注册业务路由。
@@ -103,10 +101,11 @@
 // NewAppManager() 或 NewAppManager(0) 使用 apprun 默认的 20 秒总关闭期限，
 // 也可传入一个不小于 5 秒的 time.Duration，负值或不足 5 秒的正值返回错误；
 // 不保存全局管理器，不自动注册服务或接管信号。
+// 需要自定义预算或自行控制运行 context 时，直接持有 NewAppManager 返回的管理器，登记后调用 Run 或 RunSignals。
 // NewHTTPService 从 env.ConfigDirPath() 下读取 http.yaml，严格解析 httpserver.Config 并返回名为 http 的 apprun.Service，
 // 构造时不监听，HTTP ShutdownTimeout 省略或为零时默认 15 秒。
 // Run 将启动与关闭竞争产生的 httpserver.ErrClosed 视为正常退出，保留其他运行与关闭错误。
-// 进入有效 Run 前，构造或登记失败由调用方逆序关闭全部已构造服务（含已登记服务）。
+// 直接使用管理器时，进入有效 Run 前的构造或登记失败由调用方逆序关闭全部已构造服务（含已登记服务）。
 // 运行后由管理器关闭，不重复登记到资源栈。
 // HTTP 超时后强制关闭普通连接，不额外等待 handler；管理器返回后应用尽力清理共享资源及日志。
 //
@@ -131,12 +130,13 @@
 //	}
 //	return manager.RunSignals()
 //
-// 此示例另需 time；cron.yaml 中只配置 scan-orders 或补齐其他 Handler，模板见 conf.example/cron.yaml。
+// 此示例另需标准库 errors、time；cron.yaml 中只配置 scan-orders 或补齐其他 Handler，模板见 conf.example/cron.yaml。
 // 代码可以注册全部 Handler，jobs 只列出需要启用的任务；引用未注册的名称会报绑定错误。
 // 注释或删除某个 job 后重启即可停用，全部注释或 jobs: [] 时允许零任务运行。
 // 任务支持六字段 Cron、固定 every、随机 randomEvery，三者互斥；默认总关闭 15s、自然排空 10s。
 // every 与 randomEvery.min 最短均为 100ms，小于下限时构造报错。
 // 默认管理器的 20s 可覆盖独立 Cron；上例保留显式 40s 作为自定义预算的用法。
+// 使用默认预算时，也可将 NewCronScheduler 与 CronService 组合为 ServiceFactory 后传给 Start。
 // lock 段存在时通过已初始化的命名 Redis 构造 gocron-redis-lock，配置 TTL 与自动续租；
 // 任务须设置正 timeout。仅在租约有效时互斥，不保证每周期一次，失租不自动取消业务。
 // 混合运行先登记 HTTP、再登记 Cron，总预算须覆盖各组件关闭期限；共享客户端和日志在服务关闭后释放。

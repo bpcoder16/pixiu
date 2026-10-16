@@ -1,11 +1,52 @@
 package bootstrap
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/bpcoder16/pixiu/infra/apprun"
 )
+
+// ServiceFactory 延迟构造一个常驻服务；返回错误时须自行回收本轮部分构造的资源。
+type ServiceFactory func() (apprun.Service, error)
+
+// Start 按顺序构造、登记服务，全部成功后接管 SIGINT/SIGTERM 并阻塞至运行和关闭结束。
+// 构造或登记失败时停止后续构造，逆序回收已构造服务并合并错误；nil 构造函数返回错误。
+// 运行后由管理器逆序关闭，不重复回收；运行期总关闭预算默认 20 秒，不含构造及启动前失败回收。
+// 需要自定义关闭预算或运行 context 时，使用 NewAppManager 自行装配；应用只应有一个信号所有者。
+func Start(factories ...ServiceFactory) (err error) {
+	manager, err := NewAppManager()
+	if err != nil {
+		return err
+	}
+	services := make([]apprun.Service, 0, len(factories))
+	defer func() {
+		for _, service := range slices.Backward(services) {
+			if service.Shutdown != nil {
+				err = errors.Join(err, service.Shutdown())
+			}
+		}
+	}()
+	for i, factory := range factories {
+		if factory == nil {
+			return fmt.Errorf("bootstrap: nil service factory at index %d", i)
+		}
+		service, constructErr := factory()
+		if constructErr != nil {
+			return constructErr
+		}
+		// 登记前纳入回收，确保本轮登记失败的服务也会关闭。
+		services = append(services, service)
+		if registerErr := manager.Register(service); registerErr != nil {
+			return registerErr
+		}
+	}
+	// 运行阶段由管理器接管关闭职责，返回后不再执行启动前回收。
+	services = nil
+	return manager.RunSignals()
+}
 
 // NewAppManager 创建由调用方持有的服务管理器，不注册服务或订阅信号。
 // 可省略关闭期限或传入 0，沿用 apprun 默认的 20 秒；最多传入一个期限，正值不得小于 5 秒。

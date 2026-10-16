@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
+	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/cronx"
 )
 
@@ -91,30 +92,28 @@ func TestCronMixedHTTPFailureClosesScheduler(t *testing.T) {
 		defer occupied.Close()
 		writeHTTPConfig(t, "addr: "+occupied.Addr().String()+"\n")
 		writeCronConfig(t, "{}\n")
-		scheduler, err := bootstrap.NewCronScheduler()
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer scheduler.Shutdown()
-		httpService, err := bootstrap.NewHTTPService(http.NewServeMux())
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer httpService.Shutdown()
-		manager, err := bootstrap.NewAppManager(5 * time.Second)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := manager.Register(httpService); err != nil {
-			t.Fatal(err)
-		}
-		if err := manager.Register(bootstrap.CronService(scheduler)); err != nil {
-			t.Fatal(err)
-		}
+		var scheduler *cronx.Scheduler
+		err = bootstrap.Start(
+			func() (apprun.Service, error) {
+				return bootstrap.NewHTTPService(http.NewServeMux())
+			},
+			func() (apprun.Service, error) {
+				var err error
+				scheduler, err = bootstrap.NewCronScheduler()
+				if err != nil {
+					return apprun.Service{}, err
+				}
+				return bootstrap.CronService(scheduler), nil
+			},
+		)
 		var listenErr *net.OpError
-		if err := manager.Run(context.Background()); !errors.As(err, &listenErr) {
+		if !errors.As(err, &listenErr) {
 			t.Fatalf("应保留监听失败: %v", err)
 		}
+		if scheduler == nil {
+			t.Fatal("未构造 Cron 服务")
+		}
+		defer scheduler.Shutdown()
 		if err := scheduler.Run(); !errors.Is(err, cronx.ErrClosed) {
 			t.Fatalf("启动失败未回收 Cron: %v", err)
 		}
