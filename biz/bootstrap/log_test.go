@@ -14,9 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
-	"github.com/bpcoder16/pixiu/biz/httpconfig"
-	"github.com/bpcoder16/pixiu/biz/internal/baseconfig"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/lifecycle"
 	"github.com/bpcoder16/pixiu/logit"
@@ -37,7 +36,7 @@ func isolatedLog(t *testing.T, run func()) {
 	}
 }
 
-func loadLogConfig(t *testing.T, mode, logYAML string) *baseconfig.AppConfig {
+func loadLogConfig(t *testing.T, mode, logYAML string) *appconfig.AppConfig {
 	t.Helper()
 	t.Chdir(t.TempDir())
 	if err := os.Mkdir("conf", 0o755); err != nil {
@@ -47,8 +46,8 @@ func loadLogConfig(t *testing.T, mode, logYAML string) *baseconfig.AppConfig {
 	if err := os.WriteFile("conf/app.yaml", []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := httpconfig.MustLoadAppConfig("conf/app.yaml")
-	return &cfg.AppConfig
+	cfg := appconfig.MustLoadAppConfig("conf/app.yaml")
+	return cfg
 }
 
 func recoverValue(fn func()) (value any) {
@@ -443,8 +442,8 @@ func TestLogDirectoryRejectsDotAppNames(t *testing.T) {
 					t.Fatal(err)
 				}
 				hookStd := false
-				cfg := &baseconfig.AppConfig{
-					Log: baseconfig.LogConfig{
+				cfg := &appconfig.AppConfig{
+					Log: appconfig.LogConfig{
 						Format:  "text",
 						Dir:     filepath.Join(root, "logs"),
 						HookStd: &hookStd,

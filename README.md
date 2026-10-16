@@ -128,6 +128,7 @@ func main() {
 | 包 | 能力 | 主要依赖 |
 | --- | --- | --- |
 | [`infra/apprun`](infra/apprun/doc.go) | 常驻服务运行监督、逆序关闭、显式 SIGINT/SIGTERM 接入 | 标准库、logit |
+| [`infra/cronx`](infra/cronx/doc.go) | 六字段 Cron、固定/随机间隔、防重入、任务日志与两阶段关闭 | gocron v2、robfig/cron v3、logit；可注入 gocron.Locker |
 | [`infra/configx`](infra/configx/doc.go) | YAML / TOML / JSON 结构体配置加载、全局命名获取与零值兜底 | Viper |
 | [`infra/env`](infra/env/doc.go) | 通用应用环境、IP 校验与补齐、一次初始化与全局读取 | 标准库、netx |
 | [`infra/httpcall`](infra/httpcall/doc.go) | 可复用 HTTP 下游客户端、结果日志、请求级耗时 | Resty v2、logit |
@@ -161,21 +162,25 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | 包 | 能力 | 典型用途 |
 | --- | --- | --- |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
-| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，运行管理器、Gin / HTTP 服务构造与显式 MySQL 迁移入口 | 声明实例、登记关闭栈；应用持有 Manager 并注册 HTTP 服务，日志最后关闭 |
+| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，运行管理器、Gin / HTTP / Cron 服务构造与显式 MySQL 迁移入口 | 声明实例、登记关闭栈；应用持有 Manager 并注册 HTTP/Cron 服务，日志最后关闭 |
 | [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
-| [`biz/httpconfig`](biz/httpconfig/doc.go) | 嵌入 baseconfig，严格解析 HTTP 应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/httpconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
+| [`biz/appconfig`](biz/appconfig/doc.go) | 直接定义 env/log，严格解析应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/appconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
 
-`biz/internal/baseconfig` 供 biz 内部共用环境与日志配置；业务项目通过 `httpconfig.AppConfig` 的嵌入字段使用，无需直接导入内部包。
+`biz/appconfig` 直接定义应用共用的环境与日志配置；HTTP、Cron 各自独立配置，由 bootstrap 显式装配。原 httpconfig 和 baseconfig 已删除，不保留兼容入口。
 
-`httpconfig.MustLoadAppConfig` 使用 `configx.Parse`，支持 YAML / TOML / JSON，拒绝未知字段和弱类型转换；配置只返回给调用方，环境由 `env.Init` 一次性发布。应用配置文件所在目录作为 `env.ConfigDirPath()`，供 bootstrap 查找实例配置。加载配置不会初始化日志或修改 `time.Local`；`bootstrap.MustBaseInit` 在日志创建前应用环境时区，再依次初始化日志、MySQL、Redis、Elasticsearch、OSS、阿里云 ES 和 NATS，仅初始化已声明的组件实例。
+`appconfig.MustLoadAppConfig` 使用 `configx.Parse`，支持 YAML / TOML / JSON，拒绝未知字段和弱类型转换；配置只返回给调用方，环境由 `env.Init` 一次性发布。应用配置文件所在目录作为 `env.ConfigDirPath()`，供 bootstrap 查找实例配置。加载配置不会初始化日志或修改 `time.Local`；`bootstrap.MustBaseInit` 在日志创建前应用环境时区，再依次初始化日志、MySQL、Redis、Elasticsearch、OSS、阿里云 ES 和 NATS，仅初始化已声明的组件实例。
 
 初始化完成后，应用可调用 `bootstrap.NewAppManager()` 创建默认总关闭期限为 20 秒的管理器，也可传入不小于 5 秒的自定义时长，传入 0 仍使用默认值。`bootstrap.NewHTTPService(handler)` 从 `env.ConfigDirPath()` 下严格加载 `http.yaml` 并返回可注册的 `apprun.Service`，HTTP 关闭期限默认 15 秒。应用显式调用 `manager.Register(service)` 和 `manager.RunSignals()`，管理器返回后再关闭共享资源栈。
 
+`bootstrap.NewCronScheduler(handlers...)` 从独立的 [cron.yaml](biz/bootstrap/conf.example/cron.yaml) 读取调度，按名称绑定 `CronHandler`；`CronService` 适配现有 Manager。启用 lock 段时直接组合命名 Redis 与 gocron-redis-lock，设置租期和自动续租，不扩展 lockx。任务超时只取消 context，实际返回后才解锁；失租不会自动取消业务，不保证集群每周期只执行一次。
+
+默认 Cron 总关闭预算为 15 秒，前 10 秒自然排空，默认管理器的 20 秒可覆盖独立 Cron。混合运行先登记 HTTP、再登记 Cron，关闭先 Cron 后 HTTP，再释放客户端，日志最后关闭。包级调用方式见 [bootstrap 文档](biz/bootstrap/doc.go)，具体独立与混合运行样例后续在 pixiu-demo 中引入。
+
 ### 规划中的能力
 
-本地设计文档还规划了 `cronx`、`websocketx` 等模块；这些包目前尚未实现，不属于当前可用 API。实际可用能力以上述模块导航为准。
+本地设计文档还规划了 `websocketx` 等模块；尚未实现的包不属于当前可用 API。实际可用能力以上述模块导航为准。
 
 ## 分层架构
 
@@ -191,6 +196,7 @@ pixiu/
 │   ├── apprun/             常驻服务运行监督与关闭
 │   ├── configx/            结构体配置解析与命名获取
 │   ├── env/                通用应用运行环境
+│   ├── cronx/              Cron、固定/随机间隔与限时排空
 │   ├── httpcall/           HTTP 下游调用
 │   ├── httpserver/         HTTP 服务端
 │   ├── ginx/               Gin 请求处理
@@ -211,13 +217,11 @@ pixiu/
 │   │   └── esx/            阿里云 ES 管理 API
 │   └── internal/           infra 内部共用实现
 ├── biz/
-│   ├── bootstrap/          组件初始化、运行管理器与 HTTP 服务构造
+│   ├── bootstrap/          组件初始化、运行管理器与 HTTP/Cron 服务构造
 │   ├── elasticsearchservice/ 同义词库索引验证与临时资源清理
-│   ├── httpconfig/         HTTP 应用配置加载与环境初始化
+│   ├── appconfig/          应用 env/log 配置加载与环境初始化
 │   ├── httpauth/           命名认证方案与统一身份
 │   │   └── ginauth/        Gin 认证中间件
-│   ├── internal/           biz 内部共用实现
-│   │   └── baseconfig/     各类应用共用的环境与日志配置
 │   └── lockx/              锁契约与业务执行流程
 │       └── redislock/      Redis 锁实现
 └── assets/                吉祥物 Logo
@@ -239,7 +243,7 @@ pixiu/
 
 这个示例无需数据库等外部服务，使用标准 `http.Handler` 提供健康检查，并通过管理器接收停机信号、等待 HTTP 排空，最后关闭共享资源与日志。
 
-将 [`app.yaml`](biz/httpconfig/conf.example/app.yaml) 和 [`http.yaml`](biz/bootstrap/conf.example/http.yaml) 复制到应用的 `conf/` 目录，修改应用名称。保存以下代码为 `main.go`，安装 `biz/bootstrap` 后执行 `go run .`，再访问 `http://127.0.0.1:8888/healthz`，应返回 HTTP 204；在终端按 Ctrl+C 关闭。
+将 [`app.yaml`](biz/appconfig/conf.example/app.yaml) 和 [`http.yaml`](biz/bootstrap/conf.example/http.yaml) 复制到应用的 `conf/` 目录，修改应用名称。保存以下代码为 `main.go`，安装 `biz/bootstrap` 后执行 `go run .`，再访问 `http://127.0.0.1:8888/healthz`，应返回 HTTP 204；在终端按 Ctrl+C 关闭。
 
 <details>
 <summary>展开完整示例（无需外部服务）</summary>
@@ -253,8 +257,8 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
-	"github.com/bpcoder16/pixiu/biz/httpconfig"
 	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
@@ -266,12 +270,12 @@ func main() {
 }
 
 func run() (runErr error) {
-	cfg := httpconfig.MustLoadAppConfig("./conf/app.yaml")
+	cfg := appconfig.MustLoadAppConfig("./conf/app.yaml")
 	var resources lifecycle.Stack
 	defer func() {
 		runErr = errors.Join(runErr, resources.Close())
 	}()
-	bootstrap.MustBaseInit(&cfg.AppConfig, &resources)
+	bootstrap.MustBaseInit(cfg, &resources)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -315,7 +319,7 @@ func run() (runErr error) {
 
 ### 应用配置与多实例初始化
 
-将 [`app.yaml`](biz/httpconfig/conf.example/app.yaml) 复制到应用的 `conf/app.yaml`。本例声明六个组件实例，需将对应模板复制到同一配置目录，并填写实际连接信息：
+将 [`app.yaml`](biz/appconfig/conf.example/app.yaml) 复制到应用的 `conf/app.yaml`。本例声明六个组件实例，需将对应模板复制到同一配置目录，并填写实际连接信息：
 
 | 声明 | 配置文件 | 模板 |
 | --- | --- | --- |
@@ -339,14 +343,14 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
-	"github.com/bpcoder16/pixiu/biz/httpconfig"
 	"github.com/bpcoder16/pixiu/lifecycle"
 	"github.com/bpcoder16/pixiu/logit"
 )
 
 func main() {
-	cfg := httpconfig.MustLoadAppConfig("./conf/app.yaml")
+	cfg := appconfig.MustLoadAppConfig("./conf/app.yaml")
 	var resources lifecycle.Stack
 	defer func() {
 		if err := resources.Close(); err != nil {
@@ -360,7 +364,7 @@ func main() {
 	bootstrap.MustRegisterAliyunOSS("assets", true)
 	bootstrap.MustRegisterAliyunES("search-control", true)
 	bootstrap.MustRegisterNATS("events", true)
-	bootstrap.MustBaseInit(&cfg.AppConfig, &resources)
+	bootstrap.MustBaseInit(cfg, &resources)
 	logit.Info(context.Background(), "应用初始化完成")
 }
 ```
@@ -690,7 +694,7 @@ func run() error {
 | 文件轮转 | 路径必须为绝对路径，同一路径由一个 Writer 管理。进入新时段后的首次 Write 触发轮转，每小时整点清理旧文件，清理完成前文件数可能暂时超过保留上限；旧文件异步 Sync / Close，Writer 的 Sync / Close 等待收尾。 |
 | 日志详情 | 各适配包的日志开关与默认值见包文档。开启 Header / Body / SQL / 命令参数等详情时，按包契约保留完整内容，应用需决定记录范围及敏感数据策略。 |
 | 数据库读写 | 事务与要求读己之写的查询显式使用主库；可接受延迟的读取可选择从库。模型迁移由应用决定。 |
-| Redis 锁 | 内置锁使用固定租期，不自动续租。同一资源的竞争者使用相同实现与协议，业务自行响应取消，并结合幂等、事务或数据端版本约束保护结果。 |
+| Redis 锁 | `biz/lockx/redislock` 使用固定租期；Cron 通过 bootstrap 组合 gocron-redis-lock 的自动续租。同一资源的竞争者使用相同实现与协议，业务自行响应取消，并结合幂等、事务或数据端版本约束保护结果。 |
 | JWT 验签 | 实例固定算法与密钥。每次验签使用新的空 claims 对象，仅在 `Verify` 返回 nil 后使用身份字段；失败时丢弃可能已解码的不可信内容。HTTP 认证可组合 httpauth / ginauth，会话刷新、撤销与授权规则由应用处理。 |
 | 应用退出 | 先停止入口与生产者，等待任务结束，再关闭下游资源，最后关闭日志。`lifecycle.Stack` 逆序关闭资源，所以日志关闭函数应先登记。 |
 
@@ -719,6 +723,8 @@ go test -race ./...
 5. 日志或轮转热路径变更需运行与功能等价的性能基准，保留正确性门禁和原始结果。
 
 数据库、Redis 和 Elasticsearch 的真实服务验证需要相应环境；具体条件与跳过行为以各包测试为准。全量构建包含 SQLite 驱动，需要 CGO 与 C 编译器。
+
+Cron 的真实 Redis 验收通过 `PIXIU_CRON_REDIS_ADDR` 指定独立测试实例的 `host:port`，然后执行 `go test ./biz/bootstrap -run TestCronRedisLeaseAndDrain`（也支持 `-race`）。测试使用随机 key 前缀，验证两个调度器互斥、跨 TTL 续租及停机解锁；未设置地址时跳过该项。
 
 ### 文档入口
 

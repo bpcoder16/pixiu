@@ -1,4 +1,4 @@
-package baseconfig
+package appconfig
 
 import "github.com/bpcoder16/pixiu/infra/env"
 

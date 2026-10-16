@@ -3,15 +3,15 @@ package bootstrap_test
 import (
 	"testing"
 
+	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
-	"github.com/bpcoder16/pixiu/biz/internal/baseconfig"
 	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
 func TestMustBaseInitRejectsMissingArguments(t *testing.T) {
 	for _, name := range []string{"config", "resources"} {
 		t.Run(name, func(t *testing.T) {
-			cfg := &baseconfig.AppConfig{}
+			cfg := &appconfig.AppConfig{}
 			resources := &lifecycle.Stack{}
 			switch name {
 			case "config":

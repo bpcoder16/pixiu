@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bpcoder16/pixiu/biz/internal/baseconfig"
+	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/lifecycle"
 )
@@ -17,7 +17,7 @@ var baseInitStarted bool
 // 必须在其他 goroutine 并发使用时间或日志前调用，运行期不再修改 time.Local。
 // 日志最先登记，以保证最后关闭；重复调用或初始化失败后重试会 panic。
 // resources 由应用创建为空栈并负责关闭，调用方须提前登记关闭 defer。
-func MustBaseInit(config *baseconfig.AppConfig, resources *lifecycle.Stack) {
+func MustBaseInit(config *appconfig.AppConfig, resources *lifecycle.Stack) {
 	if err := validateParams(config, resources); err != nil {
 		panic(err)
 	}
@@ -50,7 +50,7 @@ func MustBaseInit(config *baseconfig.AppConfig, resources *lifecycle.Stack) {
 	}
 }
 
-func validateParams(config *baseconfig.AppConfig, resources *lifecycle.Stack) error {
+func validateParams(config *appconfig.AppConfig, resources *lifecycle.Stack) error {
 	if config == nil {
 		return fmt.Errorf("bootstrap: nil app config")
 	}

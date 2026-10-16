@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
-	"github.com/bpcoder16/pixiu/biz/httpconfig"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/lifecycle"
 	"github.com/bpcoder16/pixiu/logit"
@@ -37,7 +37,7 @@ log:
 				if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				cfg := httpconfig.MustLoadAppConfig(path)
+				cfg := appconfig.MustLoadAppConfig(path)
 				if time.Local != time.UTC {
 					t.Fatal("配置加载仍应只发布环境，不修改进程时区")
 				}
@@ -47,7 +47,7 @@ log:
 				before := time.Now()
 				var resources lifecycle.Stack
 				defer resources.Close()
-				bootstrap.MustBaseInit(&cfg.AppConfig, &resources)
+				bootstrap.MustBaseInit(cfg, &resources)
 				afterInit := time.Now()
 				if time.Local != location || afterInit.Location() != location {
 					t.Fatalf("默认时区未使用已发布配置: got %v, want %v", time.Local, location)

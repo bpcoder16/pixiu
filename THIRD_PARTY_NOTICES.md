@@ -23,6 +23,8 @@
 | `github.com/go-sql-driver/mysql` | `v1.9.3` | [官方源码压缩包](https://codeload.github.com/go-sql-driver/mysql/zip/refs/tags/v1.9.3) |
 | `github.com/hashicorp/go-version` | `v1.8.0` | [官方源码压缩包](https://codeload.github.com/hashicorp/go-version/zip/refs/tags/v1.8.0) |
 
+Cron 的 Redis 锁适配还间接引入 `github.com/hashicorp/errwrap v1.1.0` 和 `github.com/hashicorp/go-multierror v1.1.1`，二者采用 MPL-2.0；源码分别见 [errwrap](https://github.com/hashicorp/errwrap/tree/v1.1.0)、[go-multierror](https://github.com/hashicorp/go-multierror/tree/v1.1.1)。gocron v2 和 gocron-redis-lock v2 自身采用 MIT。Cron 时区适配直接复用已有的 `github.com/robfig/cron/v3 v3.0.1` 解析器，该依赖也采用 MIT，版本未变。
+
 未修改时可使用对应版本的上游源码获取方式；随产品分发时应确认其可用，必要时自行提供副本。修改后须提供实际使用的受覆盖源码，不能仅指向未修改的上游版本；仅附许可证也不能替代源码提供义务。
 
 依赖变更时同步更新相关说明；分发含依赖的软件时，由分发者按实际组件准备所需声明及源码获取信息。

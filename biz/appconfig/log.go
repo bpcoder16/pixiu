@@ -1,4 +1,4 @@
-package baseconfig
+package appconfig
 
 import "time"
 

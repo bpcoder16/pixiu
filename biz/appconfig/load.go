@@ -1,4 +1,4 @@
-package httpconfig
+package appconfig
 
 import (
 	"fmt"
@@ -13,19 +13,19 @@ import (
 // 仅用于启动阶段；失败应退出进程，不承诺恢复后重试。不会修改 time.Local 或初始化组件。
 func MustLoadAppConfig(filePath string) *AppConfig {
 	if filePath == "" {
-		panic(fmt.Errorf("httpconfig: empty config file path"))
+		panic(fmt.Errorf("appconfig: empty config file path"))
 	}
 	absolutePath, err := filepath.Abs(filePath)
 	if err != nil {
-		panic(fmt.Errorf("httpconfig: resolve config file %q: %w", filePath, err))
+		panic(fmt.Errorf("appconfig: resolve config file %q: %w", filePath, err))
 	}
 	cfg, err := configx.Parse[AppConfig](absolutePath)
 	if err != nil {
-		panic(fmt.Errorf("httpconfig: load app config %q: %w", absolutePath, err))
+		panic(fmt.Errorf("appconfig: load app config %q: %w", absolutePath, err))
 	}
 	cfg.Env.ConfigDirPath = filepath.Dir(absolutePath)
 	if initErr := env.Init(cfg.Env); initErr != nil {
-		panic(fmt.Errorf("httpconfig: initialize environment from %q: %w", absolutePath, initErr))
+		panic(fmt.Errorf("appconfig: initialize environment from %q: %w", absolutePath, initErr))
 	}
 	return cfg
 }
