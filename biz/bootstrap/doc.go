@@ -1,9 +1,9 @@
 // Package bootstrap 提供日志、MySQL、Redis、Elasticsearch、OSS、阿里云 ES 和 NATS 多实例的通用初始化入口，
-// 以及应用运行管理器、Gin Engine 和 HTTP 服务的构造方法，供项目自己的 bootstrap 组装。设计见 docs/bootstrap-design.md。
+// 以及应用运行管理器、Gin Engine、HTTP 和 Cron 服务的构造方法，供项目自己的 bootstrap 组装。设计见 docs/bootstrap-design.md。
 //
 // 应用负责加载配置、创建资源关闭栈，并在初始化前登记关闭流程：
 //
-//	config := httpconfig.MustLoadAppConfig("./conf/app.yaml")
+//	config := appconfig.MustLoadAppConfig("./conf/app.yaml")
 //	var resources lifecycle.Stack
 //	defer func() {
 //		if err := resources.Close(); err != nil {
@@ -17,12 +17,12 @@
 //	bootstrap.MustRegisterAliyunOSS("assets", true)
 //	bootstrap.MustRegisterAliyunES("search-control", true)
 //	bootstrap.MustRegisterNATS("orders", true)
-//	bootstrap.MustBaseInit(&config.AppConfig, &resources)
+//	bootstrap.MustBaseInit(config, &resources)
 //	logit.Info(context.Background(), "application initialized")
 //
-// 示例使用标准库 context、log，以及 pixiu 的 biz/httpconfig、biz/bootstrap、
+// 示例使用标准库 context、log，以及 pixiu 的 biz/appconfig、biz/bootstrap、
 // lifecycle、logit。初始化 panic 原样传播，已登记资源由应用的 defer 关闭。
-// 通用入口只接收 baseconfig.AppConfig；HTTP 配置将其嵌入的基础配置传入。
+// 通用入口接收 *appconfig.AppConfig；HTTP 与 Cron 共用 env/log 配置及初始化流程。
 //
 // 初始化成功后，应用持有管理器，显式登记服务并接管停机信号：
 //
@@ -59,7 +59,7 @@
 // 文件必需，{} 沿用默认值：不信任代理、记录访问日志、不记录请求或响应详情。
 // 支持 trustedProxies、loggerName、disableAccessLog、logRequestInfo、logResponseInfo；
 // 不接受运行时回调，不注册全局配置或重读文件；缺失、未知字段、错误类型和非法代理均返回错误。
-// 模板见 conf.example/gin.yaml；这些配置不属于 app.yaml 或 httpconfig.AppConfig。
+// 模板见 conf.example/gin.yaml；这些配置不属于 app.yaml 或 appconfig.AppConfig。
 // Engine 创建后仅按 env.RunMode() 决定文档路由：debug/test 调用 ginx.RegisterOpenAPI，release 跳过。
 // 不传参数时提供默认文档 /openapi/doc.json、/docs 和内嵌静态资源。
 // 需要多个模块时，由应用显式声明名称和标题（另需导入 infra/ginx）：
@@ -89,8 +89,42 @@
 // NewHTTPService 从 env.ConfigDirPath() 下读取 http.yaml，严格解析 httpserver.Config 并返回名为 http 的 apprun.Service，
 // 构造时不监听，HTTP ShutdownTimeout 省略或为零时默认 15 秒。
 // Run 将启动与关闭竞争产生的 httpserver.ErrClosed 视为正常退出，保留其他运行与关闭错误。
-// 注册失败由调用方关闭该服务；注册成功后由管理器关闭，不重复登记到资源栈。
+// 进入有效 Run 前，构造或登记失败由调用方逆序关闭全部已构造服务（含已登记服务）。
+// 运行后由管理器关闭，不重复登记到资源栈。
 // HTTP 超时后强制关闭普通连接，不额外等待 handler；管理器返回后应用尽力清理共享资源及日志。
+//
+// Cron 独立加载 cron.yaml，通过任务名绑定业务方法；不需要 HTTP/Gin 配置：
+//
+//	scheduler, err := bootstrap.NewCronScheduler(bootstrap.CronHandler{
+//		Name: "scan-orders",
+//		Handler: func(ctx context.Context) error {
+//			logit.Info(ctx, "scan orders")
+//			return nil
+//		},
+//	})
+//	if err != nil {
+//		return err
+//	}
+//	manager, err := bootstrap.NewAppManager(40 * time.Second)
+//	if err != nil {
+//		return errors.Join(err, scheduler.Shutdown())
+//	}
+//	if err := manager.Register(bootstrap.CronService(scheduler)); err != nil {
+//		return errors.Join(err, scheduler.Shutdown())
+//	}
+//	return manager.RunSignals()
+//
+// 此示例另需 time；cron.yaml 中只配置 scan-orders 或补齐其他 Handler，模板见 conf.example/cron.yaml。
+// 代码可以注册全部 Handler，jobs 只列出需要启用的任务；引用未注册的名称会报绑定错误。
+// 注释或删除某个 job 后重启即可停用，全部注释或 jobs: [] 时允许零任务运行。
+// 任务支持六字段 Cron、固定 every、随机 randomEvery，三者互斥；默认总关闭 15s、自然排空 10s。
+// every 与 randomEvery.min 最短均为 100ms，小于下限时构造报错。
+// 默认管理器的 20s 可覆盖独立 Cron；上例保留显式 40s 作为自定义预算的用法。
+// lock 段存在时通过已初始化的命名 Redis 构造 gocron-redis-lock，配置 TTL 与自动续租；
+// 任务须设置正 timeout。仅在租约有效时互斥，不保证每周期一次，失租不自动取消业务。
+// 混合运行先登记 HTTP、再登记 Cron，总预算须覆盖各组件关闭期限；共享客户端和日志在服务关闭后释放。
+// 具体独立与混合运行样例后续在 pixiu-demo 中引入。
+// Shutdown 超时后仍可能有业务运行；默认不追加无限 Wait，不承诺超时路径完整排空。
 //
 // 初始化最先将 time.Local 设置为 env.TimeLocation()，随后创建日志及轮转资源。
 // 配置加载只发布环境，设置默认时区由本包负责；必须在并发使用时间或日志前执行。

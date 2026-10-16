@@ -1,0 +1,38 @@
+# 显式调用 NewCronScheduler 才读取本文件；不依赖 HTTP/Gin。
+# 命名 Logger 未注册时回退到默认 Logger；需要独立文件时在 app.yaml 的 log.names 中声明 cron。
+loggerName: "cron"
+# 整个关闭流程的总预算，包含自然排空和取消后的收尾；零值或省略时默认 15s。
+# 到期仍未结束则返回超时错误，不会强制终止任务。
+shutdownTimeout: "15s"
+# 停止接收新任务后，等待已有任务自然完成的时间；到期取消任务 context，再用剩余预算等待收尾。
+# 零值或省略时取 shutdownTimeout 的 2/3（默认 10s）；须小于总预算，两者不相加。
+drainTimeout: "10s"
+
+# 启用分布式锁时取消注释，并在 MustBaseInit 前声明 Redis 实例。
+# 所有节点使用相同 Redis、DB、前缀及稳定任务名。
+# lock:
+#   redisName: "cron-lock"
+#   keyPrefix: "demo:prod:cron:"
+#   ttl: "30s"
+#   renewInterval: "10s"
+
+# Handler 在代码中按 name 绑定，三种调度只能选择一种；首次等待，不立即执行。
+# every 与 randomEvery.min 最短均为 100ms，randomEvery.max 必须大于 min。
+# 只启用 jobs 中列出的任务；代码可注册更多 Handler，配置引用未注册的名称会报错。
+# 注释或删除某个任务的整个配置项后重启即可停用；全部注释或 jobs: [] 表示不启用任务。
+# 开启锁时每个任务都必须显式设置正 timeout，超时仅取消 context，不强杀任务或提前解锁。
+jobs:
+  - name: "scan-orders"
+    every: "1s"
+    timeout: "20s"
+    successLevel: "debug"
+  - name: "daily-report"
+    cron: "0 10 0 * * *"
+    timeout: "10m"
+    successLevel: "info"
+  - name: "popup-push"
+    randomEvery:
+      min: "15m"
+      max: "20m"
+    timeout: "2m"
+    successLevel: "info"
