@@ -9,8 +9,14 @@ Go 模块仅构建查询 DSL，不生成、读取或校验这些模板，也不�
 | [standard.json](standard.json) | 索引和搜索使用 standard，搜索增加同义词 | ES 内置分词器、所有数据节点上的同义词文件 |
 
 两份模板默认主字段均为 `query_text`，包含 `contains`、`contains_unigram`，不包含 `prefix`、
-`exact` 或 `_meta`。使用 `estextsearch.Query("query_text", text)` 构建查询，无需初始化或选择模式。
-全文和包含都使用 ES 原生评分；过滤、排序和分页由业务决定。
+`exact` 或 `_meta`。两个查询入口使用同一套模板，无需初始化或配置对象：
+
+| 入口 | 能力与选择 |
+| --- | --- |
+| `estextsearch.Query("query_text", text)` | 保留整句 OR 分段 AND 的基础能力，包含重复关键词修复 |
+| `estextsearch.QueryExpanded("query_text", text)` | 扩展跨词同义词与编号组合的召回，省去冗余外层分段路径；额外成本由调用方评估 |
+
+全文和包含沿用 ES 原生评分；混合路径中的字面约束使用 filter、不计分。过滤、排序和分页由业务决定。
 
 模板省略 `text` 字段默认值 `index_options: "positions"`、`norms: true` 和
 `position_increment_gap: 100`，保留 contains 子字段的非默认配置 `norms: false`。
@@ -26,7 +32,7 @@ Go 模块仅构建查询 DSL，不生成、读取或校验这些模板，也不�
 
 两份模板仅保留 `px_qt_v1_<配置档>_search_synonyms` 作为主字段的搜索分析器，删除原来的
 `px_qt_v1_<配置档>_search`，并同步更新 `query_text.search_analyzer`。写入和 contains 分析链不使用同义词。
-当前 Go `Query` 不指定全文 analyzer，会自动使用 mapping 中的搜索分析器，无需新增查询方法。
+两个 Go 查询方法均不指定全文 analyzer，会自动使用 mapping 中的搜索分析器。
 词典为空且其他分析配置相同时，主字段的分词效果与原搜索链一致；词典有规则时按规则处理查询。
 
 新增分析链为 `ik_smart/standard → lowercase → px_qt_v1_synonyms`，过滤器采用
@@ -42,7 +48,7 @@ pc, personal computer
 `synonyms_path` 相对于 ES 的 config 目录，不是 Go 程序本机路径。暂不配置规则时准备空词典，
 不能省略文件；创建索引时仍需要加载文件。
 
-Query 的全文分支沿用字段 mapping 中的搜索分析器，不传 analyzer 或同义词开关。
+两个入口的全文分支沿用字段 mapping 中的搜索分析器，不传 analyzer 或同义词开关。
 以下展示全文分支的请求形式；实际返回的子句还包含字面匹配与适用的分段组合：
 
 ```json
@@ -70,7 +76,16 @@ Query 的全文分支沿用字段 mapping 中的搜索分析器，不传 analyze
 参见 [重载要求](https://www.elastic.co/guide/en/elasticsearch/reference/7.17/indices-reload-analyzers.html)。
 
 Query 保留完整普通文本的全文分支，因此可应用跨词同义词规则，同时增加分段 AND 作为召回路径。
-单字符或含标点、符号的输入只做字面包含；包含分支不使用同义词。
+单段中的单字符或含标点、符号的文本只做字面包含；包含分支不使用同义词。
+`QueryExpanded` 在混合输入含连续多词普通块时采用整句 OR 块组合：普通块沿用整块查询 OR 分段 AND，
+符号片段独立做字面 filter，各块须同时满足。块内保留原始空白和重复词，不跨符号片段拼接。
+块组合已经覆盖原分段 AND 的全部命中，因此不再构造外层分段路径，减少重复匹配与评分。
+例如扩展入口的 `personal computer PR-PV02` 可以命中 `pc` 与该编号；基础入口仍保留此前的能力边界。
+`personal PR-PV02 computer`
+不会把编号两侧的词拼成同义词，但仍保留原词分段匹配。编号不必再通过主字段全文分词。
+“严格”沿用现有大小写不敏感的连续包含：`PR-PV02` 可匹配 `XPR-PV02Y`，
+不能匹配 `PR PV02`、`PRPV02` 或跨数组元素拼出的编号；它不是 keyword 完整值相等。
+不识别业务编号格式，纯数字或字母数字片段仍走既有普通文本规则。
 例如单向规则 `mobile => phone` 会替换全文分支的原词，字面包含分支仍可能命中 mobile；
 最终召回由全文与包含组合决定，应使用业务样本验证。查询契约见包文档及 `docs/estextsearch-design.md`。
 
@@ -109,14 +124,22 @@ curl --fail-with-body -X PUT "$ES_URL/_index_template/your-project-search-v1?cre
 
 ## 手工调整与接入
 
-修改主字段名时，同时修改 JSON 的 `mappings.properties` 和 `Query` 的第一个参数。
-Query 固定使用主字段、`.contains` 和 `.contains_unigram`，须保留对应字段及配套的分析链。
+修改主字段名时，同时修改 JSON 的 `mappings.properties` 和查询方法的第一个参数。
+两个入口固定使用主字段、`.contains` 和 `.contains_unigram`，须保留对应字段及配套的分析链。
 同一套查询可用于两份模板，不需要 Go 层的分词器配置或能力开关。
 
 单字符默认支持；`i`、`ip`、`iph` 通过包含字段召回，不需要额外的 prefix 字段。
 查询不设置输入长度上限，业务在调用前校验搜索框长度和请求规模。不同片段超过 16 个时只保留整句查询。
+`QueryExpanded` 的混合路径另限最多 16 块（重复块也计数），超出时回退为 `Query` 的两条原路径；
+纯文本、纯符号或没有连续多词普通块的输入与 `Query` 的 DSL 完全一致。
+两个入口不自动切换，不增加配置、索引字段或分析器；`Query` 不承担混合块扫描与构造成本。
 重复输入去重后即使只有一个片段，也保留整句和该片段两条路径，例如 `iph iph` 仍可通过 `iph` 召回。
 该修复不改变模板，无需重建索引；重复输入因新增匹配分支可能改变评分。
+
+扩展入口仍可能因整句、块内多条路径命中而累加评分；去重会移除外层分段 AND 的分数贡献。
+完整召回集合保留，不保证与基础入口或优化前三路径方案的 `_score`、排名或 Top K 相同；
+整体放入 filter 时仅扩大匹配集合，不计分。同一普通块内跨词同义词与部分词的任意组合
+仍不保证召回，例如 `personal computer iph PR-PV02` 不会额外拆出 `personal computer`。
 
 修改模板后，按业务需要发布新索引或变更已有索引配置，并在真实 ES 上验证实际召回与评分。
 数据清洗、写入和回填均由应用负责；模板由人工维护，不通过 Go 生成。
@@ -131,8 +154,14 @@ Go 单元测试验证 DSL、非法输入、整句/分段组合与并发隔离，
 内联规则 `pc, personal computer`，无需准备节点词典文件，也不修改文件或执行热重载。
 分词器、过滤器顺序、`lenient`、`updateable` 和 mapping 均沿用所选模板。
 它校验完整命中集合，覆盖双向跨词同义词、编号组合、错误编号、缺失连字符、缺失关键词、
-非连续短语及跨数组元素的负例；同时记录当前 `personal computer PR-PV02` 不会召回
-只有 `pc` 和该编号的文档这一边界，不为通过测试改变查询策略。
+非连续短语及跨数组元素的负例。
+
+`TestElasticsearchMixedIntegration` 补充编号前后位置、多词组和多编号、中文、Unicode 空白与全角符号、
+重复词同义词、编号作为子串、错误或缺失编号，以及不跨编号拼接词组的验证。
+三类集成测试都验证两个入口。混合样本还覆盖整句、重复块及 16/17 块边界；
+同一索引对照基础查询与优化前三路径方案，检查基础命中保留、扩展命中、去重前后完整命中相同、
+重复评分减少、仅命中混合路径的评分不变，以及整体 filter 的零分语义；
+不把 BM25 绝对分数或固定排名写死为契约。
 
 在已安装匹配版本 IK 插件的测试 ES 上，分别运行两份模板：
 
@@ -140,10 +169,38 @@ Go 单元测试验证 DSL、非法输入、整句/分段组合与并发隔离，
 for analyzer in standard ik; do
   PIXIU_ESTEXTSEARCH_TEST_URL=http://127.0.0.1:9200 \
     PIXIU_ESTEXTSEARCH_TEST_ANALYZER="$analyzer" \
-    go test ./infra/estextsearch -run '^TestElasticsearchSynonymsIntegration$' -count=1 -v
+    go test -race ./infra/estextsearch -run '^TestElasticsearch(Synonyms|Mixed)?Integration$' -count=1 -v
 done
 ```
 
-两类集成测试均未配置地址时跳过；省略 analyzer 时仅运行 Standard，指定 IK 后缺少插件会报错，不自动跳过。
+三类集成测试均未配置地址时跳过；省略 analyzer 时仅运行 Standard，指定 IK 后缺少插件会报错，不自动跳过。
 
 固定样本验证不替代目标 ES 版本、业务词典、重载流程和性能验收。
+
+## 双入口与去重验证结果（2026-10-16）
+
+Elasticsearch 7.17.17 与同版本 IK 下，每种模板的 46 个输入分别验证两个入口，共 92 项入口召回断言通过（含 race）。
+基础能力、重复关键词修复与编号约束保留；扩展查询与优化前三路径方案的完整命中集合相同，
+重复评分减少。全量 `go test ./...`、`go test -race ./...`、构建、模块 vet 与格式检查通过。
+
+2 万条合成短文本、1 分片、2 CPU/1 GiB 容器、256 MiB JVM 堆，预热后单并发，
+每版本每轮 400 次、轮换 3 轮。以下为各轮 P95 的中位数；请求返回 20 条、统计全部命中、关闭 request cache。
+另取回全部 ID，验证优化前后集合相同。数据仅用于本次对照，不代表生产容量。
+
+| 查询 | 命中数 Query / QueryExpanded | Standard P95 ms 三路径→QueryExpanded | IK P95 ms 三路径→QueryExpanded |
+| --- | ---: | ---: | ---: |
+| personal computer PR-PV02 | 4000 / 8000 | 6.073 → 4.066 | 5.034 → 3.587 |
+| personal computer PR-PV02 mobile phone #2 | 2000 / 4000 | 5.422 → 3.866 | 5.868 → 3.840 |
+
+上述典型混合评分查询 P95 下降约 29%～35%，容器 CPU/请求下降约 30%～37%。
+`personal computer PR-PV02` 的 Go 构建从三路径的 4572 ns、21032 B、166 次分配，
+降至 QueryExpanded 的 3082 ns、13576 B、109 次分配；
+基础 Query 为 1972 ns、9232 B、71 次分配。两个入口保留明确的能力与成本取舍。
+
+并非所有样本的尾延迟都改善：本轮 IK 稀有编号 P95 为 0.758 → 1.128 ms，整体 filter 为 0.783 → 0.939 ms；
+相同 DSL 的对照也存在波动。不能据此承诺性能、评分或 Top K 无退化，生产容量仍需业务环境验收。
+本次不调整其他查询策略，不自动切换入口或 filter，无需重建索引。
+
+完整方法、评分日志及原始数据见本地[双入口验证记录](../../../docs/perf-estextsearch-expanded-20261016/README.md)，
+优化前历史数据见[三路径验证记录](../../../docs/perf-estextsearch-mixed-20261016/README.md)。
+`docs/` 按仓库规则被 Git 忽略，主要行为与结果已同时保留在本 README。

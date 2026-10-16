@@ -6,15 +6,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/bpcoder16/pixiu/infra/estextsearch"
 )
 
 // 显式设置 PIXIU_ESTEXTSEARCH_TEST_URL 后才访问 ES；只创建和清理随机命名的测试索引。
@@ -164,9 +164,10 @@ func TestElasticsearchSynonymsIntegration(t *testing.T) {
 			want: []string{"pc_code", "phrase_code"},
 		},
 		{
-			// 记录当前边界：带符号的整句不走全文，拆开的 personal/computer 不再形成跨词同义词。
-			text: "personal computer PR-PV02",
-			want: []string{"phrase_code"},
+			// Query 保留原能力；QueryExpanded 才组合跨词同义词与严格编号。
+			text:         "personal computer PR-PV02",
+			want:         []string{"phrase_code"},
+			wantExpanded: []string{"pc_code", "phrase_code"},
 		},
 		{
 			text: "pc PR-PV99",
@@ -176,9 +177,140 @@ func TestElasticsearchSynonymsIntegration(t *testing.T) {
 	runElasticsearchIntegration(t, []string{"pc, personal computer"}, fixtures, queries)
 }
 
+func TestElasticsearchMixedIntegration(t *testing.T) {
+	fixtures := map[string][]string{
+		"alias":         {"pc", "PR-PV02"},
+		"literal":       {"personal computer", "PR-PV02"},
+		"whole":         {"personal computer PR-PV02"},
+		"embedded":      {"pc", "XPR-PV02Y"},
+		"wrong":         {"pc", "PR-PV03"},
+		"spaced":        {"pc", "PR PV02"},
+		"joined":        {"pc", "PRPV02"},
+		"split_code":    {"pc", "PR-", "PV02"},
+		"code_only":     {"PR-PV02"},
+		"personal":      {"personal", "PR-PV02"},
+		"computer":      {"computer", "PR-PV02"},
+		"unrelated":     {"camera", "PR-PV02"},
+		"apart":         {"personal portable computer", "PR-PV02"},
+		"array":         {"personal", "computer", "PR-PV02"},
+		"multiple":      {"pc", "handset", "PR-PV02", "#2"},
+		"partial":       {"pc", "PR-PV02", "iphone"},
+		"partial_full":  {"personal computer", "PR-PV02", "iphone"},
+		"partial_block": {"pc", "PR-PV02", "mobilephone", "iphone"},
+		"repeated":      {"strong", "PR-PV02"},
+		"chinese":       {"ai", "A＋2"},
+		"ascii_symbol":  {"ai", "A+2"},
+	}
+	all := []string{"whole", "alias", "literal", "embedded", "apart", "array", "multiple", "partial", "partial_full", "partial_block"}
+	base := []string{"whole", "literal", "apart", "array", "partial_full"}
+	queries := []integrationQueryCase{
+		{
+			text:         "personal computer PR-PV02",
+			want:         base,
+			wantExpanded: all,
+			checkScores:  true,
+		},
+		{
+			text:         "PR-PV02 personal computer",
+			want:         base,
+			wantExpanded: all,
+		},
+		{
+			text:         " \tpersonal\u3000\tcomputer\npr-pv02 ",
+			want:         base,
+			wantExpanded: all,
+		},
+		{
+			text:         "personal computer PR-PV02 PR-PV02",
+			want:         base,
+			wantExpanded: all,
+		},
+		{
+			text:         "personal computer PR-PV02 personal computer",
+			want:         base,
+			wantExpanded: all,
+		},
+		{
+			text:         "personal computer" + strings.Repeat(" PR-PV02", 15),
+			want:         base,
+			wantExpanded: all,
+		},
+		{
+			text: "personal computer" + strings.Repeat(" PR-PV02", 16),
+			want: base,
+		},
+
+		// 编号隔开的词不能重组为同义词；原分段 AND 仍可命中分散原词。
+		{
+			text: "personal PR-PV02 computer",
+			want: base,
+		},
+		{
+			text:         "personal computer PR-PV02 mobile phone #2",
+			want:         []string{},
+			wantExpanded: []string{"multiple"},
+		},
+		{
+			text:         "#2 mobile phone PR-PV02 personal computer",
+			want:         []string{},
+			wantExpanded: []string{"multiple"},
+		},
+		{
+			text: "personal computer PR-PV02 mobile phone #3",
+			want: []string{},
+		},
+		{
+			text: "personal computer PR-PV99",
+			want: []string{},
+		},
+		{
+			text:         "personal computer PR-PV02 iph",
+			want:         []string{"partial_full"},
+			wantExpanded: []string{"partial", "partial_full", "partial_block"},
+		},
+		// 一个块应用同义词，另一个块仍可通过分段包含满足全部条件。
+		{
+			text:         "personal computer PR-PV02 mobile iph",
+			want:         []string{},
+			wantExpanded: []string{"partial_block"},
+		},
+		// 不扩大为任意词组切分；同一块内同义词与部分词混用仍沿用现有能力边界。
+		{
+			text: "personal computer iph PR-PV02",
+			want: []string{"partial_full"},
+		},
+		{
+			text: "personal computer PR-PV02 camera",
+			want: []string{},
+		},
+		{
+			text:         "very very PR-PV02",
+			want:         []string{},
+			wantExpanded: []string{"repeated"},
+		},
+		{
+			text: "very PR-PV02 very",
+			want: []string{},
+		},
+		{
+			text:         "人工 智能 A＋2",
+			want:         []string{},
+			wantExpanded: []string{"chinese"},
+		},
+		{
+			text:         "A＋2 人工 智能",
+			want:         []string{},
+			wantExpanded: []string{"chinese"},
+		},
+	}
+	runElasticsearchIntegration(t, []string{"pc, personal computer", "handset, mobile phone", "very very => strong", "ai, 人工 智能"}, fixtures, queries)
+}
+
 type integrationQueryCase struct {
-	text string
-	want []string
+	text         string
+	want         []string
+	wantExpanded []string // nil 表示两个入口的预期命中相同。
+	checkScores  bool
 }
 
 func runElasticsearchIntegration(t *testing.T, synonyms []string, fixtures map[string][]string, queries []integrationQueryCase) {
@@ -263,41 +395,102 @@ func runElasticsearchIntegration(t *testing.T, synonyms []string, fixtures map[s
 		mustRequest(t, "PUT", index+"/_doc/"+id, map[string]any{"query_text": parts})
 	}
 	mustRequest(t, "POST", index+"/_refresh", nil)
+	search := func(t *testing.T, clause map[string]any) map[string]float64 {
+		t.Helper()
+		data := mustRequest(t, "POST", index+"/_search", map[string]any{
+			"query": clause,
+			"size":  100,
+		})
+		var result struct {
+			TimedOut bool `json:"timed_out"`
+			Shards   struct {
+				Failed int `json:"failed"`
+			} `json:"_shards"`
+			Hits struct {
+				Hits []struct {
+					ID    string  `json:"_id"`
+					Score float64 `json:"_score"`
+				} `json:"hits"`
+			} `json:"hits"`
+		}
+		if err := json.Unmarshal(data, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.TimedOut || result.Shards.Failed != 0 {
+			t.Fatalf("搜索未完整完成: %s", data)
+		}
+		hits := make(map[string]float64, len(result.Hits.Hits))
+		for _, hit := range result.Hits.Hits {
+			hits[hit.ID] = hit.Score
+		}
+		return hits
+	}
+	assertHits := func(t *testing.T, hits map[string]float64, want []string) {
+		t.Helper()
+		ids := make([]string, 0, len(hits))
+		for id := range hits {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		expected := append([]string(nil), want...)
+		sort.Strings(expected)
+		if strings.Join(ids, ",") != strings.Join(expected, ",") {
+			t.Fatalf("召回 = %v，期望 %v", ids, expected)
+		}
+	}
 	for _, tc := range queries {
 		t.Run(tc.text, func(t *testing.T) {
-			clause, err := estextsearch.Query("query_text", tc.text)
-			if err != nil {
-				t.Fatal(err)
+			base := mustQuery(t, "query_text", tc.text)
+			expanded := mustQueryExpanded(t, "query_text", tc.text)
+			wantExpanded := tc.wantExpanded
+			if wantExpanded == nil {
+				wantExpanded = tc.want
 			}
-			data := mustRequest(t, "POST", index+"/_search", map[string]any{
-				"query": clause,
-				"size":  100,
-			})
-			var result struct {
-				TimedOut bool `json:"timed_out"`
-				Shards   struct {
-					Failed int `json:"failed"`
-				} `json:"_shards"`
-				Hits struct {
-					Hits []struct {
-						ID string `json:"_id"`
-					} `json:"hits"`
-				} `json:"hits"`
+			baseHits := search(t, base)
+			hits := search(t, expanded)
+			t.Run("Query", func(t *testing.T) { assertHits(t, baseHits, tc.want) })
+			t.Run("QueryExpanded", func(t *testing.T) { assertHits(t, hits, wantExpanded) })
+			if reflect.DeepEqual(base, expanded) {
+				return
 			}
-			if err := json.Unmarshal(data, &result); err != nil {
-				t.Fatal(err)
+			// 重建优化前的三路径查询，在同一索引验证去掉外层分段 AND 不丢召回。
+			baseShould := base["bool"].(map[string]any)["should"].([]any)
+			expandedShould := expanded["bool"].(map[string]any)["should"].([]any)
+			unoptimized := map[string]any{"bool": map[string]any{
+				"should":               []any{baseShould[0], baseShould[1], expandedShould[1]},
+				"minimum_should_match": 1,
+			}}
+			before := search(t, unoptimized)
+			assertHits(t, before, wantExpanded)
+			for id := range baseHits {
+				if _, ok := hits[id]; !ok {
+					t.Fatalf("扩展查询丢失基础命中：%s", id)
+				}
 			}
-			if result.TimedOut || result.Shards.Failed != 0 {
-				t.Fatalf("搜索未完整完成: %s", data)
-			}
-			ids := make([]string, 0, len(result.Hits.Hits))
-			for _, hit := range result.Hits.Hits {
-				ids = append(ids, hit.ID)
-			}
-			sort.Strings(ids)
-			sort.Strings(tc.want)
-			if strings.Join(ids, ",") != strings.Join(tc.want, ",") {
-				t.Fatalf("召回 = %v，期望 %v", ids, tc.want)
+			if tc.checkScores {
+				if len(baseHits) == 0 || len(baseHits) >= len(hits) {
+					t.Fatalf("评分样本应覆盖基础和新增命中：基础 %v，扩展 %v", baseHits, hits)
+				}
+				for id, score := range hits {
+					if !(score > 0) {
+						t.Fatalf("扩展路径的普通文本仍应参与评分：%s = %g", id, score)
+					}
+					if _, ok := baseHits[id]; ok {
+						if before[id] <= score {
+							t.Fatalf("去重应减少该样本的重复评分：%s，去重前 %g，去重后 %g", id, before[id], score)
+						}
+					} else if math.Abs(before[id]-score) > 1e-5*math.Max(1, score) {
+						t.Fatalf("仅命中混合路径的样本评分应不变：%s，去重前 %g，去重后 %g", id, before[id], score)
+					}
+				}
+				filtered := search(t, map[string]any{"bool": map[string]any{"filter": []any{expanded}}})
+				assertHits(t, filtered, wantExpanded)
+				for id, score := range filtered {
+					if score != 0 {
+						t.Fatalf("filter 不应计分：%s = %g", id, score)
+					}
+				}
+				t.Logf("同索引评分：Query %v；扩展去重前 %v；QueryExpanded %v；整体 filter 全部为 0", baseHits, before, hits)
 			}
 		})
 	}

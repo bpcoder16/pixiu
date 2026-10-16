@@ -39,6 +39,15 @@ func mustQuery(t *testing.T, field, text string) map[string]any {
 	return query
 }
 
+func mustQueryExpanded(t *testing.T, field, text string) map[string]any {
+	t.Helper()
+	query, err := estextsearch.QueryExpanded(field, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return query
+}
+
 func TestQuerySingleInput(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -202,6 +211,114 @@ func TestQueryRepeatedSegmentKeepsWholeAndSingleSegment(t *testing.T) {
 	}
 }
 
+func TestQueryExpandedPreservesContextWithoutRedundantBranch(t *testing.T) {
+	for _, tc := range []struct {
+		text     string
+		ordinary []string
+		literal  []string
+	}{
+		{
+			text:     "personal computer PR-PV02",
+			ordinary: []string{"personal computer"},
+			literal:  []string{"PR-PV02"},
+		},
+		{
+			text:     "PR-PV02 personal computer",
+			ordinary: []string{"personal computer"},
+			literal:  []string{"PR-PV02"},
+		},
+		{
+			text:     "personal computer PR-PV02 mobile phone #2 iph",
+			ordinary: []string{"personal computer", "mobile phone", "iph"},
+			literal:  []string{"PR-PV02", "#2"},
+		},
+		{
+			text:     " \t#2 personal\u3000\tcomputer A＋2 ",
+			ordinary: []string{"personal\u3000\tcomputer"},
+			literal:  []string{"#2", "A＋2"},
+		},
+		{
+			text:     "very very PR-PV02",
+			ordinary: []string{"very very"},
+			literal:  []string{"PR-PV02"},
+		},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			text := strings.TrimSpace(tc.text)
+			got := mustQuery(t, "query_text", tc.text)
+			should := got["bool"].(map[string]any)["should"].([]any)
+			if len(should) != 2 {
+				t.Fatalf("Query 只应保留整句和分段两条原路径：%v", got)
+			}
+			assertJSON(t, should[0].(map[string]any), fmt.Sprintf(`{"match_phrase":{"query_text.contains":{"query":%q,"slop":0}}}`, text))
+			var original []any
+			seen := make(map[string]bool)
+			for _, part := range strings.Fields(text) {
+				if !seen[part] {
+					original = append(original, mustQuery(t, "query_text", part))
+					seen[part] = true
+				}
+			}
+			if !reflect.DeepEqual(should[1], map[string]any{"bool": map[string]any{"must": original}}) {
+				t.Fatal("原分段路径被改写")
+			}
+			expanded := mustQueryExpanded(t, "query_text", tc.text)
+			expandedShould := expanded["bool"].(map[string]any)["should"].([]any)
+			if len(expandedShould) != 2 || !reflect.DeepEqual(expandedShould[0], should[0]) {
+				t.Fatalf("QueryExpanded 应保留整句，且不重复保留外层分段路径：%v", expanded)
+			}
+			var must, filter []any
+			for _, part := range tc.ordinary {
+				must = append(must, mustQuery(t, "query_text", part))
+			}
+			for _, part := range tc.literal {
+				filter = append(filter, mustQuery(t, "query_text", part))
+			}
+			if !reflect.DeepEqual(expandedShould[1], map[string]any{"bool": map[string]any{"must": must, "filter": filter}}) {
+				t.Fatalf("扩展路径应保留连续文本上下文，且字面条件只参与过滤：%v", expandedShould[1])
+			}
+		})
+	}
+}
+
+func TestQueryExpandedFallbackMatchesQuery(t *testing.T) {
+	for _, text := range []string{"i", "ip", "iph", "宝可", "😀😃", "A＋2", "a*", "personal computer", "pc PR-PV02", "personal PR-PV02 computer", "#1 PR-PV02", "PR-PV02 PR-PV02", "iph iph", " \ti\u3000\ti\n", strings.Repeat("甲", 512)} {
+		if !reflect.DeepEqual(mustQueryExpanded(t, "query_text", text), mustQuery(t, "query_text", text)) {
+			t.Fatalf("无需块组合的输入应与 Query 完全一致：%q", text)
+		}
+	}
+	for _, count := range []int{16, 17} {
+		// 重复字面片段不消耗原分段预算，但新增块数也必须有界。
+		for _, text := range []string{
+			"personal computer" + strings.Repeat(" #1", count-1),
+			strings.Repeat("#1 ", count-1) + "personal computer",
+		} {
+			got := mustQueryExpanded(t, "query_text", text)
+			should := got["bool"].(map[string]any)["should"].([]any)
+			if len(should) != 2 {
+				t.Fatalf("%d 块的路径数 = %d，期望 2", count, len(should))
+			}
+			if count == 16 {
+				filter := should[1].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
+				if len(filter) != 15 {
+					t.Fatal("16 块应保留混合路径的全部字面约束")
+				}
+			} else if !reflect.DeepEqual(got, mustQuery(t, "query_text", text)) {
+				t.Fatal("超出块数预算应回退 Query，不丢弃条件")
+			}
+		}
+	}
+	parts := []string{"personal", "computer", "#1"}
+	for i := 0; i < 14; i++ {
+		parts = append(parts, fmt.Sprintf("word%d", i))
+	}
+	text := strings.Join(parts, " ")
+	assertJSON(t, mustQueryExpanded(t, "query_text", text), fmt.Sprintf(`{"match_phrase":{"query_text.contains":{"query":%q,"slop":0}}}`, text))
+	if !reflect.DeepEqual(mustQueryExpanded(t, "query_text", text), mustQuery(t, "query_text", text)) {
+		t.Fatal("超出不同片段预算应与 Query 完全一致")
+	}
+}
+
 func TestQuerySegmentLimitKeepsCompleteInput(t *testing.T) {
 	parts := make([]string, 17)
 	for i := range parts {
@@ -239,70 +356,95 @@ func TestQueryLongInputStillUsesContains(t *testing.T) {
 }
 
 func TestQueryValidationAndComposition(t *testing.T) {
-	for _, text := range []string{"", " \t\n\u3000"} {
-		got, err := estextsearch.Query("query_text", text)
-		if err != nil || got != nil {
-			t.Fatalf("空白查询应返回 nil, nil：%v，%v", got, err)
-		}
-	}
-	for _, field := range []string{"", " ", "query text", "query_text.*", "query?", "title\x00", "\xff"} {
-		got, err := estextsearch.Query(field, "private search")
-		if got != nil || !errors.Is(err, estextsearch.ErrInvalidField) || strings.Contains(err.Error(), "private search") {
-			t.Fatalf("非法字段应报错且不泄漏查询：%v，%v", got, err)
-		}
-	}
-	got, err := estextsearch.Query("query_text", "private\xff")
-	if got != nil || !errors.Is(err, estextsearch.ErrInvalidUTF8) || strings.Contains(err.Error(), "private") {
-		t.Fatalf("非法 UTF-8 应报错且不泄漏查询：%v，%v", got, err)
-	}
-	text := `a"},"match_all":{}\\`
-	clause := mustQuery(t, "query_text", text)
-	body := map[string]any{"query": map[string]any{"bool": map[string]any{"must": []any{clause}}}}
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	must := decoded["query"].(map[string]any)["bool"].(map[string]any)["must"].([]any)
-	literal := must[0].(map[string]any)["match_phrase"].(map[string]any)["query_text.contains"].(map[string]any)["query"]
-	if literal != text {
-		t.Fatal("用户内容必须作为普通字符串嵌入 DSL")
+	for name, build := range map[string]func(string, string) (map[string]any, error){
+		"Query":         estextsearch.Query,
+		"QueryExpanded": estextsearch.QueryExpanded,
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, text := range []string{"", " \t\n\u3000"} {
+				got, err := build("query_text", text)
+				if err != nil || got != nil {
+					t.Fatalf("空白查询应返回 nil, nil：%v，%v", got, err)
+				}
+			}
+			for _, field := range []string{"", " ", "query text", "query_text.*", "query?", "title\x00", "\xff"} {
+				got, err := build(field, "private search")
+				if got != nil || !errors.Is(err, estextsearch.ErrInvalidField) || strings.Contains(err.Error(), "private search") {
+					t.Fatalf("非法字段应报错且不泄漏查询：%v，%v", got, err)
+				}
+			}
+			got, err := build("query_text", "private\xff")
+			if got != nil || !errors.Is(err, estextsearch.ErrInvalidUTF8) || strings.Contains(err.Error(), "private") {
+				t.Fatalf("非法 UTF-8 应报错且不泄漏查询：%v，%v", got, err)
+			}
+			text := `a"},"match_all":{}\\`
+			clause, err := build("query_text", text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := map[string]any{"query": map[string]any{"bool": map[string]any{"must": []any{clause}}}}
+			encoded, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			must := decoded["query"].(map[string]any)["bool"].(map[string]any)["must"].([]any)
+			literal := must[0].(map[string]any)["match_phrase"].(map[string]any)["query_text.contains"].(map[string]any)["query"]
+			if literal != text {
+				t.Fatal("用户内容必须作为普通字符串嵌入 DSL")
+			}
+		})
 	}
 }
 
 func TestQueryResultsAreIndependentAndConcurrent(t *testing.T) {
-	want, err := json.Marshal(mustQuery(t, "query_text", "apple iph"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 20; j++ {
-				got, err := estextsearch.Query("query_text", "apple iph")
-				if err != nil {
-					t.Error(err)
-					return
-				}
-				encoded, err := json.Marshal(got)
-				if err != nil || string(encoded) != string(want) {
-					t.Errorf("并发查询结果改变：%s，%v", encoded, err)
-					return
-				}
-				should := got["bool"].(map[string]any)["should"].([]any)
-				whole := should[0].(map[string]any)["bool"].(map[string]any)["should"].([]any)
-				whole[0].(map[string]any)["match"].(map[string]any)["query_text"].(map[string]any)["query"] = "changed"
+	for name, build := range map[string]func(string, string) (map[string]any, error){
+		"Query":         estextsearch.Query,
+		"QueryExpanded": estextsearch.QueryExpanded,
+	} {
+		t.Run(name, func(t *testing.T) {
+			initial, err := build("query_text", "personal computer PR-PV02")
+			if err != nil {
+				t.Fatal(err)
 			}
-		}()
-	}
-	wg.Wait()
-	got, err := json.Marshal(mustQuery(t, "query_text", "apple iph"))
-	if err != nil || string(got) != string(want) {
-		t.Fatalf("修改返回值污染了后续查询：%s，%v", got, err)
+			want, err := json.Marshal(initial)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wg sync.WaitGroup
+			for i := 0; i < 16; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for j := 0; j < 20; j++ {
+						got, err := build("query_text", "personal computer PR-PV02")
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						encoded, err := json.Marshal(got)
+						if err != nil || string(encoded) != string(want) {
+							t.Errorf("并发查询结果改变：%s，%v", encoded, err)
+							return
+						}
+						should := got["bool"].(map[string]any)["should"].([]any)
+						whole := should[0].(map[string]any)["match_phrase"].(map[string]any)["query_text.contains"].(map[string]any)
+						whole["query"] = "changed"
+					}
+				}()
+			}
+			wg.Wait()
+			final, err := build("query_text", "personal computer PR-PV02")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := json.Marshal(final)
+			if err != nil || string(got) != string(want) {
+				t.Fatalf("修改返回值污染了后续查询：%s，%v", got, err)
+			}
+		})
 	}
 }
