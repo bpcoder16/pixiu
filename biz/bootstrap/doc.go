@@ -55,6 +55,23 @@
 //	})
 //	return start(engine)
 //
+// 常用 Gin HTTP 装配可直接使用 NewGinHTTPService，由其设置模式并读取两份配置；
+// 业务只提供路由注册回调和文档模块，返回服务按前述方式登记到管理器（另需导入 infra/apprun、infra/ginx）：
+//
+//	func newHTTPService() (apprun.Service, error) {
+//		return bootstrap.NewGinHTTPService(func(r *gin.Engine) {
+//			r.GET("/healthz", func(c *gin.Context) {
+//				c.Status(http.StatusNoContent)
+//			})
+//		},
+//			ginx.OpenAPIModule{Name: "app", Title: "App"},
+//			ginx.OpenAPIModule{Name: "admin", Title: "Admin"},
+//		)
+//	}
+//
+// 回调在 Engine 和文档路由创建成功后同步调用一次，nil 表示不注册业务路由。
+// NewGinHTTPService 须在启动阶段串行调用，运行期间不得借此切换 Gin 全局模式。
+//
 // NewGinEngine 从 env.ConfigDirPath() 下的 gin.yaml 读取一次配置，再调用 ginx.New。
 // 文件必需，{} 沿用默认值：不信任代理、记录访问日志、不记录请求或响应详情。
 // 支持 trustedProxies、loggerName、disableAccessLog、logRequestInfo、logResponseInfo；

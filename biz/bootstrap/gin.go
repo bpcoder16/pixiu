@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/infra/ginx"
@@ -47,4 +48,20 @@ func NewGinEngine(modules ...ginx.OpenAPIModule) (*gin.Engine, error) {
 		}
 	}
 	return engine, nil
+}
+
+// NewGinHTTPService 设置 Gin 模式，读取 gin.yaml 和 http.yaml，并构造名为 http 的服务。
+// 调用前须初始化 env；应在启动阶段串行调用，运行期间不得切换 Gin 全局模式。
+// Engine 和文档路由创建成功后同步调用一次 registerRoutes；nil 表示不注册业务路由。
+// 构造不监听端口；调用方负责登记服务，登记失败时调用返回服务的 Shutdown 清理。
+func NewGinHTTPService(registerRoutes func(*gin.Engine), modules ...ginx.OpenAPIModule) (apprun.Service, error) {
+	gin.SetMode(env.RunMode())
+	engine, err := NewGinEngine(modules...)
+	if err != nil {
+		return apprun.Service{}, err
+	}
+	if registerRoutes != nil {
+		registerRoutes(engine)
+	}
+	return NewHTTPService(engine)
 }
