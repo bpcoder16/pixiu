@@ -109,7 +109,26 @@
 // 运行后由管理器关闭，不重复登记到资源栈。
 // HTTP 超时后强制关闭普通连接，不额外等待 handler；管理器返回后应用尽力清理共享资源及日志。
 //
-// Cron 独立加载 cron.yaml，通过任务名绑定业务方法；不需要 HTTP/Gin 配置：
+// Cron 独立加载 cron.yaml，通过任务名绑定业务方法；不需要 HTTP/Gin 配置。
+// 包级具名函数可在业务包中批量声明，无需为每个任务编写 init：
+//
+//	func heartbeat(ctx context.Context) error {
+//		logit.Info(ctx, "heartbeat")
+//		return nil
+//	}
+//
+//	var Registry = bootstrap.MustNewCronRegistry(
+//		heartbeat,
+//	)
+//
+// 构造时调用 NewCronScheduler(Registry.Handlers()...)，示例自动名称为 heartbeat。
+// 注册器只登记元数据、不读配置或执行任务，各实例独立，Handlers 返回副本。
+// 零值 CronRegistry 也可直接使用；MustRegister(handler, name) 支持显式稳定名称，
+// 适用于闭包、方法值、泛型函数和需要保持 YAML/锁标识兼容的重命名。
+// 自动名称取包级函数名的小写形式；nil、无法自动取名、非法名称及重名均 panic。
+// 登记与读取快照可并发，首次使用后不得复制注册器；登记不会更新已构造的 Scheduler。
+//
+// 也可直接传入带有稳定名称的 CronHandler；以下示例只在 jobs 中启用 scan-orders：
 //
 //	scheduler, err := bootstrap.NewCronScheduler(bootstrap.CronHandler{
 //		Name: "scan-orders",
