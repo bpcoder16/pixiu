@@ -291,7 +291,7 @@
 // 迁移不会自动挂到 MustBaseInit 或连接构造中；没有迁移锁，发布时避免多实例同时执行。
 // 模板见 conf.example/migrate.example.yaml，详细契约见 docs/schemamigrate-design.md。
 //
-// NATS 声明式消费工厂直接构造 natsx Runtime，再交给 NATSService / NATSCoreService。
+// NATS 声明式消费工厂直接构造 natsx.JetStreamRuntime / natsx.CoreRuntime，再交给 NATSJetStreamService / NATSCoreService。
 // 同 Client 的服务名分别是 nats:<name>、nats-core:<name>，不另读消费配置文件。
 // 混合使用时显式设置总关闭预算（另需导入 context、time、infra/natsx）：
 //
@@ -301,11 +301,11 @@
 //		}, func() (apprun.Service, error) {
 //			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 //			defer cancel()
-//			runtime, err := natsx.NewRuntime(ctx, client, registry, natsx.RuntimeConfig{})
+//			runtime, err := natsx.NewJetStreamRuntime(ctx, client, registry, natsx.JetStreamRuntimeConfig{})
 //			if err != nil {
 //				return apprun.Service{}, err
 //			}
-//			return bootstrap.NATSService(runtime), nil
+//			return bootstrap.NATSJetStreamService(runtime), nil
 //		}, func() (apprun.Service, error) {
 //			runtime, err := natsx.NewCoreRuntime(client, core, natsx.CoreRuntimeConfig{})
 //			if err != nil {
