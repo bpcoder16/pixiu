@@ -295,7 +295,7 @@
 // 同 Client 的服务名分别是 nats:<name>、nats-core:<name>，不另读消费配置文件。
 // 混合使用时显式设置总关闭预算（另需导入 context、time、infra/natsx）：
 //
-//	func runNATS(client *natsx.Client, registry *natsx.Registry, core *natsx.CoreRegistry) error {
+//	func runNATS(client *natsx.Client, registry *natsx.JetStreamRegistry, core *natsx.CoreRegistry) error {
 //		return bootstrap.StartWithConfig(bootstrap.StartConfig{
 //			ShutdownTimeout: 2 * time.Minute,
 //		}, func() (apprun.Service, error) {

@@ -135,8 +135,8 @@ func runtimeClient(t *testing.T, permission string) *natsx.Client {
 	return c
 }
 
-func bootstrapRegistry(handler natsx.Handler) *natsx.Registry {
-	return natsx.MustNewRegistry(natsx.StreamSpec{
+func bootstrapRegistry(handler natsx.Handler) *natsx.JetStreamRegistry {
+	return natsx.MustNewJetStreamRegistry(natsx.StreamSpec{
 		Name: "BOOTSTRAP",
 		Config: &natsx.StreamConfig{
 			Subjects: []string{"bootstrap.work"},
