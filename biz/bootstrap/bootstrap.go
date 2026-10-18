@@ -30,6 +30,12 @@ func MustBaseInit(config *appconfig.AppConfig, resources *lifecycle.Stack) {
 	if err := initLog(config.Log, resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize log: %w", err))
 	}
+	if err := aliyunOSSInstances.initialize(resources); err != nil {
+		panic(fmt.Errorf("bootstrap: initialize Aliyun OSS: %w", err))
+	}
+	if err := aliyunESInstances.initialize(resources); err != nil {
+		panic(fmt.Errorf("bootstrap: initialize Aliyun ES: %w", err))
+	}
 	if err := mysqlInstances.initialize(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize MySQL: %w", err))
 	}
@@ -38,12 +44,6 @@ func MustBaseInit(config *appconfig.AppConfig, resources *lifecycle.Stack) {
 	}
 	if err := elasticsearchInstances.initialize(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize Elasticsearch: %w", err))
-	}
-	if err := aliyunOSSInstances.initialize(resources); err != nil {
-		panic(fmt.Errorf("bootstrap: initialize Aliyun OSS: %w", err))
-	}
-	if err := aliyunESInstances.initialize(resources); err != nil {
-		panic(fmt.Errorf("bootstrap: initialize Aliyun ES: %w", err))
 	}
 	if err := natsInstances.initialize(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize NATS: %w", err))
