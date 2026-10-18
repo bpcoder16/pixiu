@@ -290,4 +290,33 @@
 // 关闭或空清单不取数据库；迁移核心从 mysqlx.Named(name) 获取主库，失败返回错误与部分报告。
 // 迁移不会自动挂到 MustBaseInit 或连接构造中；没有迁移锁，发布时避免多实例同时执行。
 // 模板见 conf.example/migrate.example.yaml，详细契约见 docs/schemamigrate-design.md。
+//
+// NATS 声明式消费工厂直接构造 natsx Runtime，再交给 NATSService / NATSCoreService。
+// 同 Client 的服务名分别是 nats:<name>、nats-core:<name>，不另读消费配置文件。
+// 混合使用时显式设置总关闭预算（另需导入 context、time、infra/natsx）：
+//
+//	func runNATS(client *natsx.Client, registry *natsx.Registry, core *natsx.CoreRegistry) error {
+//		return bootstrap.StartWithConfig(bootstrap.StartConfig{
+//			ShutdownTimeout: 2 * time.Minute,
+//		}, func() (apprun.Service, error) {
+//			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+//			defer cancel()
+//			runtime, err := natsx.NewRuntime(ctx, client, registry, natsx.RuntimeConfig{})
+//			if err != nil {
+//				return apprun.Service{}, err
+//			}
+//			return bootstrap.NATSService(runtime), nil
+//		}, func() (apprun.Service, error) {
+//			runtime, err := natsx.NewCoreRuntime(client, core, natsx.CoreRuntimeConfig{})
+//			if err != nil {
+//				return apprun.Service{}, err
+//			}
+//			return bootstrap.NATSCoreService(runtime), nil
+//		})
+//	}
+//
+// StartWithConfig 要求显式预算至少 5s；旧 Start/NewAppManager 默认仍为 20s。
+// HTTP/Cron 等生产入口放在 Runtime 后登记，逆序先停止入口再排空消费。
+// Core 流量入口可在 Run 内可取消地等 WaitReady，不在工厂中等待。
+// 总预算不包含资源栈、Client.Close 和日志；这些仍由应用随后关闭，日志最后关闭。
 package bootstrap

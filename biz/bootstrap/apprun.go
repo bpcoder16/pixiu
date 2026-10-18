@@ -15,9 +15,27 @@ type ServiceFactory func() (apprun.Service, error)
 // Start 按顺序构造、登记服务，全部成功后接管 SIGINT/SIGTERM 并阻塞至运行和关闭结束。
 // 构造或登记失败时停止后续构造，逆序回收已构造服务并合并错误；nil 构造函数返回错误。
 // 运行后由管理器逆序关闭，不重复回收；运行期总关闭预算默认 20 秒，不含构造及启动前失败回收。
-// 需要自定义关闭预算或运行 context 时，使用 NewAppManager 自行装配；应用只应有一个信号所有者。
-func Start(factories ...ServiceFactory) (err error) {
-	manager, err := NewAppManager()
+// 自定义关闭预算使用 StartWithConfig；自定义运行 context 使用 NewAppManager 自行装配。
+// 应用只应有一个信号所有者。
+func Start(factories ...ServiceFactory) error {
+	return startServices(20*time.Second, factories...)
+}
+
+// StartConfig 显式配置运行期总关闭预算，不包含构造、资源栈和日志关闭。
+type StartConfig struct {
+	ShutdownTimeout time.Duration
+}
+
+// StartWithConfig 与 Start 使用同一启动链路；显式期限不得小于 5 秒。
+func StartWithConfig(cfg StartConfig, factories ...ServiceFactory) error {
+	if cfg.ShutdownTimeout < 5*time.Second {
+		return fmt.Errorf("bootstrap: explicit app shutdown timeout must be at least 5s: %s", cfg.ShutdownTimeout)
+	}
+	return startServices(cfg.ShutdownTimeout, factories...)
+}
+
+func startServices(timeout time.Duration, factories ...ServiceFactory) (err error) {
+	manager, err := NewAppManager(timeout)
 	if err != nil {
 		return err
 	}
