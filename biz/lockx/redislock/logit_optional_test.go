@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -21,7 +22,8 @@ func TestTryDoWithoutLogitInitialization(t *testing.T) {
 		if err := cmd.Run(); err != nil {
 			t.Fatalf("未配置 logit 时锁调用失败: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
 		}
-		if stdout.String() != "PASS\n" || stderr.Len() != 0 {
+		frameworkOutput := regexp.MustCompile(`^PASS\n(?:coverage: [0-9]+\.[0-9]+% of statements(?: in [^\n]+)?\n)?$`)
+		if !frameworkOutput.Match(stdout.Bytes()) || stderr.Len() != 0 {
 			t.Fatalf("未配置 logit 时不应输出 Redis 日志: stdout=%q stderr=%q", stdout.String(), stderr.String())
 		}
 		return

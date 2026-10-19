@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +24,9 @@ func TestUnconfiguredDefaultIsSilent(t *testing.T) {
 		if err := cmd.Run(); err != nil {
 			t.Fatalf("未配置日志的子进程失败: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
 		}
-		if stdout.String() != "PASS\n" || stderr.Len() != 0 {
+		// 覆盖率模式会由测试框架额外输出汇总，只允许这两种框架输出。
+		frameworkOutput := regexp.MustCompile(`^PASS\n(?:coverage: [0-9]+\.[0-9]+% of statements(?: in [^\n]+)?\n)?$`)
+		if !frameworkOutput.Match(stdout.Bytes()) || stderr.Len() != 0 {
 			t.Fatalf("未配置时不应产生测试框架以外的输出: stdout=%q stderr=%q", stdout.String(), stderr.String())
 		}
 		return
