@@ -76,7 +76,7 @@ func (c *Client) request(ctx context.Context, method, suffix string, op operatio
 		}
 	}()
 	var reader io.Reader = res.Body
-	if c.detailsEnabled() {
+	if c.detailsEnabled(ctx) {
 		reader = io.TeeReader(reader, &responseBody)
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {

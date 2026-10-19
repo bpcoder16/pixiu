@@ -1,6 +1,7 @@
 package elasticsearchx
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -24,8 +25,13 @@ func (c *Client) resultLevel(err error, duration time.Duration) logit.Level {
 	return logit.InfoLevel
 }
 
-func (c *Client) detailsEnabled() bool {
-	return c.logRequests && c.logDetails
+func (c *Client) detailsEnabled(ctx context.Context) bool {
+	if !c.logRequests || !c.logDetails {
+		return false
+	}
+	logger := logit.LoggerFromContext(ctx)
+	// 读取、解析或关闭响应仍可能失败，不能仅按预期成功级别决定是否采集正文。
+	return logger.Enabled(logit.InfoLevel) || logger.Enabled(logit.WarnLevel) || logger.Enabled(logit.ErrorLevel)
 }
 
 func (c *Client) logResult(req *http.Request, op operation, res *http.Response, err error, duration time.Duration, requestBody, responseBody []byte) {

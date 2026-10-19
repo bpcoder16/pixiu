@@ -58,8 +58,8 @@ func OptLogRequests(enabled bool) Option {
 	return func(c *Client) { c.logRequests = enabled }
 }
 
-// OptLogDetails 控制是否采集请求体和响应详情，默认关闭；与请求日志开关同时开启时才采集。
-// 日志级别仅在最终输出时判断，不参与详情采集判断。
+// OptLogDetails 控制是否采集请求体和响应详情，默认关闭；需同时开启请求日志开关，
+// 且 ctx 选中的 Logger 至少启用 Info、Warn、Error 之一才采集，最终仍按实际级别过滤。
 // 所有操作在解析和收尾完成后输出日志，响应体只包含实际读取的内容。
 func OptLogDetails(enabled bool) Option {
 	return func(c *Client) { c.logDetails = enabled }
