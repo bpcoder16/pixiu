@@ -18,6 +18,18 @@ var baseInitStarted bool
 // 日志最先登记，以保证最后关闭；重复调用或初始化失败后重试会 panic。
 // resources 由应用创建为空栈并负责关闭，调用方须提前登记关闭 defer。
 func MustBaseInit(config *appconfig.AppConfig, resources *lifecycle.Stack) {
+	mustBaseInit(config, resources, true)
+}
+
+// MustBaseInitWithoutLogit 提供迁移过渡入口，执行除 logit 外的通用初始化。
+// 跳过日志配置校验、Logger 创建与发布、日志关闭登记及 stdout/stderr 重定向。
+// 参数、时区及声明约束与 MustBaseInit 相同，两个入口共用一次初始化状态。
+// 必须在其他 goroutine 并发使用时间或日志前调用；自管日志由应用负责最后关闭。
+func MustBaseInitWithoutLogit(config *appconfig.AppConfig, resources *lifecycle.Stack) {
+	mustBaseInit(config, resources, false)
+}
+
+func mustBaseInit(config *appconfig.AppConfig, resources *lifecycle.Stack, initializeLog bool) {
 	if err := validateParams(config, resources); err != nil {
 		panic(err)
 	}
@@ -27,8 +39,10 @@ func MustBaseInit(config *appconfig.AppConfig, resources *lifecycle.Stack) {
 	baseInitStarted = true
 	// 轮转文件创建后即启动后台清理，因此必须在初始化日志前设置默认时区。
 	time.Local = env.TimeLocation()
-	if err := initLog(config.Log, resources); err != nil {
-		panic(fmt.Errorf("bootstrap: initialize log: %w", err))
+	if initializeLog {
+		if err := initLog(config.Log, resources); err != nil {
+			panic(fmt.Errorf("bootstrap: initialize log: %w", err))
+		}
 	}
 	if err := aliyunOSSInstances.initialize(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize Aliyun OSS: %w", err))

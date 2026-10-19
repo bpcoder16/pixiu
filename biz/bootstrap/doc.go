@@ -24,6 +24,16 @@
 // lifecycle、logit。初始化 panic 原样传播，已登记资源由应用的 defer 关闭。
 // 通用入口接收 *appconfig.AppConfig；HTTP 与 Cron 共用 env/log 配置及初始化流程。
 //
+// 迁移期间由应用自管日志时，将上例的 MustBaseInit 调用替换为：
+//
+//	bootstrap.MustBaseInitWithoutLogit(config, &resources)
+//
+// 此入口跳过日志配置校验、默认及命名 Logger 创建、日志关闭登记和 stdout/stderr 重定向，
+// app.yaml 可以省略 log，已有 Logger 保持原样；自管日志由应用负责最后关闭。
+// 参数校验、env 时区设置和其他组件初始化保持一致；两个入口共用一次初始化状态，
+// 任一入口开始初始化后，不论成功或失败，均不能再调用任一入口或追加声明。
+// 两种入口均须在其他 goroutine 并发使用时间或日志前调用。
+//
 // 初始化成功后，可将服务构造函数交给 Start，统一登记服务并接管停机信号：
 //
 //	func start(handler http.Handler) error {
