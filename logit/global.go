@@ -10,11 +10,11 @@ var defaultLogger atomic.Pointer[Logger]
 type loggerNameKey struct{}
 
 func init() {
-	var l = MustNew(OptWriter(Stdout()))
+	var l Logger = noopLogger{}
 	defaultLogger.Store(&l)
 }
 
-// Default 返回当前默认 Logger。
+// Default 返回当前默认 Logger；SetDefault 前为空操作 Logger，所有级别均不输出或退出。
 func Default() Logger { return *defaultLogger.Load() }
 
 // SetDefault 替换默认 Logger(应用启动期调用一次)，nil Logger 会 panic。
@@ -51,10 +51,15 @@ func Info(ctx context.Context, msg string, fields ...Field) {
 
 // InfoDuration 与 Info 相同；ctx 含 WithStart 起点时追加下游、自身和总耗时。
 func InfoDuration(ctx context.Context, msg string, fields ...Field) {
+	l := LoggerFromContext(ctx)
+	// 仅为空操作 Logger 跳过汇总，其他 Logger 仍由 Output 校验字段并过滤级别。
+	if _, ok := l.(noopLogger); ok {
+		return
+	}
 	if state := durationFromContext(ctx); state != nil {
 		fields = durationFields(fields, state)
 	}
-	LoggerFromContext(ctx).Output(ctx, InfoLevel, 1, msg, fields...)
+	l.Output(ctx, InfoLevel, 1, msg, fields...)
 }
 
 func Warn(ctx context.Context, msg string, fields ...Field) {

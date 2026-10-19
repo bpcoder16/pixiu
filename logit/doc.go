@@ -3,6 +3,10 @@
 //
 // 日常使用(不需要轮转时只需 import logit 一个包):
 //
+//	logger := logit.MustNew(logit.OptWriter(logit.Stdout()))
+//	logit.SetDefault(logger) // 显式启用默认日志
+//	defer logit.Close(logger)
+//	ctx := context.Background()
 //	ctx = logit.WithContextLogID(ctx)               // 入口初始化字段并生成链路 ID
 //	ctx = logit.WithStart(ctx)                      // 记录请求起点
 //	msgCtx := logit.NewContextScope(ctx)             // 并发消息各用独立字段存储
@@ -72,7 +76,11 @@
 //	// 停止业务入口并等待使用 client 的任务结束后：
 //	return stack.Close() // 先关闭 client，最后关闭 logger
 //
-// 全局默认 Logger 输出到 stdout,启动期用 SetDefault 替换;
+// 全局默认 Logger 初始为空操作 Logger；所有级别（含 Fatal）直接返回，不输出、不退出，
+// 不校验输出字段或执行 Defer 回调；Enabled 始终为 false，With 仍为空操作，Close 返回 nil。
+// 启动期用 SetDefault 显式启用；独立构造和显式注册的命名 Logger 不受默认配置影响。
+// 初始化前取得的 Logger 或 With 子 Logger 保持空操作，需要输出时须重新获取。
+// WithContext 前置约束及 panic 专用接口语义不受默认 Logger 是否配置影响。
 // 测试可先用 Default 保存旧值,再用 SetDefault 替换并在结束时恢复。
 // panic 处理见 ReportPanic/RecoverAndReport；processStart 保存包初始化时的时间点，
 // 输出时按当前 time.Local 格式化。应用必须在并发使用日志前完成默认时区设置。

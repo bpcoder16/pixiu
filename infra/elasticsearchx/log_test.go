@@ -7,12 +7,48 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bpcoder16/pixiu/logit"
 )
+
+func TestRequestsWithoutLogitInitialization(t *testing.T) {
+	const helperEnv = "PIXIU_TEST_ELASTICSEARCH_WITHOUT_LOGIT"
+	if os.Getenv(helperEnv) != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestRequestsWithoutLogitInitialization$")
+		cmd.Env = append(os.Environ(), helperEnv+"=1")
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("未配置 logit 时请求失败: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+		}
+		if stdout.String() != "PASS\n" || stderr.Len() != 0 {
+			t.Fatalf("未配置 logit 时不应输出请求日志: stdout=%q stderr=%q", stdout.String(), stderr.String())
+		}
+		return
+	}
+	for _, failed := range []bool{false, true} {
+		client := newLoggingTestClient(t, func(req *http.Request) (*http.Response, error) {
+			if failed {
+				return jsonResponse(req, 503, `{"error":{"type":"unavailable"}}`), nil
+			}
+			return jsonResponse(req, 200, `{"count":7}`), nil
+		}, OptLogRequests(true), OptLogDetails(true))
+		count, err := client.Count(context.Background(), "products", map[string]any{})
+		if failed {
+			var httpErr *HTTPError
+			if !errors.As(err, &httpErr) || httpErr.Status != 503 {
+				t.Fatalf("业务错误未保留: %v", err)
+			}
+		} else if err != nil || count != 7 {
+			t.Fatalf("业务结果未保留: count=%d err=%v", count, err)
+		}
+	}
+}
 
 func newLoggingTestClient(t *testing.T, perform performerFunc, opts ...Option) *Client {
 	t.Helper()

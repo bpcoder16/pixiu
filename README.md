@@ -102,7 +102,7 @@ func main() {
 
 这个例子会向标准输出写入 JSON 日志，在同一请求中沿用 `logId` 和 `service` 字段，并在结束日志中追加自身与总耗时。
 
-默认全局 Logger 已可直接使用，输出文本日志到 stdout。需要 JSON、级别过滤或专属写入目标时，在启动阶段通过 `New` / `MustNew` 构造实例；应用可使用 `SetDefault`，也可通过 `Logger` 接口进行依赖注入。
+默认全局 Logger 为空操作 Logger：未调用 `SetDefault` 时，日志不输出到 stdout/stderr，所有级别（包括 Fatal）直接返回，`Enabled` 为 false，`Close` 返回 nil。仅使用 `biz/lockx`、`infra/elasticsearchx` 等能力时，无需初始化 logit。需要日志时，在启动阶段通过 `New` / `MustNew` 构造实例并调用 `SetDefault`；也可直接使用独立实例，或通过 `SetNamed` 注册命名 Logger。`WithContext` 的前置约束和 panic 专用接口语义保持不变。
 
 ## 模块导航
 

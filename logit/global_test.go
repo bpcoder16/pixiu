@@ -17,9 +17,10 @@ import (
 	"github.com/bpcoder16/pixiu/logit"
 )
 
-func TestDefaultUsesStdoutAndStandardStreamsStayOpen(t *testing.T) {
+func TestExplicitStdoutAndStandardStreamsStayOpen(t *testing.T) {
 	const helperEnv = "PIXIU_TEST_STANDARD_STREAMS"
 	if os.Getenv(helperEnv) == "1" {
+		logit.SetDefault(logit.MustNew(logit.OptWriter(logit.Stdout())))
 		logit.Info(context.Background(), "default stdout info")
 		logit.Error(context.Background(), "default stdout error")
 		if err := logit.Close(logit.Default()); err != nil {
@@ -37,7 +38,7 @@ func TestDefaultUsesStdoutAndStandardStreamsStayOpen(t *testing.T) {
 		return
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestDefaultUsesStdoutAndStandardStreamsStayOpen$")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestExplicitStdoutAndStandardStreamsStayOpen$")
 	cmd.Env = append(os.Environ(), helperEnv+"=1")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
