@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
 	"github.com/bpcoder16/pixiu/infra/apprun"
@@ -171,5 +172,25 @@ func TestStartRunsAndShutsDownOnce(t *testing.T) {
 func TestStartWithoutServices(t *testing.T) {
 	if err := bootstrap.Start(); !errors.Is(err, apprun.ErrNoServices) {
 		t.Fatalf("未保留空服务错误: %v", err)
+	}
+}
+
+func TestStartWithConfigValidation(t *testing.T) {
+	for _, timeout := range []time.Duration{
+		-time.Second,
+		0,
+		time.Second,
+		5*time.Second - time.Nanosecond,
+	} {
+		called := false
+		err := bootstrap.StartWithConfig(bootstrap.StartConfig{
+			ShutdownTimeout: timeout,
+		}, func() (apprun.Service, error) {
+			called = true
+			return apprun.Service{}, nil
+		})
+		if err == nil || called {
+			t.Fatalf("非法期限 %s: %v", timeout, err)
+		}
 	}
 }
