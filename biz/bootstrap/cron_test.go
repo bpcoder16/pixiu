@@ -77,6 +77,32 @@ func TestCronConfigurationAndBinding(t *testing.T) {
 	})
 }
 
+func TestCronRegistryCaseSensitiveBinding(t *testing.T) {
+	isolatedLog(t, func() {
+		initHTTPConfigDir(t)
+		registry := bootstrap.MustNewCronRegistry(RegistryHeartbeat)
+		for _, name := range []string{"RegistryHeartbeat", "registryHeartbeat", "registryheartbeat"} {
+			t.Run(name, func(t *testing.T) {
+				writeCronConfig(t, fmt.Sprintf("jobs:\n  - name: %s\n    every: 1s\n", name))
+				s, err := bootstrap.NewCronScheduler(registry.Handlers()...)
+				if s != nil {
+					if closeErr := s.Shutdown(); closeErr != nil {
+						t.Fatal(closeErr)
+					}
+					s.Wait()
+				}
+				if name == "RegistryHeartbeat" {
+					if err != nil {
+						t.Fatalf("与函数名完全一致的配置应绑定成功: %v", err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), "unknown Cron handler") {
+					t.Fatalf("大小写不一致应拒绝绑定: name=%q err=%v", name, err)
+				}
+			})
+		}
+	})
+}
+
 func TestCronMinimumInterval(t *testing.T) {
 	isolatedLog(t, func() {
 		initHTTPConfigDir(t)

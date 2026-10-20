@@ -19,7 +19,7 @@ type CronRegistry struct {
 	handlers []CronHandler
 }
 
-// MustNewCronRegistry 批量登记包级具名函数，默认名称为函数名的小写形式。
+// MustNewCronRegistry 批量登记包级具名函数，默认名称为原始函数名，区分大小写。
 // 非法 Handler 或名称冲突会 panic；闭包、方法值和泛型函数须改用 MustRegister 显式命名。
 func MustNewCronRegistry(handlers ...cronx.Handler) *CronRegistry {
 	registry := &CronRegistry{}
@@ -30,7 +30,7 @@ func MustNewCronRegistry(handlers ...cronx.Handler) *CronRegistry {
 }
 
 // MustRegister 追加任务声明；可选 name 最多一个，提供时按原值作为稳定名称。
-// 未提供名称时，只为包级具名函数自动取名；名称为空、含首尾空白、重复或 Handler 为 nil 均 panic。
+// 未提供名称时，只为包级具名函数自动取名并保留大小写；名称为空、含首尾空白、重复或 Handler 为 nil 均 panic。
 // 自动名称会随函数重命名改变；YAML 绑定和锁标识需要兼容时，应显式固定名称。
 func (r *CronRegistry) MustRegister(handler cronx.Handler, name ...string) {
 	if handler == nil {
@@ -81,5 +81,5 @@ func cronFunctionName(handler cronx.Handler) string {
 	if !found || !token.IsIdentifier(name) {
 		panic(fmt.Errorf("bootstrap: cannot infer Cron handler name from %q; provide an explicit name", fullName))
 	}
-	return strings.ToLower(name)
+	return name
 }

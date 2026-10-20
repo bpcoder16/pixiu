@@ -29,7 +29,7 @@ func TestCronRegistryBatchAndSnapshots(t *testing.T) {
 	for _, handler := range handlers {
 		names = append(names, handler.Name)
 	}
-	if !slices.Equal(names, []string{"registryheartbeat", "registryreport"}) {
+	if !slices.Equal(names, []string{"registryHeartbeat", "registryReport"}) {
 		t.Fatalf("批量登记的任务名称或顺序错误: %v", names)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -45,7 +45,7 @@ func TestCronRegistryBatchAndSnapshots(t *testing.T) {
 	handlers[0] = bootstrap.CronHandler{}
 	snapshot := registry.Handlers()
 	registry.MustRegister(registryReport, "report-alias")
-	if len(snapshot) != 2 || snapshot[0].Name != "registryheartbeat" || snapshot[0].Handler == nil {
+	if len(snapshot) != 2 || snapshot[0].Name != "registryHeartbeat" || snapshot[0].Handler == nil {
 		t.Fatalf("注册器与调用方共享了可变清单: %v", snapshot)
 	}
 	other := bootstrap.MustNewCronRegistry(registryHeartbeat)
@@ -54,6 +54,14 @@ func TestCronRegistryBatchAndSnapshots(t *testing.T) {
 	}
 	if len(bootstrap.MustNewCronRegistry().Handlers()) != 0 {
 		t.Fatal("空批量声明应得到空清单")
+	}
+}
+
+func TestCronRegistryCaseSensitiveNames(t *testing.T) {
+	registry := bootstrap.MustNewCronRegistry(registryHeartbeat, RegistryHeartbeat)
+	handlers := registry.Handlers()
+	if len(handlers) != 2 || handlers[0].Name != "registryHeartbeat" || handlers[1].Name != "RegistryHeartbeat" {
+		t.Fatalf("仅大小写不同的函数名应保留为独立任务: %v", handlers)
 	}
 }
 
@@ -128,16 +136,9 @@ func TestCronRegistryRejectsInvalidRegistration(t *testing.T) {
 			want: "duplicate Cron handler",
 		},
 		{
-			name: "lowercase-collision",
-			register: func(r *bootstrap.CronRegistry) {
-				r.MustRegister(RegistryHeartbeat)
-			},
-			want: "duplicate Cron handler",
-		},
-		{
 			name: "explicit-collision",
 			register: func(r *bootstrap.CronRegistry) {
-				r.MustRegister(registryReport, "registryheartbeat")
+				r.MustRegister(registryReport, "registryHeartbeat")
 			},
 			want: "duplicate Cron handler",
 		},
@@ -167,7 +168,7 @@ func TestCronRegistryRejectsInvalidRegistration(t *testing.T) {
 			registry := bootstrap.MustNewCronRegistry(registryHeartbeat)
 			requireCronRegistryPanic(t, tc.want, func() { tc.register(registry) })
 			handlers := registry.Handlers()
-			if len(handlers) != 1 || handlers[0].Name != "registryheartbeat" {
+			if len(handlers) != 1 || handlers[0].Name != "registryHeartbeat" {
 				t.Fatal("失败登记不应改变已有清单")
 			}
 		})
