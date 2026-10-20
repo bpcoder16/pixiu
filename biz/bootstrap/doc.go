@@ -18,11 +18,21 @@
 //	bootstrap.MustRegisterAliyunES("search-control", true)
 //	bootstrap.MustRegisterNATS("orders", true)
 //	bootstrap.MustBaseInit(config, &resources)
-//	logit.Info(context.Background(), "application initialized")
+//	moduleLogger := logit.With(logit.Str("mod", "orders"))
+//	moduleLogger.Info(context.Background(), "application initialized")
 //
 // 示例使用标准库 context、log，以及 pixiu 的 biz/appconfig、biz/bootstrap、
 // lifecycle、logit。初始化 panic 原样传播，已登记资源由应用的 defer 关闭。
 // 通用入口接收 *appconfig.AppConfig；HTTP 与 Cron 共用 env/log 配置及初始化流程。
+// 先应用 env 时区，再依次初始化日志、OSS、阿里云 ES、MySQL、Redis、Elasticsearch 和 NATS；
+// 共享客户端仅初始化已声明的实例。服务及外部生产者停止后，资源栈按登记逆序关闭：
+// NATS、Elasticsearch、Redis、MySQL、阿里云 ES、OSS、日志；未声明的组件跳过。
+// 该顺序按组件类别描述，不保证同一组件内多个命名实例的关闭顺序。
+//
+// 新项目应先完成 MustBaseInit，再通过 logit.Default、logit.With 或 logit.Named 创建和保存模块 Logger，
+// 如上例所示；不要在先于 bootstrap 执行的包变量初始化或 Go 的 init() 中缓存这些 Logger。
+// 初始化前取得的空操作实例不会随后续 SetDefault 或命名注册自动更新。
+// 包级 logit.Info(ctx, ...) 等方法每次调用时选择当前 Logger，可在初始化完成后直接使用。
 //
 // 迁移期间由应用自管日志时，将上例的 MustBaseInit 调用替换为：
 //
@@ -206,9 +216,9 @@
 // logCommands 默认 false，只关闭正常命令的 Info 日志，慢调用和错误日志仍包含请求参数。
 // redisx.Default().Client() 与 redisx.Named(name).Client() 获取同一默认客户端。
 // 创建首个实例前只登记一次 redisx.CloseAll，单个失败实例由 redisx 立即清理；
-// 此前成功的 Redis、MySQL 与日志交给应用资源栈关闭，不重复登记单个客户端 Close。
+// 此前成功创建的共享实例和日志交给应用资源栈关闭，不重复登记单个客户端 Close。
 // 关闭前先停止并等待外部生产者及业务管理的订阅；NATS 托管消费由其 CloseAll 排空，
-// 再关闭阿里云 ES、OSS、Elasticsearch、Redis、MySQL 与日志。消费者仍使用的项目资源也必须晚于 NATS 关闭。
+// 再依次关闭 Elasticsearch、Redis、MySQL、阿里云 ES、OSS 与日志。消费者仍使用的项目资源也必须晚于 NATS 关闭。
 //
 // Elasticsearch 使用 MustRegisterElasticsearch(name, isDefault) 声明，与 MySQL、Redis 独立判重。
 // Redis 初始化后读取 elasticsearch.<name>.yaml，文件前缀统一小写；未声明时跳过。
@@ -224,7 +234,7 @@
 // 关闭前先停止并等待业务任务，沿用底层 SDK 关闭行为，不新增关闭期限。
 //
 // 阿里云 OSS 使用 MustRegisterAliyunOSS(name, isDefault) 声明，一个实例固定对应一个 Bucket。
-// Elasticsearch 之后、阿里云 ES 之前读取 aliyunossx.<name>.yaml，未声明时跳过。
+// 日志初始化阶段之后、阿里云 ES 之前读取 aliyunossx.<name>.yaml，未声明时跳过。
 // 模板见 conf.example/aliyunossx.example.yaml；文件不接受 name、isDefault。
 // region、bucket、accessKeyID、accessKeySecret 必填，固定 AK/SK 由 ossx.New 内部封装。
 // endpoint 可选，空值按 Region 推导；自定义值须为不含凭据、查询或非根路径的 HTTP(S) URL。
@@ -234,10 +244,10 @@
 // 文件不替换环境变量占位符；动态凭据仍可通过底层 ossx.Config.Credential 注入，与 AK/SK 互斥。
 // 首个实例创建前只登记一次 ossx.CloseAll，部分失败由应用栈回收已完成的实例。
 // ossx.Default() 与 ossx.Named(默认名称) 返回同一实例，上传请求不再指定 Bucket。
-// 退出时先停止并等待使用方，NATS 排空后才关闭 OSS，日志最后关闭；Close 不排空在途上传。
+// 退出时先停止并等待使用方，按通用逆序在阿里云 ES 之后、日志之前关闭 OSS；Close 不排空在途上传。
 //
 // 阿里云 ES 管理端使用 MustRegisterAliyunES(name, isDefault) 声明，每个客户端固定一个 InstanceID。
-// OSS 之后、NATS 之前读取 aliyunesx.<name>.yaml，未声明时跳过；与 Elasticsearch 数据面独立。
+// OSS 之后、MySQL 之前读取 aliyunesx.<name>.yaml，未声明时跳过；与 Elasticsearch 数据面独立。
 // 模板见 conf.example/aliyunesx.example.yaml；name、isDefault 只由声明提供。
 // region、instanceID、accessKeyID、accessKeySecret 必填；endpoint 可选，须为 HTTP(S) URL。
 // requestTimeout 默认 60s，slowThreshold 默认 200ms，负值无效；logRequests 默认 false。
@@ -246,9 +256,9 @@
 // 首个实例创建前只登记一次 esx.CloseAll，部分失败由应用栈回收已完成的实例。
 // esx.Default() 与 esx.Named(默认名称) 返回同一实例；查询和更新不再逐次指定 InstanceID。
 // 日志类型为 AliyunES，instance_id 来自配置；不记录凭据、签名、下载 URL 或正文。
-// NATS 排空后依次关闭阿里云 ES、OSS 和其他组件，日志最后关闭；Close 不排空在途请求。
+// 退出时按通用逆序在 MySQL 之后关闭阿里云 ES，随后关闭 OSS 和日志；Close 不排空在途请求。
 //
-// NATS 使用 MustRegisterNATS(name, isDefault) 声明，阿里云 ES 之后读取 nats.<name>.yaml。
+// NATS 使用 MustRegisterNATS(name, isDefault) 声明，Elasticsearch 之后读取 nats.<name>.yaml。
 // 全部 NATS 文件严格解析并转换后，登记一次 natsx.CloseAll，再创建默认或命名客户端；
 // 未声明时跳过。模板见 conf.example/nats.example.yaml；文件不接受 name、isDefault。
 // 转换阶段检查 URL 解析及内嵌凭据，通用参数由 natsx 在构造时校验；

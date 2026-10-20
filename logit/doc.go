@@ -80,6 +80,9 @@
 // 不校验输出字段或执行 Defer 回调；Enabled 始终为 false，With 仍为空操作，Close 返回 nil。
 // 启动期用 SetDefault 显式启用；独立构造和显式注册的命名 Logger 不受默认配置影响。
 // 初始化前取得的 Logger 或 With 子 Logger 保持空操作，需要输出时须重新获取。
+// 使用 bootstrap 的新项目须先完成 MustBaseInit，再通过 Default、With 或 Named 创建和保存模块 Logger；
+// 不要在先于 bootstrap 执行的包变量初始化或 Go 的 init() 中缓存这些 Logger。
+// 后续 SetDefault 或命名注册不会更新已保存的空操作实例；包级 Info(ctx, ...) 等方法每次选择当前 Logger。
 // WithContext 前置约束及 panic 专用接口语义不受默认 Logger 是否配置影响。
 // 测试可先用 Default 保存旧值,再用 SetDefault 替换并在结束时恢复。
 // panic 处理见 ReportPanic/RecoverAndReport；processStart 保存包初始化时的时间点，

@@ -104,6 +104,8 @@ func main() {
 
 默认全局 Logger 为空操作 Logger：未调用 `SetDefault` 时，日志不输出到 stdout/stderr，所有级别（包括 Fatal）直接返回，`Enabled` 为 false，`Close` 返回 nil。仅使用 `biz/lockx`、`infra/elasticsearchx` 等能力时，无需初始化 logit。需要日志时，在启动阶段通过 `New` / `MustNew` 构造实例并调用 `SetDefault`；也可直接使用独立实例，或通过 `SetNamed` 注册命名 Logger。`WithContext` 的前置约束和 panic 专用接口语义保持不变。
 
+新项目应先完成 `bootstrap.MustBaseInit` 初始化，再通过 `logit.Default()`、`logit.With(...)` 或 `logit.Named(...)` 创建和保存模块 Logger。不要在先于 bootstrap 执行的包变量初始化或 Go 的 `init()` 中缓存这些 Logger：初始化前取到的空操作实例不会随后续 `SetDefault` 或命名注册自动更新。包级 `logit.Info(ctx, ...)` 等方法每次调用时选择当前 Logger，可在初始化完成后直接使用。默认静默便于老项目引入其他 Pixiu 能力，不影响已完成日志初始化的新项目。
+
 ## 模块导航
 
 以下均为当前仓库已实现的公开包。链接指向各包的 `doc.go`，其中包含用途、调用样例和具体边界。
@@ -170,7 +172,9 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 
 `biz/appconfig` 直接定义应用共用的环境与日志配置；HTTP、Cron 各自独立配置，由 bootstrap 显式装配。原 httpconfig 和 baseconfig 已删除，不保留兼容入口。
 
-`appconfig.MustLoadAppConfig` 使用 `configx.Parse`，支持 YAML / TOML / JSON，拒绝未知字段和弱类型转换；配置只返回给调用方，环境由 `env.Init` 一次性发布。应用配置文件所在目录作为 `env.ConfigDirPath()`，供 bootstrap 查找实例配置。加载配置不会初始化日志或修改 `time.Local`；`bootstrap.MustBaseInit` 在日志创建前应用环境时区，再依次初始化日志、MySQL、Redis、Elasticsearch、OSS、阿里云 ES 和 NATS，仅初始化已声明的组件实例。
+`appconfig.MustLoadAppConfig` 使用 `configx.Parse`，支持 YAML / TOML / JSON，拒绝未知字段和弱类型转换；配置只返回给调用方，环境由 `env.Init` 一次性发布。应用配置文件所在目录作为 `env.ConfigDirPath()`，供 bootstrap 查找实例配置。加载配置不会初始化日志或修改 `time.Local`；`bootstrap.MustBaseInit` 在日志创建前应用环境时区，再依次初始化日志、OSS、阿里云 ES、MySQL、Redis、Elasticsearch 和 NATS，共享客户端仅初始化已声明的实例。
+
+服务及外部生产者停止后，共享资源按登记逆序关闭：NATS → Elasticsearch → Redis → MySQL → 阿里云 ES → OSS → 日志。未声明的组件跳过；初始化失败时只回收已登记资源。该顺序按组件类别描述，不保证同一组件内多个命名实例的关闭顺序。`MustBaseInitWithoutLogit` 跳过日志初始化及关闭登记，自管日志仍由应用最后关闭。
 
 初始化完成后，应用可调用 `bootstrap.NewAppManager()` 创建默认总关闭期限为 20 秒的管理器，也可传入不小于 5 秒的自定义时长，传入 0 仍使用默认值。`bootstrap.NewHTTPService(handler)` 从 `env.ConfigDirPath()` 下严格加载 `http.yaml` 并返回可注册的 `apprun.Service`，HTTP 关闭期限默认 15 秒。应用显式调用 `manager.Register(service)` 和 `manager.RunSignals()`，管理器返回后再关闭共享资源栈。
 
