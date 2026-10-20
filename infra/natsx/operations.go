@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -79,7 +80,8 @@ func (c *Client) Request(ctx context.Context, subject string, data []byte, heade
 // PublishJetStream 同步发布并等待服务端 PubAck；messageID 必须非空，不自动生成。
 // 同一业务事件重试时复用 messageID，不同事件使用不同 ID；去重仅在同一 Stream 的去重窗口内生效。
 // headers 可省略或传入一个 Header（可为 nil），多传返回参数错误；data 允许 nil。
-// data 和提供的 Header 在调用期间须独占；Header 非 nil 时原地写入追踪 ID 并覆盖 Nats-Msg-Id，已写入的字段不回滚。
+// data 在调用期间须独占；Header 深拷贝后写入追踪 ID 并覆盖 Nats-Msg-Id，不修改调用方 Header。
+// 调用期间 Header 不得并发修改，可被其他发布调用只读共享。
 func (c *Client) PublishJetStream(ctx context.Context, subject string, data []byte, messageID string, headers ...nats.Header) (*jetstream.PubAck, error) {
 	if err := c.checkOperation(ctx, subject); err != nil {
 		return nil, err
@@ -96,7 +98,7 @@ func (c *Client) PublishJetStream(ctx context.Context, subject string, data []by
 		Data:    data,
 	}
 	if len(headers) == 1 {
-		msg.Header = headers[0]
+		msg.Header = cloneHeader(headers[0])
 	}
 	setMessageLogID(ctx, msg)
 	ack, err := c.js.PublishMsg(ctx, msg, jetstream.WithMsgID(messageID))
@@ -104,24 +106,45 @@ func (c *Client) PublishJetStream(ctx context.Context, subject string, data []by
 	return ack, err
 }
 
-// Subscribe 仅在应用启动阶段创建 Core 普通订阅，每个匹配的订阅者都会收到消息。
-// 运行期间保持订阅关系固定，由 Client.Close 统一排空；自行 Drain/Unsubscribe 后不保证排空及在途回调等待。
-// handler 的 ctx 由 Client 管理，Close 排空期间保持有效，关闭完成或超时后取消。
-func (c *Client) Subscribe(subject string, handler func(context.Context, *nats.Msg)) (*nats.Subscription, error) {
-	return c.subscribe(subject, "", handler)
-}
-
-// QueueSubscribe 仅在应用启动阶段创建 Core 队列订阅，queue 必须非空。
-// 同一队列组中每条消息只交给一个订阅者；运行期间保持订阅关系固定，由 Client.Close 统一排空。
-// 自行 Drain/Unsubscribe 后不保证排空及在途回调等待；handler 的 ctx 生命周期与 Subscribe 相同。
-func (c *Client) QueueSubscribe(subject, queue string, handler func(context.Context, *nats.Msg)) (*nats.Subscription, error) {
-	if strings.TrimSpace(queue) == "" {
-		return nil, errors.New("natsx: empty queue")
+// PublishJetStreamAsync 提交消息并返回原生 future；提交成功不表示服务端已持久化。
+// messageID 必须非空，Header 至多一个；复制 data 和 Header，不修改调用方输入。
+// 调用期间输入不得并发修改，返回后可复用；future.Msg() 是 SDK 持有的消息，不得修改。
+// ctx 仅用于提交前取消检查、追踪和耗时，不撤销已提交消息或控制后续 PubAck 等待。
+// 最终结果通过 future.Ok/Err 获取，异步错误同时记录日志；Close 等待已提交的确认。
+func (c *Client) PublishJetStreamAsync(ctx context.Context, subject string, data []byte, messageID string, headers ...nats.Header) (jetstream.PubAckFuture, error) {
+	if err := c.checkOperation(ctx, subject); err != nil {
+		return nil, err
 	}
-	return c.subscribe(subject, queue, handler)
+	if messageID == "" {
+		return nil, errors.New("natsx: empty message ID")
+	}
+	if len(headers) > 1 {
+		return nil, errors.New("natsx: at most one JetStream publish header is allowed")
+	}
+	begin := time.Now()
+	msg := &nats.Msg{
+		Subject: subject,
+		Data:    slices.Clone(data),
+	}
+	if len(headers) == 1 {
+		msg.Header = cloneHeader(headers[0])
+	}
+	setMessageLogID(ctx, msg)
+	future, err := c.js.PublishMsgAsync(msg, jetstream.WithMsgID(messageID))
+	c.logResult(ctx, "jetStreamPublishAsync", subject, msg, nil, begin, err, nil)
+	return future, err
 }
 
-func (c *Client) subscribe(subject, queue string, handler func(context.Context, *nats.Msg)) (*nats.Subscription, error) {
+func cloneHeader(header nats.Header) nats.Header {
+	cloned := make(nats.Header, len(header))
+	// map 和多值切片都需独立，避免异步确认期间与调用方复用 Header 相互影响。
+	for key, values := range header {
+		cloned[key] = slices.Clone(values)
+	}
+	return cloned
+}
+
+func (c *Client) subscribeHandler(subject, queue string, handler CoreHandler) (*nats.Subscription, error) {
 	if strings.TrimSpace(subject) == "" || handler == nil {
 		return nil, errors.New("natsx: empty subject or nil handler")
 	}
@@ -129,8 +152,8 @@ func (c *Client) subscribe(subject, queue string, handler func(context.Context, 
 	wrapped := func(msg *nats.Msg) {
 		msgCtx := MessageContext(ctx, msg.Header)
 		begin := time.Now()
-		handler(msgCtx, msg)
-		c.logResult(msgCtx, "coreCallback", msg.Subject, msg, nil, begin, nil, nil)
+		err := handler(msgCtx, msg)
+		c.logResult(msgCtx, "coreCallback", msg.Subject, msg, nil, begin, err, nil)
 	}
 	c.consumerMu.Lock()
 	defer c.consumerMu.Unlock()
@@ -151,7 +174,7 @@ func (c *Client) subscribe(subject, queue string, handler func(context.Context, 
 		c.logResult(ctx, "coreSubscribe", subject, nil, nil, begin, err, nil)
 		return nil, err
 	}
-	c.subscriptions = append(c.subscriptions, sub)
+	c.coreSubscriptions = append(c.coreSubscriptions, sub)
 	c.logResult(ctx, "coreSubscribe", subject, nil, nil, begin, nil, nil)
 	return sub, nil
 }
@@ -160,7 +183,7 @@ func (c *Client) logResult(ctx context.Context, action, subject string, msg, rep
 	elapsed := time.Since(begin)
 	// 出站耗时独立于日志级别；消费回调是自身处理，不计入下游调用。
 	switch action {
-	case "corePublish", "coreRequest", "jetStreamPublish":
+	case "corePublish", "coreRequest", "jetStreamPublish", "jetStreamPublishAsync":
 		logit.AddDownstreamDurationAuto(ctx, c.durationPrefix, elapsed)
 	}
 	level := logit.InfoLevel

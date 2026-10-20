@@ -18,7 +18,7 @@ import (
 )
 
 func TestCloseAllowsCallbackOperations(t *testing.T) {
-	for _, mode := range []string{"core", "pull"} {
+	for _, mode := range []string{"core", "registered-core", "registered-pull"} {
 		t.Run(mode, func(t *testing.T) {
 			url := startServer(t)
 			c, err := New(Config{
@@ -69,12 +69,6 @@ func TestCloseAllowsCallbackOperations(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if mode == "pull" {
-				consumer, err = c.JetStream().Consumer(ctx, "REVIEW", "worker")
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
 			entered := make(chan struct{})
 			release := make(chan struct{})
 			defer close(release)
@@ -90,16 +84,36 @@ func TestCloseAllowsCallbackOperations(t *testing.T) {
 				}
 				_, errJS := c.PublishJetStream(msgCtx, "review.js", nil, "review-event")
 				var errAsync error
-				future, errAsync = c.JetStream().PublishAsync("review.async", nil)
+				if strings.HasPrefix(mode, "registered-") {
+					future, errAsync = c.PublishJetStreamAsync(msgCtx, "review.async", nil, "async-event")
+				} else {
+					future, errAsync = c.JetStream().PublishAsync("review.async", nil)
+				}
 				return errors.Join(errPublish, errRequest, errJS, errAsync)
 			}
-			if mode == "core" {
-				_, err = c.Subscribe("review.input", func(msgCtx context.Context, _ *nats.Msg) {
-					result <- work(msgCtx)
+			if mode == "core" || mode == "registered-core" {
+				err = c.RegisterCoreConsumers(ctx, CoreConsumer{
+					Subject: "review.input",
+					Handler: func(msgCtx context.Context, _ *nats.Msg) error {
+						err := work(msgCtx)
+						result <- err
+						return err
+					},
 				})
-			} else {
-				err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(msgCtx context.Context, msg jetstream.Msg) {
-					result <- errors.Join(work(msgCtx), msg.Ack())
+			} else if mode == "registered-pull" {
+				err = c.RegisterJetStreamConsumers(ctx, JetStreamConsumer{
+					Stream: "REVIEW",
+					Config: jetstream.ConsumerConfig{
+						Durable:       "worker",
+						FilterSubject: "review.input",
+						AckPolicy:     jetstream.AckExplicitPolicy,
+						AckWait:       30 * time.Second,
+					},
+					Handler: func(msgCtx context.Context, _ jetstream.Msg) error {
+						err := work(msgCtx)
+						result <- err
+						return err
+					},
 				})
 			}
 			if err != nil {
@@ -122,10 +136,13 @@ func TestCloseAllowsCallbackOperations(t *testing.T) {
 				case <-time.After(time.Millisecond):
 				}
 			}
-			if _, err := c.Subscribe("review.new", func(context.Context, *nats.Msg) {}); !errors.Is(err, ErrClosed) {
+			if err := c.RegisterCoreConsumers(ctx, CoreConsumer{
+				Subject: "review.new",
+				Handler: func(context.Context, *nats.Msg) error { return nil },
+			}); !errors.Is(err, ErrClosed) {
 				t.Fatalf("关闭期间仍允许新订阅: %v", err)
 			}
-			if err := c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(context.Context, jetstream.Msg) {}); !errors.Is(err, ErrClosed) {
+			if err := c.RegisterJetStreamConsumers(ctx); !errors.Is(err, ErrClosed) {
 				t.Fatalf("关闭期间仍允许新消费: %v", err)
 			}
 			release <- struct{}{}
@@ -134,6 +151,9 @@ func TestCloseAllowsCallbackOperations(t *testing.T) {
 			}
 			if err := <-closed; err != nil {
 				t.Errorf("Close: %v", err)
+			}
+			if mode == "registered-pull" {
+				waitWorkerPending(t, consumer, 0)
 			}
 			if future != nil {
 				select {
@@ -164,17 +184,25 @@ func TestCloseAfterSubscriptionStopped(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer c.Close()
-			sub, err := c.Subscribe("temporary", func(context.Context, *nats.Msg) {})
-			if err != nil {
-				t.Fatal(err)
-			}
 			received := make(chan struct{}, 1)
-			active, err := c.Subscribe("active", func(context.Context, *nats.Msg) {
-				received <- struct{}{}
-			})
+			err = c.RegisterCoreConsumers(context.Background(),
+				CoreConsumer{
+					Subject: "temporary",
+					Handler: func(context.Context, *nats.Msg) error { return nil },
+				},
+				CoreConsumer{
+					Subject: "active",
+					Handler: func(context.Context, *nats.Msg) error {
+						received <- struct{}{}
+						return nil
+					},
+				},
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
+			// 注册入口不暴露句柄；包内模拟提前停止，保留关闭兼容性的回归覆盖。
+			sub, active := c.coreSubscriptions[0], c.coreSubscriptions[1]
 			userClosed := make(chan struct{})
 			sub.SetClosedHandler(func(string) { close(userClosed) })
 			if mode == "unsubscribe" {
@@ -252,8 +280,12 @@ func TestCloseTimeoutBoundaries(t *testing.T) {
 				<-release
 			}
 			if tc.managed {
-				_, err = c.Subscribe("blocked", func(_ context.Context, msg *nats.Msg) {
-					handler(msg)
+				err = c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+					Subject: "blocked",
+					Handler: func(_ context.Context, msg *nats.Msg) error {
+						handler(msg)
+						return nil
+					},
 				})
 			} else {
 				// 原生订阅由最终 nc.Drain 排空，用于验证官方 DrainTimeout 仍生效。
@@ -416,7 +448,7 @@ func TestCloseLogsPublishDrainTimeout(t *testing.T) {
 	}
 }
 
-func TestConsumeWithWorkersRuntimeErrorLogsAndCallback(t *testing.T) {
+func TestRegisteredWorkersRuntimeErrorLogsAndCallback(t *testing.T) {
 	for _, withCallback := range []bool{false, true} {
 		t.Run(fmt.Sprint(withCallback), func(t *testing.T) {
 			buf := captureLogs(t)
@@ -435,13 +467,6 @@ func TestConsumeWithWorkersRuntimeErrorLogsAndCallback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			consumer, err := c.JetStream().CreateConsumer(ctx, "ERRORS", jetstream.ConsumerConfig{
-				Durable:   "worker",
-				AckPolicy: jetstream.AckExplicitPolicy,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
 			called := make(chan error, 1)
 			cfg := ConsumeConfig{Workers: 2}
 			if withCallback {
@@ -449,7 +474,16 @@ func TestConsumeWithWorkersRuntimeErrorLogsAndCallback(t *testing.T) {
 					called <- err
 				}
 			}
-			err = c.ConsumeWithWorkers(consumer, cfg, func(context.Context, jetstream.Msg) {})
+			err = c.RegisterJetStreamConsumers(ctx, JetStreamConsumer{
+				Stream: "ERRORS",
+				Config: jetstream.ConsumerConfig{
+					Durable:   "worker",
+					AckPolicy: jetstream.AckExplicitPolicy,
+					AckWait:   30 * time.Second,
+				},
+				Consume: cfg,
+				Handler: func(context.Context, jetstream.Msg) error { return nil },
+			})
 			if err != nil {
 				t.Fatal(err)
 			}

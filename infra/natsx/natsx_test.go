@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -259,8 +258,11 @@ func TestNewConnectionOptions(t *testing.T) {
 			if got := c.Conn().Opts.ReconnectBufSize; got != tc.reconnectBufSize {
 				t.Errorf("重连发送缓冲选项未生效: got=%d want=%d", got, tc.reconnectBufSize)
 			}
-			_, err = c.Subscribe("connection.reply", func(_ context.Context, msg *nats.Msg) {
-				_ = msg.Respond([]byte("reply"))
+			err = c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+				Subject: "connection.reply",
+				Handler: func(_ context.Context, msg *nats.Msg) error {
+					return msg.Respond([]byte("reply"))
+				},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -309,27 +311,31 @@ func TestCorePublishRequestTraceAndFullLogs(t *testing.T) {
 	ctx := logit.WithContext(context.Background())
 	logit.AddMeta(ctx, logit.Str(logit.LogId, "trace-123"))
 	received := make(chan *nats.Msg, 1)
-	_, err = c.Subscribe("orders.created", func(_ context.Context, m *nats.Msg) {
-		received <- m
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = c.QueueSubscribe("orders.reply", "order-workers", func(_ context.Context, m *nats.Msg) {
-		if m.Header.Get(TraceHeader) != "trace-123" || string(m.Data) != "private-request" {
-			t.Errorf("请求未传递追踪 ID 或消息内容: %v", m)
-		}
-		_ = m.RespondMsg(&nats.Msg{
-			Data: []byte("private-reply"),
-			Header: nats.Header{
-				"X-Response": []string{"first", "second"},
+	err = c.RegisterCoreConsumers(context.Background(),
+		CoreConsumer{
+			Subject: "orders.created",
+			Handler: func(_ context.Context, m *nats.Msg) error {
+				received <- m
+				return nil
 			},
-		})
-	})
+		},
+		CoreConsumer{
+			Subject: "orders.reply",
+			Queue:   "order-workers",
+			Handler: func(_ context.Context, m *nats.Msg) error {
+				if m.Header.Get(TraceHeader) != "trace-123" || string(m.Data) != "private-request" {
+					t.Errorf("请求未传递追踪 ID 或消息内容: %v", m)
+				}
+				return m.RespondMsg(&nats.Msg{
+					Data: []byte("private-reply"),
+					Header: nats.Header{
+						"X-Response": []string{"first", "second"},
+					},
+				})
+			},
+		},
+	)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Conn().Flush(); err != nil {
 		t.Fatal(err)
 	}
 	header := nats.Header{
@@ -443,15 +449,17 @@ func TestRequestOptionalHeaders(t *testing.T) {
 	}
 	defer c.Close()
 	received := make(chan *nats.Msg, 4)
-	if _, err := c.Subscribe("optional.request", func(_ context.Context, msg *nats.Msg) {
-		received <- msg
-		if err := msg.Respond([]byte("reply")); err != nil {
-			t.Error(err)
-		}
+	if err := c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+		Subject: "optional.request",
+		Handler: func(_ context.Context, msg *nats.Msg) error {
+			received <- msg
+			err := msg.Respond([]byte("reply"))
+			if err != nil {
+				t.Error(err)
+			}
+			return err
+		},
 	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Conn().Flush(); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(logit.WithContextLogID(context.Background()), 3*time.Second)
@@ -597,17 +605,21 @@ func TestJetStreamPublishConsumeAndCloseWaits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	consumer, err := js.CreateOrUpdateConsumer(ctx, "JOBS", jetstream.ConsumerConfig{Durable: "worker", AckPolicy: jetstream.AckExplicitPolicy})
-	if err != nil {
-		t.Fatal(err)
-	}
 	entered := make(chan string, 1)
 	release := make(chan struct{})
-	err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(msgCtx context.Context, msg jetstream.Msg) {
-		id, _ := logit.LogIDFromContext(msgCtx)
-		entered <- id
-		<-release
-		_ = msg.Ack()
+	err = c.RegisterJetStreamConsumers(ctx, JetStreamConsumer{
+		Stream: "JOBS",
+		Config: jetstream.ConsumerConfig{
+			Durable:   "worker",
+			AckPolicy: jetstream.AckExplicitPolicy,
+			AckWait:   30 * time.Second,
+		},
+		Handler: func(msgCtx context.Context, _ jetstream.Msg) error {
+			id, _ := logit.LogIDFromContext(msgCtx)
+			entered <- id
+			<-release
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -619,8 +631,8 @@ func TestJetStreamPublishConsumeAndCloseWaits(t *testing.T) {
 	if err != nil || ack == nil || ack.Duplicate {
 		t.Fatalf("首条 PubAck: %v, %v", ack, err)
 	}
-	if header.Get(TraceHeader) != "job-trace" || header.Get(jetstream.MsgIDHeader) != "job-1" {
-		t.Errorf("JetStream 未原地写入追踪 ID 和消息 ID: %v", header)
+	if len(header) != 0 {
+		t.Errorf("JetStream 发布修改了调用方 Header: %v", header)
 	}
 	ack, err = c.PublishJetStream(pubCtx, "jobs.run", []byte("private-job"), "job-1")
 	if err != nil || ack == nil || !ack.Duplicate {
@@ -707,14 +719,15 @@ func TestCloseTimeoutForBlockedCallback(t *testing.T) {
 	}
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	_, err = c.Subscribe("blocked.work", func(context.Context, *nats.Msg) {
-		close(entered)
-		<-release
+	err = c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+		Subject: "blocked.work",
+		Handler: func(context.Context, *nats.Msg) error {
+			close(entered)
+			<-release
+			return nil
+		},
 	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Conn().Flush(); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Publish(context.Background(), "blocked.work", nil); err != nil {
@@ -754,14 +767,15 @@ func TestCloseAfterConsumerStopped(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			consumer, err := js.CreateOrUpdateConsumer(ctx, "TEMP", jetstream.ConsumerConfig{
-				Durable:   "temporary",
-				AckPolicy: jetstream.AckExplicitPolicy,
+			err = c.RegisterJetStreamConsumers(ctx, JetStreamConsumer{
+				Stream: "TEMP",
+				Config: jetstream.ConsumerConfig{
+					Durable:   "temporary",
+					AckPolicy: jetstream.AckExplicitPolicy,
+					AckWait:   30 * time.Second,
+				},
+				Handler: func(context.Context, jetstream.Msg) error { return nil },
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(context.Context, jetstream.Msg) {})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -783,55 +797,6 @@ func TestCloseAfterConsumerStopped(t *testing.T) {
 				t.Fatal("Close 返回后连接仍未关闭")
 			}
 		})
-	}
-}
-
-func TestConsumeDoesNotAutoAck(t *testing.T) {
-	c, err := New(Config{Name: "redelivery", URLs: []string{startServer(t)}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	js := c.JetStream()
-	_, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{Name: "REDELIVER", Subjects: []string{"redeliver.*"}, Storage: jetstream.MemoryStorage})
-	if err != nil {
-		t.Fatal(err)
-	}
-	consumer, err := js.CreateOrUpdateConsumer(ctx, "REDELIVER", jetstream.ConsumerConfig{
-		Durable: "redelivery", AckPolicy: jetstream.AckExplicitPolicy,
-		AckWait: 150 * time.Millisecond, MaxDeliver: 2,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	delivered := make(chan int32, 2)
-	var count atomic.Int32
-	err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(_ context.Context, msg jetstream.Msg) {
-		current := count.Add(1)
-		if current == 2 {
-			_ = msg.Ack()
-		}
-		delivered <- current
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	handle := lastWorkerHandle(t, c)
-	defer handle.Stop()
-	if _, err := c.PublishJetStream(ctx, "redeliver.work", nil, "redeliver-event"); err != nil {
-		t.Fatal(err)
-	}
-	for want := int32(1); want <= 2; want++ {
-		select {
-		case got := <-delivered:
-			if got != want {
-				t.Fatalf("投递次序: got=%d want=%d", got, want)
-			}
-		case <-ctx.Done():
-			t.Fatal("未 ACK 消息没有重投")
-		}
 	}
 }
 

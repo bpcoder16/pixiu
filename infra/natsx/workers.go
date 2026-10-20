@@ -14,9 +14,9 @@ import (
 
 // ConsumeConfig 配置启动阶段固定的消费并发和预取数量。
 type ConsumeConfig struct {
-	// Workers 必须为正数，限制同时执行的 handler 数；handler 须支持并发调用。
+	// Workers 限制同时执行的 handler 数；零值默认 1，负值无效，handler 须支持并发调用。
 	Workers int
-	// MaxMessages 是 SDK 预取上限，不含已经交给 worker 的消息；零值等于 Workers，负值无效。
+	// MaxMessages 是 SDK 预取上限，不含已经交给 worker 的消息；零值等于 Workers 的两倍，负值无效。
 	// 有效值不得超过 Consumer 配置的非零 MaxRequestBatch。
 	// 服务端 MaxAckPending 和 ACK 等待期限仍由业务 ConsumerConfig 决定。
 	MaxMessages int
@@ -25,13 +25,10 @@ type ConsumeConfig struct {
 	ErrorHandler jetstream.ConsumeErrHandlerFunc
 }
 
-// ConsumeWithWorkers 仅在启动阶段建立 Messages 迭代器并启动固定数量的 worker，成功后立即返回。
-// 不自动 ACK、NAK 或 Term；每条消息获得独立日志作用域和 Client 管理的 ctx。
-// 仅返回启动错误；消费句柄由 Client 内部登记和管理，不通过返回值提供。
-// Consumer 缓存配置的 MaxRequestExpires 须为零或不低于 SDK 默认 30 秒，
-// MaxRequestBatch 须为零或不低于有效 MaxMessages；运行期间保持相关限制不变。
-// Client.Close 统一排空，正常关闭完成或超时后取消消息 ctx；handler 内不得调用 Close。
-func (c *Client) ConsumeWithWorkers(consumer jetstream.Consumer, cfg ConsumeConfig, handler func(context.Context, jetstream.Msg)) error {
+// consumeWithWorkers 为注册入口建立迭代器并启动固定 worker，成功后立即返回。
+// 消费句柄由 Client 内部登记，关闭时统一排空；消息确认由传入的 handler 负责。
+// 拉取限制由注册入口在整批准备阶段统一校验。
+func (c *Client) consumeWithWorkers(consumer jetstream.Consumer, cfg ConsumeConfig, handler JetStreamHandler) error {
 	if consumer == nil || handler == nil {
 		return errors.New("natsx: nil consumer or handler")
 	}
@@ -39,22 +36,12 @@ func (c *Client) ConsumeWithWorkers(consumer jetstream.Consumer, cfg ConsumeConf
 		return errors.New("natsx: workers must be positive and max messages must be non-negative")
 	}
 	if cfg.MaxMessages == 0 {
-		cfg.MaxMessages = cfg.Workers
+		cfg.MaxMessages = 2 * cfg.Workers
 	}
 	c.consumerMu.Lock()
 	defer c.consumerMu.Unlock()
 	if c.closing.Load() {
 		return ErrClosed
-	}
-	if info := consumer.CachedInfo(); info != nil {
-		// 固定使用 SDK 默认拉取期限，在创建迭代器前拒绝不兼容的服务端限制。
-		if maxExpires := info.Config.MaxRequestExpires; maxExpires > 0 && maxExpires < jetstream.DefaultExpires {
-			return fmt.Errorf("natsx: consumer MaxRequestExpires must be zero or at least %s (got %s)", jetstream.DefaultExpires, maxExpires)
-		}
-		// 超限拉取的服务端拒绝不会直接由 Next 返回，须在启动前报错，避免消费空转。
-		if maxBatch := info.Config.MaxRequestBatch; maxBatch > 0 && cfg.MaxMessages > maxBatch {
-			return fmt.Errorf("natsx: MaxMessages (%d) exceeds consumer MaxRequestBatch (%d)", cfg.MaxMessages, maxBatch)
-		}
 	}
 	iterator, err := consumer.Messages(jetstream.PullMaxMessages(cfg.MaxMessages))
 	if err != nil {
@@ -67,7 +54,7 @@ func (c *Client) ConsumeWithWorkers(consumer jetstream.Consumer, cfg ConsumeConf
 		cancel:   cancel,
 		done:     make(chan struct{}),
 	}
-	c.consumers = append(c.consumers, handle)
+	c.jetStreamConsumers = append(c.jetStreamConsumers, handle)
 	go c.runWorkers(ctx, consumer, handle, cfg, handler)
 	return nil
 }
@@ -102,7 +89,7 @@ func (c *Client) logConsumeError(ctx context.Context, consumer jetstream.Consume
 	logit.Output(ctx, logit.ErrorLevel, 0, "nats consumer", fields...)
 }
 
-func (c *Client) runWorkers(ctx context.Context, consumer jetstream.Consumer, handle *workerConsumer, cfg ConsumeConfig, handler func(context.Context, jetstream.Msg)) {
+func (c *Client) runWorkers(ctx context.Context, consumer jetstream.Consumer, handle *workerConsumer, cfg ConsumeConfig, handler JetStreamHandler) {
 	jobs := make(chan jetstream.Msg)
 	slots := make(chan struct{}, cfg.Workers)
 	var workers sync.WaitGroup
@@ -113,12 +100,12 @@ func (c *Client) runWorkers(ctx context.Context, consumer jetstream.Consumer, ha
 			for msg := range jobs {
 				msgCtx := MessageContext(c.handlerCtx, msg.Headers())
 				begin := time.Now()
-				handler(msgCtx, msg)
+				err := handler(msgCtx, msg)
 				message := &nats.Msg{
 					Data:   msg.Data(),
 					Header: msg.Headers(),
 				}
-				c.logResult(msgCtx, "jetStreamCallback", msg.Subject(), message, nil, begin, nil, nil)
+				c.logResult(msgCtx, "jetStreamCallback", msg.Subject(), message, nil, begin, err, nil)
 				<-slots
 			}
 		}()
@@ -161,4 +148,15 @@ func (c *Client) runWorkers(ctx context.Context, consumer jetstream.Consumer, ha
 			return
 		}
 	}
+}
+
+// 固定使用 SDK 默认拉取期限；超限拉取不一定从 Next 返回错误，须在启动前拒绝。
+func validatePullLimits(cfg jetstream.ConsumerConfig, maxMessages int) error {
+	if cfg.MaxRequestExpires > 0 && cfg.MaxRequestExpires < jetstream.DefaultExpires {
+		return fmt.Errorf("natsx: consumer MaxRequestExpires must be zero or at least %s (got %s)", jetstream.DefaultExpires, cfg.MaxRequestExpires)
+	}
+	if cfg.MaxRequestBatch > 0 && maxMessages > cfg.MaxRequestBatch {
+		return fmt.Errorf("natsx: MaxMessages (%d) exceeds consumer MaxRequestBatch (%d)", maxMessages, cfg.MaxRequestBatch)
+	}
+	return nil
 }

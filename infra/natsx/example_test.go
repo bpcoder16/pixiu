@@ -2,7 +2,6 @@ package natsx_test
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/signal"
 	"time"
@@ -40,70 +39,47 @@ func ExampleNew_credentials() {
 	defer client.Close()
 }
 
-func ExampleClient_ConsumeWithWorkers() {
-	stop, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stopSignals()
-	// 停机信号只通知主协程调用 Close，消息处理 ctx 由 Client 自己管理。
-	ctx := context.Background()
-	// 启动阶段：创建连接，准备 Stream/Consumer 并完成全部消费注册。
+func ExampleClient_RegisterJetStreamConsumers() {
 	client, err := natsx.New(natsx.Config{
-		Name: "orders",
+		Name: "tasks",
 		URLs: []string{"nats://127.0.0.1:4222"},
 	})
 	if err != nil {
-		logit.Error(ctx, "NATS 初始化失败")
 		return
 	}
-	defer func() {
-		if err := client.Close(); err != nil {
-			logit.Error(ctx, "NATS 关闭失败")
-		}
-	}()
-
-	// Stream/Consumer 管理是实际网络操作，仍单独使用 ctx 设置本次 RPC 的期限。
-	setupCtx, cancelSetup := context.WithTimeout(ctx, 5*time.Second)
-	defer cancelSetup()
-	_, err = client.JetStream().CreateOrUpdateStream(setupCtx, jetstream.StreamConfig{
-		Name:     "ORDERS",
-		Subjects: []string{"orders.created"},
-		Storage:  jetstream.FileStorage,
-	})
-	if err != nil {
-		logit.Error(ctx, "创建 Stream 失败")
+	defer client.Close()
+	setup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.RegisterStreams(setup, jetstream.StreamConfig{
+		Name:      "TASKS",
+		Subjects:  []string{"tasks.sms"},
+		Retention: jetstream.WorkQueuePolicy,
+		Storage:   jetstream.FileStorage,
+	}); err != nil {
 		return
 	}
-	consumer, err := client.JetStream().CreateOrUpdateConsumer(setupCtx, "ORDERS", jetstream.ConsumerConfig{
-		Durable:   "orders-worker",
-		AckPolicy: jetstream.AckExplicitPolicy,
-	})
-	if err != nil {
-		logit.Error(ctx, "创建 Consumer 失败")
+	handler := func(ctx context.Context, msg jetstream.Msg) error {
+		// 执行业务并返回错误，由组件确认或等待服务端超时重投；不要自行 ACK。
+		logit.Info(ctx, "处理短信任务", logit.Str("subject", msg.Subject()))
+		return nil
+	}
+	consumer := natsx.DefaultJetStreamConsumer("TASKS", "send-sms", handler, "tasks.sms")
+	consumer.Consume.Workers = 4
+	if err := client.RegisterJetStreamConsumers(setup, consumer); err != nil {
 		return
 	}
-	cancelSetup()
-	// 启动固定数量的 worker；成功后即可执行回调，依赖资源需预先就绪。
-	err = client.ConsumeWithWorkers(consumer, natsx.ConsumeConfig{
-		Workers:     5,
-		MaxMessages: 5,
-		ErrorHandler: func(_ jetstream.ConsumeContext, err error) {
-			// 模块已记录错误；应用可按需告警或通知主协程退出，不在这里调用 Close。
-			if !errors.Is(err, jetstream.ErrNoHeartbeat) {
-				stopSignals()
-			}
+	if err := client.RegisterCoreConsumers(setup, natsx.CoreConsumer{
+		Subject: "cache.invalidate",
+		Handler: func(ctx context.Context, msg *nats.Msg) error {
+			logit.Info(ctx, "清理缓存", logit.Str("key", string(msg.Data)))
+			return nil
 		},
-	}, func(msgCtx context.Context, msg jetstream.Msg) {
-		// 此处执行实际业务；只有处理成功后才 ACK。业务失败时自行决定 NAK/Term 等策略。
-		logit.Info(msgCtx, "处理订单消息", logit.Str("subject", msg.Subject()))
-		if err := msg.Ack(); err != nil {
-			logit.Error(msgCtx, "消息 ACK 失败")
-		}
-	})
-	if err != nil {
-		logit.Error(ctx, "启动消费失败")
+	}); err != nil {
 		return
 	}
-	// 运行阶段：保持消费关系固定，处理消息并等待停机信号。
+	cancel() // 结束准备阶段，不会取消长期 handler。
+	stop, cancelStop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancelStop()
 	<-stop.Done()
-	// 关闭阶段：若还运行着外部生产者，先停止并等待，再返回执行 client.Close。
-	// Client.Close 排空消费并取消消息处理 ctx；日志由应用在最后关闭。
+	// 若有 HTTP/Cron 等生产者，先停止并等待，再通过 defer 排空 Client。
 }

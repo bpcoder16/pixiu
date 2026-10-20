@@ -40,14 +40,17 @@ func TestHandlerContextOwnedByClient(t *testing.T) {
 					finished <- ctx.Err()
 				}
 				if mode == "core" || mode == "queue" {
-					coreHandler := func(ctx context.Context, _ *nats.Msg) {
-						handler(ctx)
+					spec := CoreConsumer{
+						Subject: "lifecycle.work",
+						Handler: func(ctx context.Context, _ *nats.Msg) error {
+							handler(ctx)
+							return nil
+						},
 					}
 					if mode == "queue" {
-						_, err = c.QueueSubscribe("lifecycle.work", "workers", coreHandler)
-					} else {
-						_, err = c.Subscribe("lifecycle.work", coreHandler)
+						spec.Queue = "workers"
 					}
+					err = c.RegisterCoreConsumers(context.Background(), spec)
 				} else {
 					// 管理 RPC 的超时只影响本次操作，不成为后台消费的生命周期。
 					setupCtx, cancelSetup := context.WithTimeout(context.Background(), time.Second)
@@ -60,20 +63,22 @@ func TestHandlerContextOwnedByClient(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					consumer, err := c.JetStream().CreateConsumer(setupCtx, "LIFECYCLE", jetstream.ConsumerConfig{
-						Durable:   "worker",
-						AckPolicy: jetstream.AckExplicitPolicy,
+					err = c.RegisterJetStreamConsumers(setupCtx, JetStreamConsumer{
+						Stream: "LIFECYCLE",
+						Config: jetstream.ConsumerConfig{
+							Durable:   "worker",
+							AckPolicy: jetstream.AckExplicitPolicy,
+							AckWait:   30 * time.Second,
+						},
+						Handler: func(ctx context.Context, _ jetstream.Msg) error {
+							handler(ctx)
+							return nil
+						},
 					})
 					if err != nil {
 						t.Fatal(err)
 					}
 					cancelSetup()
-					err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(ctx context.Context, _ jetstream.Msg) {
-						handler(ctx)
-					})
-					if err != nil {
-						t.Fatal(err)
-					}
 				}
 				if err != nil {
 					t.Fatal(err)
@@ -152,10 +157,10 @@ func TestOperationsRetainCallerContext(t *testing.T) {
 		t.Errorf("PublishJetStream 未使用调用方 ctx: %v", err)
 	}
 	// 有订阅但不回复，确保 Request 等待的是调用方截止时间。
-	if _, err := c.Subscribe(subject, func(context.Context, *nats.Msg) {}); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Conn().Flush(); err != nil {
+	if err := c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+		Subject: subject,
+		Handler: func(context.Context, *nats.Msg) error { return nil },
+	}); err != nil {
 		t.Fatal(err)
 	}
 	requestCtx, cancelRequest := context.WithTimeout(context.Background(), 50*time.Millisecond)

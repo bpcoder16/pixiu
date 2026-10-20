@@ -45,29 +45,33 @@ func TestPublishLogIDUsesContextAndPropagatesHeader(t *testing.T) {
 				}); err != nil {
 					t.Fatal(err)
 				}
-				consumer, err := c.JetStream().CreateConsumer(ctx, "TRACE", jetstream.ConsumerConfig{
-					Durable:   "worker",
-					AckPolicy: jetstream.AckExplicitPolicy,
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(ctx context.Context, msg jetstream.Msg) {
-					record(ctx, msg.Headers())
-					if err := msg.Ack(); err != nil {
-						t.Error(err)
-					}
+				if err := c.RegisterJetStreamConsumers(ctx, JetStreamConsumer{
+					Stream: "TRACE",
+					Config: jetstream.ConsumerConfig{
+						Durable:   "worker",
+						AckPolicy: jetstream.AckExplicitPolicy,
+						AckWait:   30 * time.Second,
+					},
+					Handler: func(ctx context.Context, msg jetstream.Msg) error {
+						record(ctx, msg.Headers())
+						return nil
+					},
 				}); err != nil {
 					t.Fatal(err)
 				}
 			} else {
-				if _, err := c.Subscribe(subject, func(ctx context.Context, msg *nats.Msg) {
-					record(ctx, msg.Header)
-					if msg.Reply != "" {
-						if err := msg.Respond(nil); err != nil {
-							t.Error(err)
+				if err := c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+					Subject: subject,
+					Handler: func(ctx context.Context, msg *nats.Msg) error {
+						record(ctx, msg.Header)
+						if msg.Reply != "" {
+							if err := msg.Respond(nil); err != nil {
+								t.Error(err)
+								return err
+							}
 						}
-					}
+						return nil
+					},
 				}); err != nil {
 					t.Fatal(err)
 				}
@@ -100,7 +104,11 @@ func TestPublishLogIDUsesContextAndPropagatesHeader(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if id := header.Get(TraceHeader); id == "" || id == "stale" {
+				if operation == "jetStreamPublish" {
+					if header.Get(TraceHeader) != "stale" || header.Get(jetstream.MsgIDHeader) != "" {
+						t.Fatalf("JetStream 发布修改了调用方 Header: %v", header)
+					}
+				} else if id := header.Get(TraceHeader); id == "" || id == "stale" {
 					t.Fatalf("未原地覆盖调用方追踪 ID: %q", id)
 				}
 				if header.Get("x-log-id") != "stale-lower" || header.Get("X-Other") != "keep" {
@@ -108,7 +116,7 @@ func TestPublishLogIDUsesContextAndPropagatesHeader(t *testing.T) {
 				}
 				select {
 				case id := <-received:
-					if id != header.Get(TraceHeader) {
+					if operation != "jetStreamPublish" && id != header.Get(TraceHeader) {
 						t.Fatalf("调用方 Header 与消费 ID 不一致: header=%v, id=%q", header, id)
 					}
 					if want, ok := logit.LogIDFromContext(source); ok {

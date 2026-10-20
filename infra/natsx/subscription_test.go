@@ -21,8 +21,12 @@ func TestCoreSubscriptionDeliveryModes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	var received [4]atomic.Int64
+	var consumers []CoreConsumer
 	for i := range received {
-		handler := func(ctx context.Context, msg *nats.Msg) {
+		spec := CoreConsumer{
+			Subject: "subscription.work",
+		}
+		spec.Handler = func(ctx context.Context, msg *nats.Msg) error {
 			if id, ok := logit.LogIDFromContext(ctx); !ok || id != "subscription-trace" {
 				t.Errorf("订阅回调未还原追踪 ID: %q", id)
 			}
@@ -30,17 +34,14 @@ func TestCoreSubscriptionDeliveryModes(t *testing.T) {
 				t.Errorf("消息正文错误: %q", msg.Data)
 			}
 			received[i].Add(1)
+			return nil
 		}
-		if i < 2 {
-			_, err = c.Subscribe("subscription.work", handler)
-		} else {
-			_, err = c.QueueSubscribe("subscription.work", "workers", handler)
+		if i >= 2 {
+			spec.Queue = "workers"
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		consumers = append(consumers, spec)
 	}
-	if err := c.Conn().Flush(); err != nil {
+	if err := c.RegisterCoreConsumers(context.Background(), consumers...); err != nil {
 		t.Fatal(err)
 	}
 	ctx := logit.WithContext(context.Background())
@@ -63,16 +64,18 @@ func TestCoreSubscriptionDeliveryModes(t *testing.T) {
 	if got := received[2].Load() + received[3].Load(); got != messages {
 		t.Errorf("同一队列组共收到 %d 条，期望 %d 条", got, messages)
 	}
-	handler := func(context.Context, *nats.Msg) {}
-	if _, err := c.Subscribe("subscription.new", handler); !errors.Is(err, ErrClosed) {
-		t.Errorf("关闭后普通订阅应被拒绝: %v", err)
-	}
-	if _, err := c.QueueSubscribe("subscription.new", "workers", handler); !errors.Is(err, ErrClosed) {
-		t.Errorf("关闭后队列订阅应被拒绝: %v", err)
+	for _, queue := range []string{"", "workers"} {
+		if err := c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+			Subject: "subscription.new",
+			Queue:   queue,
+			Handler: func(context.Context, *nats.Msg) error { return nil },
+		}); !errors.Is(err, ErrClosed) {
+			t.Errorf("关闭后订阅应被拒绝，queue=%q: %v", queue, err)
+		}
 	}
 }
 
-func TestQueueSubscribeRejectsEmptyQueue(t *testing.T) {
+func TestCoreRegistrationRejectsInvalidDeclarations(t *testing.T) {
 	captureLogs(t)
 	c, err := New(Config{
 		Name: "invalid-queue",
@@ -82,12 +85,33 @@ func TestQueueSubscribeRejectsEmptyQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	for _, queue := range []string{"", " \t\n"} {
-		if sub, err := c.QueueSubscribe("subscription.work", queue, func(context.Context, *nats.Msg) {}); err == nil || sub != nil {
-			t.Fatalf("空队列名 %q 不应退化为普通订阅: sub=%v err=%v", queue, sub, err)
-		}
+	valid := CoreConsumer{
+		Subject: "subscription.work",
+		Handler: func(context.Context, *nats.Msg) error { return nil },
 	}
-	if got := c.Conn().NumSubscriptions(); got != 0 {
-		t.Fatalf("无效队列名不应创建订阅: %d", got)
+	for _, spec := range []CoreConsumer{
+		{
+			Subject: "subscription.work",
+			Queue:   " \t\n",
+			Handler: valid.Handler,
+		},
+		{
+			Subject: "",
+			Handler: valid.Handler,
+		},
+		{
+			Subject: " \t\n",
+			Handler: valid.Handler,
+		},
+		{
+			Subject: "subscription.work",
+		},
+	} {
+		if err := c.RegisterCoreConsumers(context.Background(), valid, spec); err == nil {
+			t.Fatalf("无效声明应在创建本批订阅前拒绝: %+v", spec)
+		}
+		if got := c.Conn().NumSubscriptions(); got != 0 {
+			t.Fatalf("无效声明不应创建订阅: %d", got)
+		}
 	}
 }

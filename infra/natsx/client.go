@@ -72,12 +72,16 @@ type Client struct {
 	closing atomic.Bool
 	// publishClosed 在消费排空后或关闭流程结束时置位，阻止新增发布与请求。
 	publishClosed atomic.Bool
-	// consumerMu 串行化启动阶段的句柄登记与关闭时的摘取，避免交错时遗漏句柄。
+	// streamRegistrationStarted 保证每个 Client 仅尝试一次 Stream 注册，失败不重置。
+	streamRegistrationStarted atomic.Bool
+	// jetStreamRegistrationStarted 保证每个 Client 仅尝试一次 JetStream 消费注册，失败不重置。
+	jetStreamRegistrationStarted atomic.Bool
+	// consumerMu 串行化 Core 和 JetStream 句柄的登记与关闭摘取，避免交错时遗漏。
 	consumerMu sync.Mutex
-	// subscriptions 保留启动阶段登记的 Core 订阅，供 Close 统一排空并等待。
-	subscriptions []*nats.Subscription
-	// consumers 保留启动阶段登记的 worker 消费句柄，Closed 包含全部 handler 的完成。
-	consumers []jetstream.ConsumeContext
+	// coreSubscriptions 保存启动期登记的 Core 广播和 Queue 订阅，供 Close 排空并等待回调结束。
+	coreSubscriptions []*nats.Subscription
+	// jetStreamConsumers 保存启动期创建的 JetStream worker 消费句柄，供 Close 排空并等待全部 handler 结束。
+	jetStreamConsumers []jetstream.ConsumeContext
 	// closeOnce 保证并发或重复调用 Close 时只执行一次关闭流程。
 	closeOnce sync.Once
 	// closeErr 保存首次关闭流程的结果，由 closeOnce 保证后续调用安全读取。
@@ -277,6 +281,7 @@ func (c *Client) JetStream() jetstream.JetStream { return c.js }
 // Close 统一排空启动阶段登记的订阅与消费，期间拒绝新增注册，允许回调继续发布与请求。
 // 消费排空后停止发布，等待异步 PubAck，最后 drain 连接。
 // 所有阶段共用 CloseTimeout 整体期限；DrainTimeout 仅用于底层连接 drain。
+// 整体超时后清理默认异步发布者，未完成的 future 以 ErrJetStreamPublisherClosed 结束。
 // 关闭完成或超时后取消消息处理 ctx；不强制终止未响应取消的业务函数。
 // 调用方应先停生产者，最后关闭日志；不得在消费回调中调用 Close。
 // 调用方须保持托管订阅固定；自行 Unsubscribe/Drain 后，不保证排空及等待在途回调。
@@ -293,21 +298,21 @@ func (c *Client) close() error {
 	defer c.publishClosed.Store(true)
 	c.consumerMu.Lock()
 	c.closing.Store(true)
-	subscriptions := c.subscriptions
-	c.subscriptions = nil
-	consumers := c.consumers
-	c.consumers = nil
+	coreSubscriptions := c.coreSubscriptions
+	c.coreSubscriptions = nil
+	jetStreamConsumers := c.jetStreamConsumers
+	c.jetStreamConsumers = nil
 	c.consumerMu.Unlock()
 	// 单独排空业务 Core 订阅，保留请求响应与异步 PubAck 所需的内部订阅。
 	// 连接仍处于正常状态，回调首次发起 Request 也可以创建响应订阅。
-	for _, sub := range subscriptions {
+	for _, sub := range coreSubscriptions {
 		// 已停止的订阅或已关闭的连接无需再排空；完成状态由后续等待统一判断。
 		_ = sub.Drain()
 	}
-	for _, consumer := range consumers {
+	for _, consumer := range jetStreamConsumers {
 		consumer.Drain()
 	}
-	for _, sub := range subscriptions {
+	for _, sub := range coreSubscriptions {
 		// 原生通知会补发当前关闭状态，兼容提前停止的订阅，且不占用用户关闭回调。
 		select {
 		case <-sub.StatusChanged(nats.SubscriptionClosed):
@@ -315,7 +320,7 @@ func (c *Client) close() error {
 			return c.forceClose()
 		}
 	}
-	for _, consumer := range consumers {
+	for _, consumer := range jetStreamConsumers {
 		select {
 		case <-consumer.Closed():
 		case <-timer.C:
@@ -348,6 +353,8 @@ func (c *Client) close() error {
 
 func (c *Client) forceClose() error {
 	c.nc.Close()
+	// 关闭连接不会立即结束 SDK 的待确认 future，显式清理，避免继续等待原有确认超时。
+	c.js.CleanupPublisher()
 	c.logState(logit.ErrorLevel, "close_timeout", "", ErrCloseTimeout)
 	return ErrCloseTimeout
 }

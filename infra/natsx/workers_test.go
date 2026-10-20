@@ -50,10 +50,10 @@ func lastWorkerHandle(t *testing.T, c *Client) jetstream.ConsumeContext {
 	t.Helper()
 	c.consumerMu.Lock()
 	defer c.consumerMu.Unlock()
-	if len(c.consumers) == 0 {
+	if len(c.jetStreamConsumers) == 0 {
 		t.Fatal("启动消费后未登记内部句柄")
 	}
-	return c.consumers[len(c.consumers)-1]
+	return c.jetStreamConsumers[len(c.jetStreamConsumers)-1]
 }
 
 func publishWorkerMessages(t *testing.T, c *Client, count int) {
@@ -90,7 +90,7 @@ func waitWorkerPending(t *testing.T, consumer jetstream.Consumer, want int) {
 	}
 }
 
-func TestConsumeWithWorkersBoundsConcurrencyAndDrains(t *testing.T) {
+func TestRegisteredWorkersBoundsConcurrencyAndDrains(t *testing.T) {
 	buf := captureLogs(t)
 	c, consumer := newWorkerTestClient(t, 3*time.Second)
 	const workers = 3
@@ -101,29 +101,32 @@ func TestConsumeWithWorkersBoundsConcurrencyAndDrains(t *testing.T) {
 	unblock := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(unblock)
 	var active, completed atomic.Int32
-	err := c.ConsumeWithWorkers(consumer, ConsumeConfig{
-		Workers:     workers,
-		MaxMessages: total,
-	}, func(ctx context.Context, msg jetstream.Msg) {
-		if current := active.Add(1); current > workers {
-			t.Errorf("并发超限: %d", current)
-		}
-		defer active.Add(-1)
-		id := string(msg.Data())
-		if got, _ := logit.LogIDFromContext(ctx); got != id {
-			t.Errorf("消息 logId 错误: %q, want=%q", got, id)
-		}
-		logit.AddField(ctx, logit.Str("worker_job", id))
-		entered <- struct{}{}
-		<-release
-		if ctx.Err() != nil {
-			t.Errorf("正常排空取消了消息 ctx: %v", ctx.Err())
-		}
-		logit.Info(ctx, "worker completed")
-		if err := msg.Ack(); err != nil {
-			t.Error(err)
-		}
-		completed.Add(1)
+	err := c.RegisterJetStreamConsumers(context.Background(), JetStreamConsumer{
+		Stream: "WORKERS",
+		Config: consumer.CachedInfo().Config,
+		Consume: ConsumeConfig{
+			Workers:     workers,
+			MaxMessages: total,
+		},
+		Handler: func(ctx context.Context, msg jetstream.Msg) error {
+			if current := active.Add(1); current > workers {
+				t.Errorf("并发超限: %d", current)
+			}
+			defer active.Add(-1)
+			id := string(msg.Data())
+			if got, _ := logit.LogIDFromContext(ctx); got != id {
+				t.Errorf("消息 logId 错误: %q, want=%q", got, id)
+			}
+			logit.AddField(ctx, logit.Str("worker_job", id))
+			entered <- struct{}{}
+			<-release
+			if ctx.Err() != nil {
+				t.Errorf("正常排空取消了消息 ctx: %v", ctx.Err())
+			}
+			logit.Info(ctx, "worker completed")
+			completed.Add(1)
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +179,7 @@ func TestConsumeWithWorkersBoundsConcurrencyAndDrains(t *testing.T) {
 	}
 }
 
-func TestConsumeWithWorkersStopWaitsAndDiscardsBufferedMessages(t *testing.T) {
+func TestRegisteredWorkersStopWaitsAndDiscardsBufferedMessages(t *testing.T) {
 	c, consumer := newWorkerTestClient(t, 3*time.Second)
 	publishWorkerMessages(t, c, 6)
 	entered := make(chan struct{}, 6)
@@ -184,19 +187,22 @@ func TestConsumeWithWorkersStopWaitsAndDiscardsBufferedMessages(t *testing.T) {
 	unblock := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(unblock)
 	var completed atomic.Int32
-	err := c.ConsumeWithWorkers(consumer, ConsumeConfig{
-		Workers:     2,
-		MaxMessages: 4,
-	}, func(ctx context.Context, msg jetstream.Msg) {
-		entered <- struct{}{}
-		<-release
-		if ctx.Err() != nil {
-			t.Errorf("Stop 不应取消正在执行的消息 ctx: %v", ctx.Err())
-		}
-		if err := msg.Ack(); err != nil {
-			t.Error(err)
-		}
-		completed.Add(1)
+	err := c.RegisterJetStreamConsumers(context.Background(), JetStreamConsumer{
+		Stream: "WORKERS",
+		Config: consumer.CachedInfo().Config,
+		Consume: ConsumeConfig{
+			Workers:     2,
+			MaxMessages: 4,
+		},
+		Handler: func(ctx context.Context, _ jetstream.Msg) error {
+			entered <- struct{}{}
+			<-release
+			if ctx.Err() != nil {
+				t.Errorf("Stop 不应取消正在执行的消息 ctx: %v", ctx.Err())
+			}
+			completed.Add(1)
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -227,18 +233,24 @@ func TestConsumeWithWorkersStopWaitsAndDiscardsBufferedMessages(t *testing.T) {
 	}
 }
 
-func TestConsumeWithWorkersCloseTimeoutStopsDispatch(t *testing.T) {
+func TestRegisteredWorkersCloseTimeoutStopsDispatch(t *testing.T) {
 	c, consumer := newWorkerTestClient(t, 80*time.Millisecond)
 	publishWorkerMessages(t, c, 6)
 	entered := make(chan struct{}, 6)
 	var started atomic.Int32
-	err := c.ConsumeWithWorkers(consumer, ConsumeConfig{
-		Workers:     2,
-		MaxMessages: 4,
-	}, func(ctx context.Context, _ jetstream.Msg) {
-		started.Add(1)
-		entered <- struct{}{}
-		<-ctx.Done()
+	err := c.RegisterJetStreamConsumers(context.Background(), JetStreamConsumer{
+		Stream: "WORKERS",
+		Config: consumer.CachedInfo().Config,
+		Consume: ConsumeConfig{
+			Workers:     2,
+			MaxMessages: 4,
+		},
+		Handler: func(ctx context.Context, _ jetstream.Msg) error {
+			started.Add(1)
+			entered <- struct{}{}
+			<-ctx.Done()
+			return ctx.Err()
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -264,7 +276,7 @@ func TestConsumeWithWorkersCloseTimeoutStopsDispatch(t *testing.T) {
 	}
 }
 
-func TestConsumeWithWorkersValidatesMaxRequestExpires(t *testing.T) {
+func TestRegisteredWorkersValidatesMaxRequestExpires(t *testing.T) {
 	for _, maxExpires := range []time.Duration{0, 10 * time.Second, jetstream.DefaultExpires - 1, jetstream.DefaultExpires, time.Minute} {
 		t.Run(maxExpires.String(), func(t *testing.T) {
 			captureLogs(t)
@@ -278,10 +290,16 @@ func TestConsumeWithWorkersValidatesMaxRequestExpires(t *testing.T) {
 				t.Fatal(err)
 			}
 			publishWorkerMessages(t, c, 1)
-			finished := make(chan error, 1)
+			finished := make(chan struct{}, 1)
 			subscriptions := c.Conn().NumSubscriptions()
-			err = c.ConsumeWithWorkers(consumer, ConsumeConfig{Workers: 1}, func(_ context.Context, msg jetstream.Msg) {
-				finished <- msg.Ack()
+			err = c.RegisterJetStreamConsumers(ctx, JetStreamConsumer{
+				Stream:  "WORKERS",
+				Config:  consumer.CachedInfo().Config,
+				Consume: ConsumeConfig{Workers: 1},
+				Handler: func(context.Context, jetstream.Msg) error {
+					finished <- struct{}{}
+					return nil
+				},
 			})
 			if maxExpires > 0 && maxExpires < jetstream.DefaultExpires {
 				if err == nil || !strings.Contains(err.Error(), "MaxRequestExpires") {
@@ -296,10 +314,8 @@ func TestConsumeWithWorkersValidatesMaxRequestExpires(t *testing.T) {
 				t.Fatal(err)
 			}
 			select {
-			case err := <-finished:
-				if err != nil {
-					t.Fatalf("消息 ACK 失败: %v", err)
-				}
+			case <-finished:
+				waitWorkerPending(t, consumer, 0)
 			case <-ctx.Done():
 				t.Fatal("合法的拉取期限配置未能正常消费消息")
 			}
@@ -307,7 +323,7 @@ func TestConsumeWithWorkersValidatesMaxRequestExpires(t *testing.T) {
 	}
 }
 
-func TestConsumeWithWorkersValidatesMaxRequestBatch(t *testing.T) {
+func TestRegisteredWorkersValidatesMaxRequestBatch(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		maxBatch    int
@@ -333,8 +349,12 @@ func TestConsumeWithWorkersValidatesMaxRequestBatch(t *testing.T) {
 		},
 		{
 			name:     "default at limit",
-			maxBatch: 2,
+			maxBatch: 4,
 			workers:  2,
+		},
+		{
+			name:     "zero workers default at limit",
+			maxBatch: 2,
 		},
 		{
 			name:        "explicit above limit",
@@ -345,8 +365,13 @@ func TestConsumeWithWorkersValidatesMaxRequestBatch(t *testing.T) {
 		},
 		{
 			name:      "default above limit",
-			maxBatch:  1,
+			maxBatch:  2,
 			workers:   2,
+			wantError: "MaxMessages (4) exceeds consumer MaxRequestBatch (2)",
+		},
+		{
+			name:      "zero workers default above limit",
+			maxBatch:  1,
 			wantError: "MaxMessages (2) exceeds consumer MaxRequestBatch (1)",
 		},
 	} {
@@ -362,13 +387,19 @@ func TestConsumeWithWorkersValidatesMaxRequestBatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			publishWorkerMessages(t, c, 1)
-			finished := make(chan error, 1)
+			finished := make(chan struct{}, 1)
 			subscriptions := c.Conn().NumSubscriptions()
-			err = c.ConsumeWithWorkers(consumer, ConsumeConfig{
-				Workers:     tc.workers,
-				MaxMessages: tc.maxMessages,
-			}, func(_ context.Context, msg jetstream.Msg) {
-				finished <- msg.Ack()
+			err = c.RegisterJetStreamConsumers(ctx, JetStreamConsumer{
+				Stream: "WORKERS",
+				Config: consumer.CachedInfo().Config,
+				Consume: ConsumeConfig{
+					Workers:     tc.workers,
+					MaxMessages: tc.maxMessages,
+				},
+				Handler: func(context.Context, jetstream.Msg) error {
+					finished <- struct{}{}
+					return nil
+				},
 			})
 			if tc.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
@@ -383,10 +414,8 @@ func TestConsumeWithWorkersValidatesMaxRequestBatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			select {
-			case err := <-finished:
-				if err != nil {
-					t.Fatalf("消息 ACK 失败: %v", err)
-				}
+			case <-finished:
+				waitWorkerPending(t, consumer, 0)
 			case <-ctx.Done():
 				t.Fatal("合法的批量配置未能正常消费消息")
 			}
@@ -394,14 +423,14 @@ func TestConsumeWithWorkersValidatesMaxRequestBatch(t *testing.T) {
 	}
 }
 
-func TestConsumeWithWorkersRejectsInvalidArguments(t *testing.T) {
+func TestWorkerEngineRejectsInvalidArguments(t *testing.T) {
 	c, consumer := newWorkerTestClient(t, time.Second)
-	handler := func(context.Context, jetstream.Msg) {}
+	handler := func(context.Context, jetstream.Msg) error { return nil }
 	for _, tc := range []struct {
 		name     string
 		consumer jetstream.Consumer
 		config   ConsumeConfig
-		handler  func(context.Context, jetstream.Msg)
+		handler  JetStreamHandler
 	}{
 		{"nil consumer", nil, ConsumeConfig{Workers: 1}, handler},
 		{"nil handler", consumer, ConsumeConfig{Workers: 1}, nil},
@@ -410,7 +439,7 @@ func TestConsumeWithWorkersRejectsInvalidArguments(t *testing.T) {
 		{"negative prefetch", consumer, ConsumeConfig{Workers: 1, MaxMessages: -1}, handler},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := c.ConsumeWithWorkers(tc.consumer, tc.config, tc.handler); err == nil {
+			if err := c.consumeWithWorkers(tc.consumer, tc.config, tc.handler); err == nil {
 				t.Fatal("非法配置未拒绝")
 			}
 		})
@@ -440,11 +469,11 @@ func (i *workerErrorIterator) Next(...jetstream.NextOpt) (jetstream.Msg, error) 
 func (*workerErrorIterator) Stop()  {}
 func (*workerErrorIterator) Drain() {}
 
-func TestConsumeWithWorkersContinuesAfterMissingHeartbeat(t *testing.T) {
+func TestWorkerEngineContinuesAfterMissingHeartbeat(t *testing.T) {
 	captureLogs(t)
 	c, consumer := newWorkerTestClient(t, time.Second)
 	called := make(chan error, 2)
-	err := c.ConsumeWithWorkers(workerErrorConsumer{
+	err := c.consumeWithWorkers(workerErrorConsumer{
 		Consumer: consumer,
 		iterator: &workerErrorIterator{errors: []error{
 			jetstream.ErrNoHeartbeat,
@@ -455,7 +484,7 @@ func TestConsumeWithWorkersContinuesAfterMissingHeartbeat(t *testing.T) {
 		ErrorHandler: func(_ jetstream.ConsumeContext, err error) {
 			called <- err
 		},
-	}, func(context.Context, jetstream.Msg) {})
+	}, func(context.Context, jetstream.Msg) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}

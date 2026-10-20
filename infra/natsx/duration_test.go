@@ -40,10 +40,15 @@ func TestOutboundDurationSummary(t *testing.T) {
 			}
 			defer c.Close()
 			subject := "duration." + tt.name
-			if _, err := c.Subscribe(subject+".request", func(_ context.Context, msg *nats.Msg) {
-				if err := msg.Respond(nil); err != nil {
-					t.Error(err)
-				}
+			if err := c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+				Subject: subject + ".request",
+				Handler: func(_ context.Context, msg *nats.Msg) error {
+					err := msg.Respond(nil)
+					if err != nil {
+						t.Error(err)
+					}
+					return err
+				},
 			}); err != nil {
 				t.Fatal(err)
 			}

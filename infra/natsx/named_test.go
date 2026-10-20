@@ -116,19 +116,25 @@ func TestCloseAllDrainsWithHeldClientBeforeDependencies(t *testing.T) {
 	release := make(chan struct{}, 1)
 	finished := make(chan error, 1)
 	defer close(release)
-	if _, err := client.Subscribe("work", func(ctx context.Context, _ *nats.Msg) {
-		close(entered)
-		select {
-		case <-release:
-		case <-ctx.Done():
-			finished <- ctx.Err()
-			return
-		}
-		if dependencyClosed.Load() {
-			finished <- errors.New("消息处理依赖提前关闭")
-			return
-		}
-		finished <- client.Publish(ctx, "completed", nil)
+	if err := client.RegisterCoreConsumers(context.Background(), CoreConsumer{
+		Subject: "work",
+		Handler: func(ctx context.Context, _ *nats.Msg) error {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				finished <- ctx.Err()
+				return ctx.Err()
+			}
+			if dependencyClosed.Load() {
+				err := errors.New("消息处理依赖提前关闭")
+				finished <- err
+				return err
+			}
+			err := client.Publish(ctx, "completed", nil)
+			finished <- err
+			return err
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -178,10 +184,14 @@ func TestCloseAllPreservesTimeoutAndContinuesClosing(t *testing.T) {
 	}
 	entered := make(chan struct{})
 	finished := make(chan struct{})
-	if _, err := client.Subscribe("blocked", func(ctx context.Context, _ *nats.Msg) {
-		close(entered)
-		<-ctx.Done()
-		close(finished)
+	if err := client.RegisterCoreConsumers(context.Background(), CoreConsumer{
+		Subject: "blocked",
+		Handler: func(ctx context.Context, _ *nats.Msg) error {
+			close(entered)
+			<-ctx.Done()
+			close(finished)
+			return nil
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}

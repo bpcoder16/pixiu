@@ -35,7 +35,7 @@ func TestPublishJetStreamRequiredIDAndOptionalHeaders(t *testing.T) {
 	id, _ := logit.LogIDFromContext(ctx)
 	header := nats.Header{
 		jetstream.MsgIDHeader: []string{"stale-id"},
-		"X-Source":            []string{"service"},
+		"X-Source":            []string{"service", "second"},
 	}
 	extra := nats.Header{}
 	if ack, err := c.PublishJetStream(ctx, "options.publish", nil, "", header); err == nil || ack != nil {
@@ -53,16 +53,19 @@ func TestPublishJetStreamRequiredIDAndOptionalHeaders(t *testing.T) {
 			t.Fatalf("相同 ID 应去重: ack=%v err=%v", ack, err)
 		}
 	}
-	if header.Get(jetstream.MsgIDHeader) != "event-1" || header.Get(TraceHeader) != id || header.Get("X-Source") != "service" {
-		t.Fatalf("未原地写入 ID 或丢失业务 Header: %v", header)
+	if header.Get(jetstream.MsgIDHeader) != "stale-id" || header.Get(TraceHeader) != "" || header.Get("X-Source") != "service" {
+		t.Fatalf("同步发布修改了调用方 Header: %v", header)
 	}
 	ack, err := c.PublishJetStream(ctx, "options.publish", nil, "event-2")
 	if err != nil || ack == nil || ack.Sequence != 2 || ack.Duplicate {
 		t.Fatalf("不同 ID 应新增消息: ack=%v err=%v", ack, err)
 	}
 	stored, err := stream.GetMsg(ctx, 1)
-	if err != nil || stored == nil || string(stored.Data) != "event" || stored.Header.Get(jetstream.MsgIDHeader) != "event-1" || stored.Header.Get("X-Source") != "service" {
+	if err != nil || stored == nil || string(stored.Data) != "event" || stored.Header.Get(jetstream.MsgIDHeader) != "event-1" || stored.Header.Get(TraceHeader) != id || stored.Header.Get("X-Source") != "service" {
 		t.Fatalf("服务端消息或 Header 错误: msg=%v err=%v", stored, err)
+	}
+	if values := stored.Header.Values("X-Source"); len(values) != 2 || values[1] != "second" {
+		t.Fatalf("业务 Header 多值丢失: %v", values)
 	}
 	info, err := stream.Info(ctx)
 	if err != nil || info == nil || info.State.Msgs != 2 {
@@ -81,4 +84,36 @@ func TestPublishJetStreamRequiredIDAndOptionalHeaders(t *testing.T) {
 		}
 	}
 	t.Fatal("缺少发布耗时汇总")
+}
+
+func TestJetStreamPublishPreservesHeadersOnError(t *testing.T) {
+	captureLogs(t)
+	c := registrationClient(t)
+	ctx, cancel := context.WithTimeout(logit.WithContextLogID(context.Background()), 3*time.Second)
+	defer cancel()
+	for _, async := range []bool{false, true} {
+		name := "sync"
+		if async {
+			name = "async"
+		}
+		t.Run(name, func(t *testing.T) {
+			header := nats.Header{
+				TraceHeader:           []string{"original-trace"},
+				jetstream.MsgIDHeader: []string{"original-id"},
+				"X-Source":            []string{"service", "second"},
+			}
+			var err error
+			if async {
+				_, err = c.PublishJetStreamAsync(ctx, "invalid subject", nil, "event", header)
+			} else {
+				_, err = c.PublishJetStream(ctx, "invalid subject", nil, "event", header)
+			}
+			if err == nil {
+				t.Fatal("非法主题应发布失败")
+			}
+			if len(header) != 3 || header.Get(TraceHeader) != "original-trace" || header.Get(jetstream.MsgIDHeader) != "original-id" || header.Get("X-Source") != "service" {
+				t.Fatalf("发布失败修改了调用方 Header: %v", header)
+			}
+		})
+	}
 }
