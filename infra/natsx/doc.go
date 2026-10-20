@@ -173,14 +173,14 @@
 //
 // Core 通过 RegisterCoreConsumers(setupCtx, CoreConsumer{...}) 集中注册：
 // Queue 为空时广播，否则竞争消费；Handler 返回错误只记日志，不重投，使用 Msg.Respond 显式应答。
-// 以下用一份声明创建四个同组订阅；handleEvent 是业务提供的、支持并发调用的 CoreHandler：
+// DefaultCoreConsumer(subject, handler) 构建广播声明，Subscribers 显式设为 1。
+// DefaultCoreQueueConsumer(subject, queue, subscribers, handler) 构建同组声明，subscribers 原样写入，注册时零值默认 1。
+// 两者只构建可修改的声明，不建立连接或校验参数；pending 保留零值以沿用 SDK 默认。
+// 以下同时注册广播及四个同组订阅；handleBroadcast 和 handleQueue 是业务提供的 CoreHandler，后者须支持并发调用：
 //
-//	return client.RegisterCoreConsumers(context.Background(), natsx.CoreConsumer{
-//		Subject:     "events.created",
-//		Queue:       "event-workers",
-//		Subscribers: 4,
-//		Handler:     handleEvent,
-//	})
+//	broadcast := natsx.DefaultCoreConsumer("events.created", handleBroadcast)
+//	queue := natsx.DefaultCoreQueueConsumer("tasks.created", "task-workers", 4, handleQueue)
+//	return client.RegisterCoreConsumers(context.Background(), broadcast, queue)
 //
 // setupCtx 可使用 context.Background()，全部注册后仅 Flush 一次；有 deadline 时使用 FlushWithContext，
 // 无 deadline 时使用 SDK 默认 Flush（当前等待上限 10 秒），此时取消 ctx 不会中断正在执行的 Flush。

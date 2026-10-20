@@ -25,10 +25,7 @@ func TestCoreSubscriptionDeliveryModes(t *testing.T) {
 	var received [4]atomic.Int64
 	var consumers []CoreConsumer
 	for i := range received {
-		spec := CoreConsumer{
-			Subject: "subscription.work",
-		}
-		spec.Handler = func(ctx context.Context, msg *nats.Msg) error {
+		handler := func(ctx context.Context, msg *nats.Msg) error {
 			if id, ok := logit.LogIDFromContext(ctx); !ok || id != "subscription-trace" {
 				t.Errorf("订阅回调未还原追踪 ID: %q", id)
 			}
@@ -38,8 +35,14 @@ func TestCoreSubscriptionDeliveryModes(t *testing.T) {
 			received[i].Add(1)
 			return nil
 		}
+		var spec CoreConsumer
 		if i >= 2 {
-			spec.Queue = "workers"
+			spec = DefaultCoreQueueConsumer("subscription.work", "workers", 1, handler)
+		} else {
+			spec = DefaultCoreConsumer("subscription.work", handler)
+		}
+		if spec.Subscribers != 1 || spec.PendingMessages != 0 || spec.PendingBytes != 0 {
+			t.Fatalf("Core 默认值错误: %+v", spec)
 		}
 		consumers = append(consumers, spec)
 	}
@@ -108,12 +111,7 @@ func TestCoreRegistrationRejectsInvalidDeclarations(t *testing.T) {
 		{
 			Subject: "subscription.work",
 		},
-		{
-			Subject:     "subscription.work",
-			Queue:       "workers",
-			Subscribers: -1,
-			Handler:     valid.Handler,
-		},
+		DefaultCoreQueueConsumer("subscription.work", "workers", -1, valid.Handler),
 		{
 			Subject:     "subscription.work",
 			Subscribers: -1,
@@ -166,14 +164,10 @@ func TestCoreRegistrationSubscriberCounts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			captureLogs(t)
 			c := registrationClient(t)
-			if err := c.RegisterCoreConsumers(context.Background(), CoreConsumer{
-				Subject:         "subscription.count",
-				Queue:           tc.queue,
-				Subscribers:     tc.subscribers,
-				Handler:         func(context.Context, *nats.Msg) error { return nil },
-				PendingMessages: 256,
-				PendingBytes:    1 << 20,
-			}); err != nil {
+			consumer := DefaultCoreQueueConsumer("subscription.count", tc.queue, tc.subscribers, func(context.Context, *nats.Msg) error { return nil })
+			consumer.PendingMessages = 256
+			consumer.PendingBytes = 1 << 20
+			if err := c.RegisterCoreConsumers(context.Background(), consumer); err != nil {
 				t.Fatal(err)
 			}
 			if got := c.Conn().NumSubscriptions(); got != tc.want {
@@ -205,25 +199,22 @@ func TestCoreQueueSubscribersConcurrentDeliveryAndDrain(t *testing.T) {
 	t.Cleanup(unblock)
 	var received [messages]atomic.Int32
 	var active atomic.Int32
-	if err := c.RegisterCoreConsumers(ctx, CoreConsumer{
-		Subject:     "subscription.concurrent",
-		Queue:       "workers",
-		Subscribers: subscribers,
-		Handler: func(_ context.Context, msg *nats.Msg) error {
-			if got := active.Add(1); got > subscribers {
-				t.Errorf("并发处理数超过订阅数: %d", got)
-			}
-			defer active.Add(-1)
-			entered <- struct{}{}
-			<-release
-			if len(msg.Data) != 1 || int(msg.Data[0]) >= messages {
-				t.Errorf("消息内容错误: %v", msg.Data)
-				return nil
-			}
-			received[msg.Data[0]].Add(1)
+	consumer := DefaultCoreQueueConsumer("subscription.concurrent", "workers", 1, func(_ context.Context, msg *nats.Msg) error {
+		if got := active.Add(1); got > subscribers {
+			t.Errorf("并发处理数超过订阅数: %d", got)
+		}
+		defer active.Add(-1)
+		entered <- struct{}{}
+		<-release
+		if len(msg.Data) != 1 || int(msg.Data[0]) >= messages {
+			t.Errorf("消息内容错误: %v", msg.Data)
 			return nil
-		},
-	}); err != nil {
+		}
+		received[msg.Data[0]].Add(1)
+		return nil
+	})
+	consumer.Subscribers = subscribers
+	if err := c.RegisterCoreConsumers(ctx, consumer); err != nil {
 		t.Fatal(err)
 	}
 	for i := range messages {

@@ -99,6 +99,26 @@ func DefaultJetStreamConsumer(stream, durable string, handler JetStreamHandler, 
 	}
 }
 
+// DefaultCoreConsumer 构建可直接修改的 Core 广播消费声明，不建立连接或校验参数。
+// Subscribers 显式设为 1；PendingMessages 和 PendingBytes 保留零值，注册时沿用 SDK 默认限额。
+func DefaultCoreConsumer(subject string, handler CoreHandler) CoreConsumer {
+	return CoreConsumer{
+		Subject:     subject,
+		Subscribers: 1,
+		Handler:     handler,
+	}
+}
+
+// DefaultCoreQueueConsumer 构建可直接修改的 Core 同组消费声明，不建立连接或校验参数。
+// subscribers 原样写入，注册时零值默认 1、负值无效；pending 默认值与 DefaultCoreConsumer 相同。
+// Queue 为空时沿用 CoreConsumer 的广播语义。
+func DefaultCoreQueueConsumer(subject, queue string, subscribers int, handler CoreHandler) CoreConsumer {
+	consumer := DefaultCoreConsumer(subject, handler)
+	consumer.Queue = queue
+	consumer.Subscribers = subscribers
+	return consumer
+}
+
 // checkRegistration 只检查 context 是否存在和初始关闭状态；资源操作的取消由 SDK 处理。
 func (c *Client) checkRegistration(ctx context.Context) error {
 	if ctx == nil {
