@@ -151,7 +151,7 @@
 // Workers 默认设为 1；MaxMessages 保留零值，注册时为有效 Workers 的两倍。
 // 默认构造函数不校验参数；手写消费声明仍须显式配置确认超时。
 // RegisterStreams/RegisterJetStreamConsumers 使用 SDK 创建语义：同配置复用、冲突返回错误，不更新或删除已有资源。
-// RegisterStreams 和 RegisterJetStreamConsumers 分别计数，通过入口检查后每个 Client 各只允许调用一次；
+// RegisterStreams、RegisterJetStreamConsumers 和 RegisterCoreConsumers 分别计数，通过入口检查后每个 Client 各只允许调用一次；
 // 须一次传入该类的全部配置，空清单或失败也不可重试，各 Client 互不影响。
 // 三个 Register 入口仅在启动阶段串行调用，不与 Close 并发；入口检查初始状态，
 // ctx 仅传给资源 RPC 和有 deadline 时的 Core Flush，由 SDK 处理取消和连接错误。
@@ -172,14 +172,15 @@
 // 注册入口的 handler panic 被恢复并按业务失败处理。
 //
 // Core 通过 RegisterCoreConsumers(setupCtx, CoreConsumer{...}) 集中注册：
+// Name 必填且不能全为空白，同批名称按原值判重；不同 Name 可使用相同 Subject 和 Queue，不同 Client 可使用相同 Name。
 // Queue 为空时广播，否则竞争消费；Handler 返回错误只记日志，不重投，使用 Msg.Respond 显式应答。
-// DefaultCoreConsumer(subject, handler) 构建广播声明，Subscribers 显式设为 1。
-// DefaultCoreQueueConsumer(subject, queue, subscribers, handler) 构建同组声明，subscribers 原样写入，注册时零值默认 1。
+// DefaultCoreConsumer(name, subject, handler) 构建广播声明，Subscribers 显式设为 1。
+// DefaultCoreQueueConsumer(name, subject, queue, subscribers, handler) 构建同组声明，subscribers 原样写入，注册时零值默认 1。
 // 两者只构建可修改的声明，不建立连接或校验参数；pending 保留零值以沿用 SDK 默认。
 // 以下同时注册广播及四个同组订阅；handleBroadcast 和 handleQueue 是业务提供的 CoreHandler，后者须支持并发调用：
 //
-//	broadcast := natsx.DefaultCoreConsumer("events.created", handleBroadcast)
-//	queue := natsx.DefaultCoreQueueConsumer("tasks.created", "task-workers", 4, handleQueue)
+//	broadcast := natsx.DefaultCoreConsumer("event-listener", "events.created", handleBroadcast)
+//	queue := natsx.DefaultCoreQueueConsumer("task-worker", "tasks.created", "task-workers", 4, handleQueue)
 //	return client.RegisterCoreConsumers(context.Background(), broadcast, queue)
 //
 // setupCtx 可使用 context.Background()，全部注册后仅 Flush 一次；有 deadline 时使用 FlushWithContext，

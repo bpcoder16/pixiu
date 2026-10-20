@@ -93,6 +93,7 @@ func TestCloseAllowsCallbackOperations(t *testing.T) {
 			}
 			if mode == "core" || mode == "registered-core" {
 				err = c.RegisterCoreConsumers(ctx, CoreConsumer{
+					Name:    "input",
 					Subject: "review.input",
 					Handler: func(msgCtx context.Context, _ *nats.Msg) error {
 						err := work(msgCtx)
@@ -137,6 +138,7 @@ func TestCloseAllowsCallbackOperations(t *testing.T) {
 				}
 			}
 			if err := c.RegisterCoreConsumers(ctx, CoreConsumer{
+				Name:    "new",
 				Subject: "review.new",
 				Handler: func(context.Context, *nats.Msg) error { return nil },
 			}); !errors.Is(err, ErrClosed) {
@@ -187,10 +189,12 @@ func TestCloseAfterSubscriptionStopped(t *testing.T) {
 			received := make(chan struct{}, 1)
 			err = c.RegisterCoreConsumers(context.Background(),
 				CoreConsumer{
+					Name:    "temporary",
 					Subject: "temporary",
 					Handler: func(context.Context, *nats.Msg) error { return nil },
 				},
 				CoreConsumer{
+					Name:    "active",
 					Subject: "active",
 					Handler: func(context.Context, *nats.Msg) error {
 						received <- struct{}{}
@@ -281,6 +285,7 @@ func TestCloseTimeoutBoundaries(t *testing.T) {
 			}
 			if tc.managed {
 				err = c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+					Name:    "blocked",
 					Subject: "blocked",
 					Handler: func(_ context.Context, msg *nats.Msg) error {
 						handler(msg)

@@ -61,6 +61,7 @@ func TestPublishLogIDUsesContextAndPropagatesHeader(t *testing.T) {
 				}
 			} else {
 				if err := c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+					Name:    "trace",
 					Subject: subject,
 					Handler: func(ctx context.Context, msg *nats.Msg) error {
 						record(ctx, msg.Header)

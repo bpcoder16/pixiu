@@ -69,6 +69,7 @@ func ExampleClient_RegisterJetStreamConsumers() {
 		return
 	}
 	if err := client.RegisterCoreConsumers(setup, natsx.CoreConsumer{
+		Name:    "invalidate-cache",
 		Subject: "cache.invalidate",
 		Handler: func(ctx context.Context, msg *nats.Msg) error {
 			logit.Info(ctx, "清理缓存", logit.Str("key", string(msg.Data)))

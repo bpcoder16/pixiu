@@ -3,6 +3,7 @@ package natsx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -571,6 +572,149 @@ func TestRegisterJetStreamConsumersOncePerClient(t *testing.T) {
 	}
 }
 
+func TestRegisterCoreConsumersOncePerClient(t *testing.T) {
+	captureLogs(t)
+	spec := CoreConsumer{
+		Name:    "worker",
+		Subject: "once.core",
+		Handler: func(context.Context, *nats.Msg) error { return nil },
+	}
+	invalid := spec
+	invalid.Name = "invalid"
+	invalid.Handler = nil
+	badSubject := spec
+	badSubject.Name = "bad-subject"
+	badSubject.Subject = "bad subject"
+	for _, test := range []struct {
+		name      string
+		consumers []CoreConsumer
+		wantErr   bool
+		expired   bool
+	}{
+		{
+			name:      "success",
+			consumers: []CoreConsumer{spec},
+		},
+		{
+			name: "empty",
+		},
+		{
+			name:      "invalid declaration",
+			consumers: []CoreConsumer{spec, invalid},
+			wantErr:   true,
+		},
+		{
+			name:      "duplicate name",
+			consumers: []CoreConsumer{spec, spec},
+			wantErr:   true,
+		},
+		{
+			name:      "subscription failure",
+			consumers: []CoreConsumer{spec, badSubject},
+			wantErr:   true,
+		},
+		{
+			name:      "flush failure",
+			consumers: []CoreConsumer{spec},
+			wantErr:   true,
+			expired:   true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := registrationClient(t)
+			if err := c.RegisterCoreConsumers(nil); err == nil {
+				t.Fatal("未拒绝 nil context")
+			}
+			ctx := context.Background()
+			if test.expired {
+				expired, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+				defer cancel()
+				ctx = expired
+			}
+			if err := c.RegisterCoreConsumers(ctx, test.consumers...); (err != nil) != test.wantErr {
+				t.Fatalf("首次注册结果: %v", err)
+			}
+			subscriptions := c.Conn().NumSubscriptions()
+			if err := c.RegisterCoreConsumers(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "RegisterCoreConsumers already called") {
+				t.Fatalf("未拒绝同一客户端的第二次注册: %v", err)
+			}
+			if c.Conn().NumSubscriptions() != subscriptions {
+				t.Fatal("重复调用仍建立了订阅")
+			}
+		})
+	}
+}
+
+func TestCoreRegistrationRejectsDuplicateNames(t *testing.T) {
+	captureLogs(t)
+	first := CoreConsumer{
+		Name:    "worker",
+		Subject: "core.events",
+		Handler: func(context.Context, *nats.Msg) error { return nil },
+	}
+	for _, test := range []struct {
+		name    string
+		subject string
+		queue   string
+	}{
+		{
+			name:    "same declaration",
+			subject: first.Subject,
+		},
+		{
+			name:    "different subject",
+			subject: "core.other",
+		},
+		{
+			name:    "different queue",
+			subject: first.Subject,
+			queue:   "workers",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := registrationClient(t)
+			second := first
+			second.Subject = test.subject
+			second.Queue = test.queue
+			if err := c.RegisterCoreConsumers(context.Background(), first, second); err == nil || !strings.Contains(err.Error(), `duplicate Core consumer "worker"`) {
+				t.Fatalf("未按 Name 拒绝重复声明: %v", err)
+			}
+			if c.Conn().NumSubscriptions() != 0 {
+				t.Fatal("重复名称未在建立本批订阅前拒绝")
+			}
+		})
+	}
+}
+
+func TestCoreRegistrationNamesArePerClient(t *testing.T) {
+	captureLogs(t)
+	url := startServer(t)
+	for range 2 {
+		c, err := New(Config{
+			Name: "registration",
+			URLs: []string{url},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		ctx := context.Background()
+		if err := c.RegisterStreams(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.RegisterJetStreamConsumers(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.RegisterCoreConsumers(ctx, CoreConsumer{
+			Name:    "worker",
+			Subject: "core.events",
+			Handler: func(context.Context, *nats.Msg) error { return nil },
+		}); err != nil {
+			t.Fatalf("不同 Client 的名称或注册入口相互影响: %v", err)
+		}
+	}
+}
+
 func TestRegisteredJetStreamAckRetryPanicAndExhaustion(t *testing.T) {
 	buf := captureLogs(t)
 	c := registrationClient(t)
@@ -798,6 +942,7 @@ func TestRegisteredCoreBroadcastQueueReplyAndFailure(t *testing.T) {
 			queue = "workers"
 		}
 		specs = append(specs, CoreConsumer{
+			Name:            fmt.Sprintf("events-%d", i),
 			Subject:         "core.events",
 			Queue:           queue,
 			PendingMessages: 100,
@@ -808,6 +953,7 @@ func TestRegisteredCoreBroadcastQueueReplyAndFailure(t *testing.T) {
 		})
 	}
 	specs = append(specs, CoreConsumer{
+		Name:    "request",
 		Subject: "core.request",
 		Handler: func(_ context.Context, msg *nats.Msg) error {
 			switch string(msg.Data) {
@@ -955,10 +1101,18 @@ func TestRegistrationRejectsInvalidBatchAndClosedClient(t *testing.T) {
 	if err := duplicateClient.RegisterJetStreamConsumers(ctx, consumer, consumer); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("未拒绝同批重复身份: %v", err)
 	}
-	if err := c.RegisterCoreConsumers(ctx,
-		CoreConsumer{Subject: "core.valid", Handler: func(context.Context, *nats.Msg) error { return nil }},
-		CoreConsumer{Subject: "core.invalid"},
-	); err == nil || c.nc.NumSubscriptions() != 0 {
+	coreClient := registrationClient(t)
+	if err := coreClient.RegisterCoreConsumers(ctx,
+		CoreConsumer{
+			Name:    "valid",
+			Subject: "core.valid",
+			Handler: func(context.Context, *nats.Msg) error { return nil },
+		},
+		CoreConsumer{
+			Name:    "invalid",
+			Subject: "core.invalid",
+		},
+	); err == nil || coreClient.nc.NumSubscriptions() != 0 {
 		t.Fatal("无效 Core 声明仍建立了前面的订阅")
 	}
 	for _, register := range []func(context.Context) error{
@@ -980,6 +1134,9 @@ func TestRegistrationRejectsInvalidBatchAndClosedClient(t *testing.T) {
 	}
 	if err := c.RegisterJetStreamConsumers(ctx, consumer); !errors.Is(err, ErrClosed) {
 		t.Fatalf("关闭后未拒绝注册: %v", err)
+	}
+	if err := c.RegisterCoreConsumers(ctx); !errors.Is(err, ErrClosed) {
+		t.Fatalf("关闭后未拒绝 Core 注册: %v", err)
 	}
 }
 
@@ -1049,6 +1206,7 @@ func TestRegisteredCoreWithCanceledContextWithoutDeadline(t *testing.T) {
 	defer cancel()
 	cancel()
 	if err := c.RegisterCoreConsumers(setup, CoreConsumer{
+		Name:    "no-deadline",
 		Subject: "core.no-deadline",
 		Handler: func(ctx context.Context, msg *nats.Msg) error {
 			if ctx.Err() != nil {
@@ -1075,6 +1233,7 @@ func TestRegisteredCorePartialFailureRemainsOwned(t *testing.T) {
 	defer cancel()
 	err := c.RegisterCoreConsumers(ctx,
 		CoreConsumer{
+			Name:            "valid",
 			Subject:         "valid",
 			Queue:           "workers",
 			Subscribers:     3,
@@ -1082,7 +1241,11 @@ func TestRegisteredCorePartialFailureRemainsOwned(t *testing.T) {
 			PendingMessages: 10,
 			PendingBytes:    1024,
 		},
-		CoreConsumer{Subject: "bad subject", Handler: handler},
+		CoreConsumer{
+			Name:    "invalid",
+			Subject: "bad subject",
+			Handler: handler,
+		},
 	)
 	if !errors.Is(err, nats.ErrBadSubject) || len(c.coreSubscriptions) != 3 {
 		t.Fatalf("部分失败未保留已建立的句柄: %v", err)

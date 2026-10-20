@@ -41,6 +41,7 @@ func TestHandlerContextOwnedByClient(t *testing.T) {
 				}
 				if mode == "core" || mode == "queue" {
 					spec := CoreConsumer{
+						Name:    "worker",
 						Subject: "lifecycle.work",
 						Handler: func(ctx context.Context, _ *nats.Msg) error {
 							handler(ctx)
@@ -158,6 +159,7 @@ func TestOperationsRetainCallerContext(t *testing.T) {
 	}
 	// 有订阅但不回复，确保 Request 等待的是调用方截止时间。
 	if err := c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+		Name:    "worker",
 		Subject: subject,
 		Handler: func(context.Context, *nats.Msg) error { return nil },
 	}); err != nil {

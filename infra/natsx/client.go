@@ -76,6 +76,8 @@ type Client struct {
 	streamRegistrationStarted atomic.Bool
 	// jetStreamRegistrationStarted 保证每个 Client 仅尝试一次 JetStream 消费注册，失败不重置。
 	jetStreamRegistrationStarted atomic.Bool
+	// coreRegistrationStarted 保证每个 Client 仅尝试一次 Core 消费注册，失败不重置。
+	coreRegistrationStarted atomic.Bool
 	// consumerMu 串行化 Core 和 JetStream 句柄的登记与关闭摘取，避免交错时遗漏。
 	consumerMu sync.Mutex
 	// coreSubscriptions 保存启动期登记的 Core 广播和 Queue 订阅，供 Close 排空并等待回调结束。

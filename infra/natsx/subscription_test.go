@@ -3,6 +3,7 @@ package natsx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -36,10 +37,14 @@ func TestCoreSubscriptionDeliveryModes(t *testing.T) {
 			return nil
 		}
 		var spec CoreConsumer
+		name := fmt.Sprintf("subscription-%d", i)
 		if i >= 2 {
-			spec = DefaultCoreQueueConsumer("subscription.work", "workers", 1, handler)
+			spec = DefaultCoreQueueConsumer(name, "subscription.work", "workers", 1, handler)
 		} else {
-			spec = DefaultCoreConsumer("subscription.work", handler)
+			spec = DefaultCoreConsumer(name, "subscription.work", handler)
+		}
+		if spec.Name != name {
+			t.Fatalf("Core 构造函数未保留名称: %q", spec.Name)
 		}
 		if spec.Subscribers != 1 || spec.PendingMessages != 0 || spec.PendingBytes != 0 {
 			t.Fatalf("Core 默认值错误: %+v", spec)
@@ -71,6 +76,7 @@ func TestCoreSubscriptionDeliveryModes(t *testing.T) {
 	}
 	for _, queue := range []string{"", "workers"} {
 		if err := c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+			Name:    "new",
 			Subject: "subscription.new",
 			Queue:   queue,
 			Handler: func(context.Context, *nats.Msg) error { return nil },
@@ -82,42 +88,50 @@ func TestCoreSubscriptionDeliveryModes(t *testing.T) {
 
 func TestCoreRegistrationRejectsInvalidDeclarations(t *testing.T) {
 	captureLogs(t)
-	c, err := New(Config{
-		Name: "invalid-queue",
-		URLs: []string{startServer(t)},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 	valid := CoreConsumer{
+		Name:    "valid",
 		Subject: "subscription.work",
 		Handler: func(context.Context, *nats.Msg) error { return nil },
 	}
 	for _, spec := range []CoreConsumer{
 		{
 			Subject: "subscription.work",
+			Handler: valid.Handler,
+		},
+		{
+			Name:    " \t\n",
+			Subject: "subscription.work",
+			Handler: valid.Handler,
+		},
+		{
+			Name:    "invalid",
+			Subject: "subscription.work",
 			Queue:   " \t\n",
 			Handler: valid.Handler,
 		},
 		{
+			Name:    "invalid",
 			Subject: "",
 			Handler: valid.Handler,
 		},
 		{
+			Name:    "invalid",
 			Subject: " \t\n",
 			Handler: valid.Handler,
 		},
 		{
+			Name:    "invalid",
 			Subject: "subscription.work",
 		},
-		DefaultCoreQueueConsumer("subscription.work", "workers", -1, valid.Handler),
+		DefaultCoreQueueConsumer("invalid", "subscription.work", "workers", -1, valid.Handler),
 		{
+			Name:        "invalid",
 			Subject:     "subscription.work",
 			Subscribers: -1,
 			Handler:     valid.Handler,
 		},
 	} {
+		c := registrationClient(t)
 		if err := c.RegisterCoreConsumers(context.Background(), valid, spec); err == nil {
 			t.Fatalf("无效声明应在创建本批订阅前拒绝: %+v", spec)
 		}
@@ -164,7 +178,7 @@ func TestCoreRegistrationSubscriberCounts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			captureLogs(t)
 			c := registrationClient(t)
-			consumer := DefaultCoreQueueConsumer("subscription.count", tc.queue, tc.subscribers, func(context.Context, *nats.Msg) error { return nil })
+			consumer := DefaultCoreQueueConsumer("count", "subscription.count", tc.queue, tc.subscribers, func(context.Context, *nats.Msg) error { return nil })
 			consumer.PendingMessages = 256
 			consumer.PendingBytes = 1 << 20
 			if err := c.RegisterCoreConsumers(context.Background(), consumer); err != nil {
@@ -199,7 +213,7 @@ func TestCoreQueueSubscribersConcurrentDeliveryAndDrain(t *testing.T) {
 	t.Cleanup(unblock)
 	var received [messages]atomic.Int32
 	var active atomic.Int32
-	consumer := DefaultCoreQueueConsumer("subscription.concurrent", "workers", 1, func(_ context.Context, msg *nats.Msg) error {
+	consumer := DefaultCoreQueueConsumer("concurrent", "subscription.concurrent", "workers", 1, func(_ context.Context, msg *nats.Msg) error {
 		if got := active.Add(1); got > subscribers {
 			t.Errorf("并发处理数超过订阅数: %d", got)
 		}

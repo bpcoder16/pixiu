@@ -41,6 +41,8 @@ type JetStreamConsumer struct {
 // 同一订阅内串行调用 handler，多个订阅之间可并发执行且不保证处理顺序，handler 须支持并发调用。
 // pending 溢出由 SDK 异步错误日志报告，不保证重投。
 type CoreConsumer struct {
+	// Name 是当前 Client 内唯一的本地声明标识，必填且不能全为空白，不发送给服务端。
+	Name    string
 	Subject string
 	Queue   string
 	// Subscribers 仅在 Queue 非空时控制当前 Client 创建的同组订阅数；零值默认 1，负值无效。
@@ -101,8 +103,9 @@ func DefaultJetStreamConsumer(stream, durable string, handler JetStreamHandler, 
 
 // DefaultCoreConsumer 构建可直接修改的 Core 广播消费声明，不建立连接或校验参数。
 // Subscribers 显式设为 1；PendingMessages 和 PendingBytes 保留零值，注册时沿用 SDK 默认限额。
-func DefaultCoreConsumer(subject string, handler CoreHandler) CoreConsumer {
+func DefaultCoreConsumer(name, subject string, handler CoreHandler) CoreConsumer {
 	return CoreConsumer{
+		Name:        name,
 		Subject:     subject,
 		Subscribers: 1,
 		Handler:     handler,
@@ -112,8 +115,8 @@ func DefaultCoreConsumer(subject string, handler CoreHandler) CoreConsumer {
 // DefaultCoreQueueConsumer 构建可直接修改的 Core 同组消费声明，不建立连接或校验参数。
 // subscribers 原样写入，注册时零值默认 1、负值无效；pending 默认值与 DefaultCoreConsumer 相同。
 // Queue 为空时沿用 CoreConsumer 的广播语义。
-func DefaultCoreQueueConsumer(subject, queue string, subscribers int, handler CoreHandler) CoreConsumer {
-	consumer := DefaultCoreConsumer(subject, handler)
+func DefaultCoreQueueConsumer(name, subject, queue string, subscribers int, handler CoreHandler) CoreConsumer {
+	consumer := DefaultCoreConsumer(name, subject, handler)
 	consumer.Queue = queue
 	consumer.Subscribers = subscribers
 	return consumer
@@ -236,6 +239,8 @@ func (c *Client) RegisterJetStreamConsumers(ctx context.Context, consumers ...Je
 
 // RegisterCoreConsumers 在启动期建立全部订阅并执行一次 Flush；空清单不 Flush。
 // 只在启动阶段串行调用，不与 Close 并发。
+// 通过入口检查后，每个 Client 只允许调用一次；须一次传入全部声明，空清单或失败也不可重试。
+// 同批 Name 不得重复，全部声明校验完成前不建立订阅。
 // ctx 有 deadline 时用于 Flush，否则沿用 SDK 默认 Flush；不额外限制本地订阅建立。
 // handler 使用 Client 生命周期，返回前可能开始处理消息。
 // Flush 不保证逐个订阅授权成功，异步故障通过现有日志报告。
@@ -244,8 +249,13 @@ func (c *Client) RegisterCoreConsumers(ctx context.Context, consumers ...CoreCon
 	if err := c.checkRegistration(ctx); err != nil {
 		return err
 	}
+	if !c.coreRegistrationStarted.CompareAndSwap(false, true) {
+		return errors.New("natsx: RegisterCoreConsumers already called")
+	}
+	seen := make(map[string]struct{}, len(consumers))
 	for i, spec := range consumers {
-		if strings.TrimSpace(spec.Subject) == "" ||
+		if strings.TrimSpace(spec.Name) == "" ||
+			strings.TrimSpace(spec.Subject) == "" ||
 			spec.Handler == nil ||
 			(spec.Queue != "" && strings.TrimSpace(spec.Queue) == "") ||
 			spec.Subscribers < 0 ||
@@ -253,6 +263,10 @@ func (c *Client) RegisterCoreConsumers(ctx context.Context, consumers ...CoreCon
 			spec.PendingBytes < 0 {
 			return fmt.Errorf("natsx: invalid Core consumer %d", i)
 		}
+		if _, exists := seen[spec.Name]; exists {
+			return fmt.Errorf("natsx: duplicate Core consumer %q", spec.Name)
+		}
+		seen[spec.Name] = struct{}{}
 	}
 	for _, spec := range consumers {
 		subscribers := 1

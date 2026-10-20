@@ -41,6 +41,7 @@ func TestOutboundDurationSummary(t *testing.T) {
 			defer c.Close()
 			subject := "duration." + tt.name
 			if err := c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+				Name:    "request",
 				Subject: subject + ".request",
 				Handler: func(_ context.Context, msg *nats.Msg) error {
 					err := msg.Respond(nil)

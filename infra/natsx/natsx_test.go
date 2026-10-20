@@ -259,6 +259,7 @@ func TestNewConnectionOptions(t *testing.T) {
 				t.Errorf("重连发送缓冲选项未生效: got=%d want=%d", got, tc.reconnectBufSize)
 			}
 			err = c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+				Name:    "reply",
 				Subject: "connection.reply",
 				Handler: func(_ context.Context, msg *nats.Msg) error {
 					return msg.Respond([]byte("reply"))
@@ -313,6 +314,7 @@ func TestCorePublishRequestTraceAndFullLogs(t *testing.T) {
 	received := make(chan *nats.Msg, 1)
 	err = c.RegisterCoreConsumers(context.Background(),
 		CoreConsumer{
+			Name:    "created",
 			Subject: "orders.created",
 			Handler: func(_ context.Context, m *nats.Msg) error {
 				received <- m
@@ -320,6 +322,7 @@ func TestCorePublishRequestTraceAndFullLogs(t *testing.T) {
 			},
 		},
 		CoreConsumer{
+			Name:    "reply",
 			Subject: "orders.reply",
 			Queue:   "order-workers",
 			Handler: func(_ context.Context, m *nats.Msg) error {
@@ -450,6 +453,7 @@ func TestRequestOptionalHeaders(t *testing.T) {
 	defer c.Close()
 	received := make(chan *nats.Msg, 4)
 	if err := c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+		Name:    "request",
 		Subject: "optional.request",
 		Handler: func(_ context.Context, msg *nats.Msg) error {
 			received <- msg
@@ -720,6 +724,7 @@ func TestCloseTimeoutForBlockedCallback(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	err = c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+		Name:    "blocked",
 		Subject: "blocked.work",
 		Handler: func(context.Context, *nats.Msg) error {
 			close(entered)

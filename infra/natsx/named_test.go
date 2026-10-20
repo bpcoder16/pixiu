@@ -117,6 +117,7 @@ func TestCloseAllDrainsWithHeldClientBeforeDependencies(t *testing.T) {
 	finished := make(chan error, 1)
 	defer close(release)
 	if err := client.RegisterCoreConsumers(context.Background(), CoreConsumer{
+		Name:    "worker",
 		Subject: "work",
 		Handler: func(ctx context.Context, _ *nats.Msg) error {
 			close(entered)
@@ -185,6 +186,7 @@ func TestCloseAllPreservesTimeoutAndContinuesClosing(t *testing.T) {
 	entered := make(chan struct{})
 	finished := make(chan struct{})
 	if err := client.RegisterCoreConsumers(context.Background(), CoreConsumer{
+		Name:    "blocked",
 		Subject: "blocked",
 		Handler: func(ctx context.Context, _ *nats.Msg) error {
 			close(entered)
