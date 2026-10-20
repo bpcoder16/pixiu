@@ -115,7 +115,7 @@ func TestDefaultJetStreamConsumerRegistrationAndOverrides(t *testing.T) {
 		{
 			spec:          defaults,
 			subjects:      []string{"default-consumers.defaults", "default-consumers.extra"},
-			ackWait:       5 * time.Second,
+			ackWait:       60 * time.Second,
 			maxDeliver:    5,
 			maxAckPending: 1000,
 		},
@@ -1060,6 +1060,38 @@ func TestRegistrationRejectsInvalidRetryConfigBeforePreparingBatch(t *testing.T)
 				t.Fatalf("重投配置校验失败仍创建了前面的 Consumer: %v", err)
 			}
 		})
+	}
+}
+
+func TestRegistrationRejectsPushConsumerBeforePreparingBatch(t *testing.T) {
+	captureLogs(t)
+	c := registrationClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := c.RegisterStreams(ctx, jetstream.StreamConfig{
+		Name:     "PULL_ONLY",
+		Subjects: []string{"pull-only.tasks"},
+		Storage:  jetstream.MemoryStorage,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first := DefaultJetStreamConsumer("PULL_ONLY", "first", func(context.Context, jetstream.Msg) error {
+		return nil
+	})
+	second := first
+	second.Config.Durable = "push"
+	second.Config.DeliverSubject = "push.delivery"
+	if err := c.RegisterJetStreamConsumers(ctx, first, second); err == nil || !strings.Contains(err.Error(), "DeliverSubject") {
+		t.Fatalf("未在注册时拒绝 Push Consumer 配置: %v", err)
+	}
+	if len(c.jetStreamConsumers) != 0 {
+		t.Fatal("Push Consumer 校验失败仍启动了本批消费")
+	}
+	// 后面的声明无效时，前面的合法声明也不能创建远端资源。
+	for _, name := range []string{"first", "push"} {
+		if _, err := c.JetStream().Consumer(ctx, "PULL_ONLY", name); !errors.Is(err, jetstream.ErrConsumerNotFound) {
+			t.Fatalf("Push Consumer 校验失败仍创建了 Consumer %q: %v", name, err)
+		}
 	}
 }
 

@@ -25,7 +25,7 @@ type CoreHandler func(context.Context, *nats.Msg) error
 
 // JetStreamConsumer 绑定远端 Pull Consumer 配置、本地消费参数与 handler。
 // Config 必须提供 Durable 并使用 AckExplicitPolicy，且显式配置正值 AckWait 或非空 BackOff；
-// 两者同时配置时 BackOff 优先，Name 非空时必须等于 Durable。
+// 两者同时配置时 BackOff 优先，Name 非空时必须等于 Durable，DeliverSubject 必须为空。
 type JetStreamConsumer struct {
 	Stream string
 	Config jetstream.ConsumerConfig
@@ -80,7 +80,7 @@ func DefaultStreamConfig(name string, replicas int, subjects ...string) jetstrea
 
 // DefaultJetStreamConsumer 构建可直接修改的消费声明，不建立连接或校验参数。
 // 复制 subjects 后写入 FilterSubjects（要求 NATS Server >= 2.10），不传主题时消费整个 Stream。
-// 默认显式确认、AckWait 为 5 秒、最多投递 5 次（含首次），不设置 BackOff 或延迟 NAK。
+// 默认显式确认、AckWait 为 60 秒、最多投递 5 次（含首次），不设置 BackOff 或延迟 NAK。
 // MaxAckPending 显式设为 1000；MaxRequestBatch 和 MaxRequestExpires 保留零值。
 // Workers 默认设为 1；MaxMessages 保留零值，由注册入口按最终并发配置归一化。
 func DefaultJetStreamConsumer(stream, durable string, handler JetStreamHandler, subjects ...string) JetStreamConsumer {
@@ -90,7 +90,7 @@ func DefaultJetStreamConsumer(stream, durable string, handler JetStreamHandler, 
 			Durable:        durable,                     // 持久化消费者名称，用于恢复消费进度。
 			FilterSubjects: slices.Clone(subjects),      // 仅消费匹配主题的消息；为空时消费整个 Stream，切片与调用方独立。
 			AckPolicy:      jetstream.AckExplicitPolicy, // 每条消息都须单独 ACK，由组件在 handler 成功后确认。
-			AckWait:        5 * time.Second,             // 投递后等待 ACK 的时限；默认 5 秒，超时未确认则重投。
+			AckWait:        60 * time.Second,            // 投递后等待 ACK 的时限；默认 60 秒，超时未确认则重投。
 			MaxDeliver:     5,                           // 每条消息最多投递 5 次（含首次），达到上限后停止重投。
 			MaxAckPending:  1000,                        // 同一 Durable 下所有实例合计最多保留 1000 条未确认消息。
 		},
@@ -185,6 +185,9 @@ func (c *Client) RegisterJetStreamConsumers(ctx context.Context, consumers ...Je
 		}
 		if spec.Config.Name != "" && spec.Config.Name != spec.Config.Durable {
 			return fmt.Errorf("natsx: consumer %q name must equal durable", spec.Config.Durable)
+		}
+		if spec.Config.DeliverSubject != "" {
+			return fmt.Errorf("natsx: consumer %q requires pull mode; DeliverSubject must be empty", spec.Config.Durable)
 		}
 		if spec.Config.AckPolicy != jetstream.AckExplicitPolicy {
 			return fmt.Errorf("natsx: consumer %q requires explicit ack", spec.Config.Durable)

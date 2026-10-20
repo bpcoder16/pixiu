@@ -142,7 +142,7 @@
 // MaxMsgSize 限制 Header 与正文的总大小，须为组件追加的追踪 ID、消息 ID 等 Header 预留空间。
 // LimitsPolicy 下 ACK 不释放容量；默认满额拒绝新消息，空间释放后可继续发布，MaxAge 到期也会删除未 ACK 的消息。
 // 需要满额淘汰最老消息时，可在注册前设置 streamCfg.Discard = jetstream.DiscardOld。
-// DefaultJetStreamConsumer 返回可修改的消费声明，默认显式确认、AckWait=5s、MaxDeliver=5（含首次投递），
+// DefaultJetStreamConsumer 返回可修改的消费声明，默认显式确认、AckWait=60s、MaxDeliver=5（含首次投递），
 // 显式设置 MaxAckPending=1000，限制同一 Durable 下所有实例合计的未确认消息数。
 // MaxRequestBatch 和 MaxRequestExpires 保留零值，不额外指定拉取批量或期限上限。
 // BackOff 为空、RetryDelay 为零；可通过 consumer.Config 覆盖 AckWait、MaxDeliver、MaxAckPending 或设置 BackOff。
@@ -150,7 +150,9 @@
 // 构造函数不设置 FilterSubject；调用方后续设置该字段时须清空 FilterSubjects，两者不能同时使用。
 // Workers 默认设为 1；MaxMessages 保留零值，注册时为有效 Workers 的两倍。
 // 默认构造函数不校验参数；手写消费声明仍须显式配置确认超时。
+// RegisterJetStreamConsumers 仅支持 Pull Consumer，Config.DeliverSubject 非空时在创建本批任何远端 Consumer 前报错。
 // RegisterStreams/RegisterJetStreamConsumers 使用 SDK 创建语义：同配置复用、冲突返回错误，不更新或删除已有资源。
+// 已有使用旧默认 AckWait=5s 的 Durable，采用新默认值前须显式更新远端配置。
 // RegisterStreams、RegisterJetStreamConsumers 和 RegisterCoreConsumers 分别计数，通过入口检查后每个 Client 各只允许调用一次；
 // 须一次传入该类的全部配置，空清单或失败也不可重试，各 Client 互不影响。
 // 三个 Register 入口仅在启动阶段串行调用，不与 Close 并发；入口检查初始状态，
