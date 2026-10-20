@@ -150,6 +150,14 @@ func (c *Client) subscribeHandler(subject, queue string, handler CoreHandler) (*
 	}
 	ctx := c.handlerCtx
 	wrapped := func(msg *nats.Msg) {
+		c.consumerMu.Lock()
+		if ctx.Err() != nil {
+			c.consumerMu.Unlock()
+			return
+		}
+		c.coreHandlers.Add(1)
+		c.consumerMu.Unlock()
+		defer c.coreHandlers.Done()
 		msgCtx := MessageContext(ctx, msg.Header)
 		begin := time.Now()
 		err := handler(msgCtx, msg)

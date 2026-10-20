@@ -117,7 +117,9 @@ func TestPublishJetStreamAsyncCloseWaitsForError(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	future, err := c.PublishJetStreamAsync(ctx, "noack", nil, "event")
+	msgCtx := logit.WithContextLogID(ctx)
+	logID, _ := logit.LogIDFromContext(msgCtx)
+	future, err := c.PublishJetStreamAsync(msgCtx, "noack", nil, "event")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +137,9 @@ func TestPublishJetStreamAsyncCloseWaitsForError(t *testing.T) {
 	}
 	for _, record := range readLogs(t, buf) {
 		if record["nats_event"] == "async_publish_error" {
+			if record["message_id"] != "event" || record[logit.LogId] != logID {
+				t.Fatalf("异步失败日志未关联原消息: %v", record)
+			}
 			return
 		}
 	}

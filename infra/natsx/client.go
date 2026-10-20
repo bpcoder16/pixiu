@@ -41,6 +41,10 @@ type Config struct {
 	CloseTimeout time.Duration
 	// JetStream 配置基于当前连接创建的默认 JetStream 上下文。
 	JetStream JetStreamConfig
+	// AsyncErrorHandler 在内部日志后同步接收连接异步错误；日志过滤不影响通知，nil 时仅记录日志。
+	// 订阅可能为 nil；回调不得阻塞、panic、调用 Client.Close，或关闭/排空连接及受管订阅。
+	// JetStream 拉取错误使用 ConsumeConfig.ErrorHandler，异步 PubAck 结果通过 future 观察。
+	AsyncErrorHandler nats.ErrHandler
 }
 
 // JetStreamConfig 是默认 JetStream 上下文的配置；不开放完整的 jetstream.JetStreamOpt。
@@ -82,6 +86,8 @@ type Client struct {
 	consumerMu sync.Mutex
 	// coreSubscriptions 保存启动期登记的 Core 广播和 Queue 订阅，供 Close 排空并等待回调结束。
 	coreSubscriptions []*nats.Subscription
+	// coreHandlers 跟踪已接纳的 Core 回调及结果日志；Add 在 consumerMu 下检查生命周期后执行。
+	coreHandlers sync.WaitGroup
 	// jetStreamConsumers 保存启动期创建的 JetStream worker 消费句柄，供 Close 排空并等待全部 handler 结束。
 	jetStreamConsumers []jetstream.ConsumeContext
 	// closeOnce 保证并发或重复调用 Close 时只执行一次关闭流程。
@@ -208,7 +214,7 @@ func New(cfg Config, options ...nats.Option) (*Client, error) {
 	// 消息处理生命周期由 Client 管理，不绑定初始化调用方的请求或超时。
 	c.handlerCtx, c.cancelHandlers = context.WithCancel(context.Background())
 	// 五个连接回调字段均由 Pixiu 管理；用户自定义已在上方校验中拒绝。
-	c.installCallbacks(&opts)
+	c.installCallbacks(&opts, cfg.AsyncErrorHandler)
 	nc, err := opts.Connect()
 	if err != nil {
 		c.cancelHandlers()
@@ -221,10 +227,17 @@ func New(cfg Config, options ...nats.Option) (*Client, error) {
 		jetstream.WithPublishAsyncTimeout(cfg.JetStream.PublishAsyncTimeout),
 		jetstream.WithPublishAsyncErrHandler(func(_ jetstream.JetStream, msg *nats.Msg, err error) {
 			subject := ""
+			var fields []logit.Field
 			if msg != nil {
 				subject = msg.Subject
+				if id := msg.Header.Get(jetstream.MsgIDHeader); id != "" {
+					fields = append(fields, logit.Str("message_id", id))
+				}
+				if id := msg.Header.Get(TraceHeader); id != "" {
+					fields = append(fields, logit.Str(logit.LogId, id))
+				}
 			}
-			c.logState(logit.ErrorLevel, "async_publish_error", subject, err)
+			c.logState(logit.ErrorLevel, "async_publish_error", subject, err, fields...)
 		}),
 	)
 	if err != nil {
@@ -239,7 +252,7 @@ func New(cfg Config, options ...nats.Option) (*Client, error) {
 	return c, nil
 }
 
-func (c *Client) installCallbacks(opts *nats.Options) {
+func (c *Client) installCallbacks(opts *nats.Options, asyncErrorHandler nats.ErrHandler) {
 	// DisconnectedErrCB：当前连接断开时触发，如网络中断、服务端关闭或心跳超时；后续可能重连。
 	// 主动关闭也可能触发且 err 为 nil；Client.Close 期间通过 closing 标记抑制断连告警。
 	// 使用此回调后，旧版 DisconnectedCB 保持 nil。
@@ -263,12 +276,15 @@ func (c *Client) installCallbacks(opts *nats.Options) {
 	}
 	// AsyncErrorCB：NATS 运行时异步错误通知，如慢消费者、发布/订阅权限不足或后台写入失败。
 	// sub 可能为 nil；此回调不代表连接必然断开，JetStream 异步发布失败另由上方专用回调处理。
-	opts.AsyncErrorCB = func(_ *nats.Conn, sub *nats.Subscription, err error) {
+	opts.AsyncErrorCB = func(nc *nats.Conn, sub *nats.Subscription, err error) {
 		subject := ""
 		if sub != nil {
 			subject = sub.Subject
 		}
 		c.logState(logit.ErrorLevel, "async_error", subject, err)
+		if asyncErrorHandler != nil {
+			asyncErrorHandler(nc, sub, err)
+		}
 	}
 }
 
@@ -318,6 +334,23 @@ func (c *Client) close() error {
 		// 原生通知会补发当前关闭状态，兼容提前停止的订阅，且不占用用户关闭回调。
 		select {
 		case <-sub.StatusChanged(nats.SubscriptionClosed):
+		case <-c.closedEvent:
+			// 永久断连不发送订阅关闭状态，在循环后统一等待在途回调。
+		case <-timer.C:
+			return c.forceClose()
+		}
+	}
+	if c.handlerCtx.Err() != nil {
+		done := make(chan struct{})
+		go func() {
+			// 与回调的取消检查及 Add 衔接，保证 Wait 开始后不再新增回调。
+			c.consumerMu.Lock()
+			c.consumerMu.Unlock()
+			c.coreHandlers.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
 		case <-timer.C:
 			return c.forceClose()
 		}
@@ -361,7 +394,7 @@ func (c *Client) forceClose() error {
 	return ErrCloseTimeout
 }
 
-func (c *Client) logState(level logit.Level, event, subject string, err error) {
+func (c *Client) logState(level logit.Level, event, subject string, err error, extra ...logit.Field) {
 	ctx := context.Background()
 	if !logit.LoggerFromContext(ctx).Enabled(level) {
 		return
@@ -376,5 +409,6 @@ func (c *Client) logState(level logit.Level, event, subject string, err error) {
 	if err != nil {
 		fields = append(fields, logit.Err(err))
 	}
+	fields = append(fields, extra...)
 	logit.Output(ctx, level, 0, "nats connection", fields...)
 }

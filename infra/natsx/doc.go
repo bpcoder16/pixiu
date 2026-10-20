@@ -35,6 +35,8 @@
 // 关闭时先停止并等待外部生产者，再通过 Client.Close 统一排空并关闭连接，最后关闭日志。
 // Close 拒绝新增注册，排空消费后拒绝新发布与请求，再等待异步发布结果并 drain 连接。
 // 排空期间 handler ctx 保持有效，可以继续发布和完成 ACK；Close 不汇总单条发布错误。
+// 连接意外永久关闭后停止接纳新的 Core 回调，Close 在整体期限内等待在途回调及其结果日志结束，
+// 不依赖此时 SDK 可能缺失的订阅关闭状态通知；未完成的业务仍会触发 ErrCloseTimeout。
 // 已建立连接意外断开后默认持续重连，心跳间隔默认 20 秒，重连发送缓冲默认 16 MiB；
 // 调用方可通过 nats.MaxReconnects、nats.PingInterval、nats.ReconnectBufSize 等官方选项覆盖。
 // 首次连接失败仍直接返回错误；重连成功后由官方客户端恢复原有订阅。
@@ -83,6 +85,10 @@
 // URLs 至少包含一个地址，每项必须非空且无首尾空白；不自动裁剪，非法值在拨号前报错。
 // DisconnectedErrCB、DisconnectedCB、ReconnectedCB、ClosedCB、AsyncErrorCB 由 Pixiu 管理；
 // 选项中任一字段非 nil 时在拨号前报错，不保留或串联用户连接回调。
+// 应用可设置 Config.AsyncErrorHandler（nats.ErrHandler）接收权限拒绝、慢消费者等异步错误；
+// 内部日志后同步调用，日志过滤不影响通知，订阅可能为 nil。回调不得阻塞、panic、调用 Close，
+// 或关闭/排空连接及受管订阅；需要停机时向应用协调协程发信号。
+// 该通知不改变注册返回值，也不自动重试；JetStream 拉取错误仍使用 ConsumeConfig.ErrorHandler。
 // 取得 Conn() 后也不得覆盖这些回调；可通过原生 StatusChanged 观察连接状态。
 // username、password 由应用读取配置后注入，允许空密码；只有密码而没有用户名时无效。
 // Config 仅直接提供用户名/密码认证，两个字段均可不填。
@@ -172,6 +178,7 @@
 // AckWait（或覆盖它的 BackOff）从消息投递时开始计时，应覆盖预取等待和业务处理时间，
 // 不自动 InProgress，业务仍须幂等。
 // 注册入口的 handler panic 被恢复并按业务失败处理。
+// 消费错误文本直接调用 err.Error() 获取，调用方须保证 Error 方法可安全调用；日志被过滤后不求值错误。
 //
 // Core 通过 RegisterCoreConsumers(setupCtx, CoreConsumer{...}) 集中注册：
 // Name 必填且不能全为空白，同批名称按原值判重；不同 Name 可使用相同 Subject 和 Queue，不同 Client 可使用相同 Name。
@@ -197,6 +204,8 @@
 // 异步方法复制 data/Header，不修改原始输入，调用返回后即可复用；不得修改 future.Msg()。
 // ctx 只用于提交前取消检查、日志与追踪，不取消已提交消息，也不控制后续确认等待。
 // 先检查方法返回的提交 error，再检查 future.Ok()/Err()；异步错误同时记录日志。
+// async_publish_error 从消息 Header 读取已有的非空 Nats-Msg-Id、X-Log-Id，
+// 分别输出 message_id、logId，缺失时不生成替代 ID，使用默认 Logger。
 // 提交日志及耗时不表示持久化成功，PubAck 也不代表消费者业务完成。
 // PublishAsyncTimeout 默认 5 秒，与消费者 AckWait 无关；确认超时不保证消息未写入。
 // Close 排空消费后等待异步结果；全部完成不等于全部成功。

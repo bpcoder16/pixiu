@@ -18,7 +18,19 @@ import (
 
 func startServer(t *testing.T) string {
 	t.Helper()
-	s, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true})
+	return startServerWithOptions(t, &server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoLog:     true,
+		NoSigs:    true,
+	}).ClientURL()
+}
+
+func startServerWithOptions(t *testing.T, opts *server.Options) *server.Server {
+	t.Helper()
+	s, err := server.NewServer(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +40,7 @@ func startServer(t *testing.T) string {
 		t.Fatal("NATS 未就绪")
 	}
 	t.Cleanup(func() { s.Shutdown(); s.WaitForShutdown() })
-	return s.ClientURL()
+	return s
 }
 
 func captureLogs(t *testing.T) *bytes.Buffer {
