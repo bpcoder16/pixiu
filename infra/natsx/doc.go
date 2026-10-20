@@ -94,6 +94,9 @@
 //
 // 启动阶段的边界由应用负责；模块不提供 Start，也不在运行期自动拒绝注册。
 // Core 消费统一通过 RegisterCoreConsumers 注册，Queue 为空时广播，非空时同组竞争消费。
+// Subscribers 仅在 Queue 非空时控制当前 Client 的同组订阅数，零值默认 1，负值无效；
+// Queue 为空时忽略该数量，固定创建一个广播订阅。
+// 单个订阅内串行处理，多个订阅间可并发且不保证处理顺序，handler 须支持并发调用。
 // 全空白队列名无效；handler 返回 error，成功时返回 nil。
 // 集中注册入口只应在启动阶段调用，不能从消息回调中追加注册。
 // 注册返回前可能接收消息，handler 依赖的资源应预先就绪。
@@ -170,10 +173,20 @@
 //
 // Core 通过 RegisterCoreConsumers(setupCtx, CoreConsumer{...}) 集中注册：
 // Queue 为空时广播，否则竞争消费；Handler 返回错误只记日志，不重投，使用 Msg.Respond 显式应答。
+// 以下用一份声明创建四个同组订阅；handleEvent 是业务提供的、支持并发调用的 CoreHandler：
+//
+//	return client.RegisterCoreConsumers(context.Background(), natsx.CoreConsumer{
+//		Subject:     "events.created",
+//		Queue:       "event-workers",
+//		Subscribers: 4,
+//		Handler:     handleEvent,
+//	})
+//
 // setupCtx 可使用 context.Background()，全部注册后仅 Flush 一次；有 deadline 时使用 FlushWithContext，
 // 无 deadline 时使用 SDK 默认 Flush（当前等待上限 10 秒），此时取消 ctx 不会中断正在执行的 Flush。
 // 不另设整体注册期限；Flush 不保证逐个订阅授权成功。
-// PendingMessages/PendingBytes 为零沿用 SDK 默认，正值覆盖；建立订阅后设置，有默认限额窗口。
+// PendingMessages/PendingBytes 分别限制每个订阅的积压，为零沿用 SDK 默认，正值覆盖；
+// 建立订阅后逐个设置，有默认限额窗口，总缓冲容量随订阅数增加。
 // 两种注册的启动 ctx 均不传入长期 handler，生命周期、日志作用域和关闭顺序复用 Client。
 //
 // PublishJetStreamAsync 的参数与同步方法相同，要求非空 messageID，返回原生 PubAckFuture。

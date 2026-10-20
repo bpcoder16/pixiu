@@ -1076,22 +1076,31 @@ func TestRegisteredCorePartialFailureRemainsOwned(t *testing.T) {
 	err := c.RegisterCoreConsumers(ctx,
 		CoreConsumer{
 			Subject:         "valid",
+			Queue:           "workers",
+			Subscribers:     3,
 			Handler:         handler,
 			PendingMessages: 10,
 			PendingBytes:    1024,
 		},
 		CoreConsumer{Subject: "bad subject", Handler: handler},
 	)
-	if !errors.Is(err, nats.ErrBadSubject) || len(c.coreSubscriptions) != 1 {
+	if !errors.Is(err, nats.ErrBadSubject) || len(c.coreSubscriptions) != 3 {
 		t.Fatalf("部分失败未保留已建立的句柄: %v", err)
 	}
-	sub := c.coreSubscriptions[0]
-	messages, bytes, err := sub.PendingLimits()
-	if err != nil || messages != 10 || bytes != 1024 {
-		t.Fatalf("pending 参数未应用: %d %d %v", messages, bytes, err)
+	subs := slices.Clone(c.coreSubscriptions)
+	for _, sub := range subs {
+		messages, bytes, err := sub.PendingLimits()
+		if err != nil || messages != 10 || bytes != 1024 {
+			t.Fatalf("pending 参数未应用: %d %d %v", messages, bytes, err)
+		}
 	}
-	if err := c.Close(); err != nil || sub.IsValid() {
+	if err := c.Close(); err != nil {
 		t.Fatalf("部分注册失败后未正确回收: %v", err)
+	}
+	for _, sub := range subs {
+		if sub.IsValid() {
+			t.Fatal("部分注册失败后仍有订阅未回收")
+		}
 	}
 }
 

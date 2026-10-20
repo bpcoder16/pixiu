@@ -3,8 +3,10 @@ package natsx
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bpcoder16/pixiu/logit"
 	"github.com/nats-io/nats.go"
@@ -106,12 +108,164 @@ func TestCoreRegistrationRejectsInvalidDeclarations(t *testing.T) {
 		{
 			Subject: "subscription.work",
 		},
+		{
+			Subject:     "subscription.work",
+			Queue:       "workers",
+			Subscribers: -1,
+			Handler:     valid.Handler,
+		},
+		{
+			Subject:     "subscription.work",
+			Subscribers: -1,
+			Handler:     valid.Handler,
+		},
 	} {
 		if err := c.RegisterCoreConsumers(context.Background(), valid, spec); err == nil {
 			t.Fatalf("无效声明应在创建本批订阅前拒绝: %+v", spec)
 		}
 		if got := c.Conn().NumSubscriptions(); got != 0 {
 			t.Fatalf("无效声明不应创建订阅: %d", got)
+		}
+	}
+}
+
+func TestCoreRegistrationSubscriberCounts(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		queue       string
+		subscribers int
+		want        int
+	}{
+		{
+			name:  "queue_default",
+			queue: "workers",
+			want:  1,
+		},
+		{
+			name:        "queue_one",
+			queue:       "workers",
+			subscribers: 1,
+			want:        1,
+		},
+		{
+			name:        "queue_multiple",
+			queue:       "workers",
+			subscribers: 4,
+			want:        4,
+		},
+		{
+			name: "broadcast_default",
+			want: 1,
+		},
+		{
+			name:        "broadcast_ignores_subscribers",
+			subscribers: 4,
+			want:        1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			captureLogs(t)
+			c := registrationClient(t)
+			if err := c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+				Subject:         "subscription.count",
+				Queue:           tc.queue,
+				Subscribers:     tc.subscribers,
+				Handler:         func(context.Context, *nats.Msg) error { return nil },
+				PendingMessages: 256,
+				PendingBytes:    1 << 20,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if got := c.Conn().NumSubscriptions(); got != tc.want {
+				t.Fatalf("订阅数 = %d，期望 %d", got, tc.want)
+			}
+			if len(c.coreSubscriptions) != tc.want {
+				t.Fatalf("未托管全部订阅: %d", len(c.coreSubscriptions))
+			}
+			for _, sub := range c.coreSubscriptions {
+				messages, bytes, err := sub.PendingLimits()
+				if err != nil || messages != 256 || bytes != 1<<20 {
+					t.Fatalf("未逐个应用 pending 限额: messages=%d bytes=%d err=%v", messages, bytes, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCoreQueueSubscribersConcurrentDeliveryAndDrain(t *testing.T) {
+	captureLogs(t)
+	c := registrationClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	const subscribers = 4
+	const messages = 128
+	entered := make(chan struct{}, messages)
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
+	var received [messages]atomic.Int32
+	var active atomic.Int32
+	if err := c.RegisterCoreConsumers(ctx, CoreConsumer{
+		Subject:     "subscription.concurrent",
+		Queue:       "workers",
+		Subscribers: subscribers,
+		Handler: func(_ context.Context, msg *nats.Msg) error {
+			if got := active.Add(1); got > subscribers {
+				t.Errorf("并发处理数超过订阅数: %d", got)
+			}
+			defer active.Add(-1)
+			entered <- struct{}{}
+			<-release
+			if len(msg.Data) != 1 || int(msg.Data[0]) >= messages {
+				t.Errorf("消息内容错误: %v", msg.Data)
+				return nil
+			}
+			received[msg.Data[0]].Add(1)
+			return nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range messages {
+		if err := c.Publish(ctx, "subscription.concurrent", []byte{byte(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 回调保持阻塞，收到四次进入通知才能证明四个订阅确实能并发处理。
+	for range subscribers {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("同组订阅未达到配置的并发度")
+		}
+	}
+	draining := make([]<-chan nats.SubStatus, 0, subscribers)
+	for _, sub := range c.coreSubscriptions {
+		draining = append(draining, sub.StatusChanged(nats.SubscriptionDraining))
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- c.Close() }()
+	for _, status := range draining {
+		select {
+		case <-status:
+		case err := <-closed:
+			t.Fatalf("回调未完成就结束关闭: %v", err)
+		case <-ctx.Done():
+			t.Fatal("未排空全部同组订阅")
+		}
+	}
+	unblock()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("同组订阅关闭未完成")
+	}
+	for i := range received {
+		if got := received[i].Load(); got != 1 {
+			t.Errorf("消息 %d 处理了 %d 次，期望 1 次", i, got)
 		}
 	}
 }

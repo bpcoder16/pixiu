@@ -37,12 +37,16 @@ type JetStreamConsumer struct {
 	Handler    JetStreamHandler
 }
 
-// CoreConsumer 声明一个 Core 订阅；Queue 为空时广播，否则为同组竞争消费。
-// 同一订阅内串行调用 handler；pending 溢出由 SDK 异步错误日志报告，不保证重投。
+// CoreConsumer 声明 Core 订阅；Queue 为空时广播，否则为同组竞争消费。
+// 同一订阅内串行调用 handler，多个订阅之间可并发执行且不保证处理顺序，handler 须支持并发调用。
+// pending 溢出由 SDK 异步错误日志报告，不保证重投。
 type CoreConsumer struct {
 	Subject string
 	Queue   string
-	Handler CoreHandler
+	// Subscribers 仅在 Queue 非空时控制当前 Client 创建的同组订阅数；零值默认 1，负值无效。
+	// Queue 为空时忽略此数量，始终只创建一个广播订阅。
+	Subscribers int
+	Handler     CoreHandler
 	// PendingMessages 和 PendingBytes 为零时沿用 SDK 默认，正值覆盖，负值无效。
 	PendingMessages int
 	PendingBytes    int
@@ -224,31 +228,38 @@ func (c *Client) RegisterCoreConsumers(ctx context.Context, consumers ...CoreCon
 		if strings.TrimSpace(spec.Subject) == "" ||
 			spec.Handler == nil ||
 			(spec.Queue != "" && strings.TrimSpace(spec.Queue) == "") ||
+			spec.Subscribers < 0 ||
 			spec.PendingMessages < 0 ||
 			spec.PendingBytes < 0 {
 			return fmt.Errorf("natsx: invalid Core consumer %d", i)
 		}
 	}
 	for _, spec := range consumers {
-		sub, err := c.subscribeHandler(spec.Subject, spec.Queue, func(ctx context.Context, msg *nats.Msg) error {
-			return invokeHandler(ctx, func() error { return spec.Handler(ctx, msg) })
-		})
-		if err != nil {
-			return fmt.Errorf("natsx: register Core subject %q: %w", spec.Subject, err)
+		subscribers := 1
+		if spec.Queue != "" && spec.Subscribers > 0 {
+			subscribers = spec.Subscribers
 		}
-		if spec.PendingMessages != 0 || spec.PendingBytes != 0 {
-			messages, bytes, pendingErr := sub.PendingLimits()
-			if pendingErr != nil {
-				return pendingErr
+		for range subscribers {
+			sub, err := c.subscribeHandler(spec.Subject, spec.Queue, func(ctx context.Context, msg *nats.Msg) error {
+				return invokeHandler(ctx, func() error { return spec.Handler(ctx, msg) })
+			})
+			if err != nil {
+				return fmt.Errorf("natsx: register Core subject %q: %w", spec.Subject, err)
 			}
-			if spec.PendingMessages > 0 {
-				messages = spec.PendingMessages
-			}
-			if spec.PendingBytes > 0 {
-				bytes = spec.PendingBytes
-			}
-			if setErr := sub.SetPendingLimits(messages, bytes); setErr != nil {
-				return setErr
+			if spec.PendingMessages != 0 || spec.PendingBytes != 0 {
+				messages, bytes, pendingErr := sub.PendingLimits()
+				if pendingErr != nil {
+					return pendingErr
+				}
+				if spec.PendingMessages > 0 {
+					messages = spec.PendingMessages
+				}
+				if spec.PendingBytes > 0 {
+					bytes = spec.PendingBytes
+				}
+				if setErr := sub.SetPendingLimits(messages, bytes); setErr != nil {
+					return setErr
+				}
 			}
 		}
 	}
