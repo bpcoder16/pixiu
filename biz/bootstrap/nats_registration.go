@@ -21,6 +21,7 @@ import (
 // 各入口分阶段预检，后序校验失败时前序资源或消费可能已启动。
 // nil 注册表视为空表，未引用的 Handler 不启动；全局 streamDefaults.replicas 始终必填且为正整数。
 // 逐项 Stream 的 replicas 不得超过全局值，超限时在注册任何资源前返回错误。
+// Core queue 非空时 subscribers 必须大于 1，否则在注册任何资源前返回错误。
 // 返回前可能执行 Handler；失败须中止启动并由原资源栈关闭 Client，不回滚远端资源或业务。
 // ctx 必须非 nil；其校验与 Client 关闭检查沿用 natsx，ctx 不控制长期 Handler，不提供热更新或整批重试。
 func RegisterNATSFromConfig(ctx context.Context, instanceName string, jetStreamHandlers *natsx.JetStreamHandlerRegistry, coreHandlers *natsx.CoreHandlerRegistry) error {
@@ -76,10 +77,11 @@ type natsJetStreamRegistration struct {
 }
 
 type natsCoreRegistration struct {
-	Name    string `mapstructure:"name"`
-	Subject string `mapstructure:"subject"`
-	Queue   string `mapstructure:"queue"`
-	Handler string `mapstructure:"handler"`
+	Name        string `mapstructure:"name"`
+	Subject     string `mapstructure:"subject"`
+	Queue       string `mapstructure:"queue"`
+	Subscribers int    `mapstructure:"subscribers"`
+	Handler     string `mapstructure:"handler"`
 }
 
 type natsRegistrations struct {
@@ -125,18 +127,21 @@ func (cfg *natsRegistrationConfig) bind(jsRegistry *natsx.JetStreamHandlerRegist
 		)
 	}
 	for i, spec := range cfg.CoreConsumers {
+		if spec.Queue != "" && spec.Subscribers <= 1 {
+			return nil, fmt.Errorf("coreConsumers[%d] %q subscribers %d must be greater than 1 when queue is set", i, spec.Name, spec.Subscribers)
+		}
 		handler, ok := coreHandlers[spec.Handler]
 		if !ok {
 			return nil, fmt.Errorf("coreConsumers[%d] %q: unknown Core handler %q", i, spec.Name, spec.Handler)
 		}
-		// queue 为空时该工厂生成广播声明，订阅数统一为 1。
+		// queue 为空时沿用广播语义，订阅数由 natsx 固定为 1。
 		batch.coreConsumers = append(
 			batch.coreConsumers,
 			natsx.DefaultCoreQueueConsumer(
 				spec.Name,
 				spec.Subject,
 				spec.Queue,
-				1,
+				spec.Subscribers,
 				handler,
 			),
 		)

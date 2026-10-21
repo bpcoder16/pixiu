@@ -27,9 +27,12 @@ coreConsumers:
   - name: "notification-worker"
     subject: "notifications.send"
     queue: "notification-workers"
+    # queue 非空时必须配置且大于 1；当前 Client 按此数量建订阅，Handler 须支持并发。
+    subscribers: 4
     handler: "HandleNotification"
 
 # 三份清单均可省略或设为 []；未引用的 Handler 不启动。
 # filterSubjects 省略或为空时消费整个 Stream；queue 省略或为空时广播。
+# subscribers 仅在 queue 非空时控制订阅数，广播始终只有一个订阅。
 # 除上述字段外全部沿用 natsx 的 Default，不支持 enabled、运行调参或完整 SDK 配置。
 # 删除声明后重启不删除远端 Stream/Durable；同配置复用，冲突报错，不自动更新。

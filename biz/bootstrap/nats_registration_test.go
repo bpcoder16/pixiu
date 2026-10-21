@@ -38,6 +38,7 @@ coreConsumers:
   - name: queue
     subject: tasks
     queue: workers
+    subscribers: 4
     handler: registrationCore
 `
 
@@ -85,8 +86,8 @@ func TestNATSRegistrationDefaultsAndOverrides(t *testing.T) {
 		batch.coreConsumers[i].Handler = nil
 	}
 	wantCore := []natsx.CoreConsumer{
-		natsx.DefaultCoreConsumer("broadcast", "updates", nil),
-		natsx.DefaultCoreQueueConsumer("queue", "tasks", "workers", 1, nil),
+		natsx.DefaultCoreQueueConsumer("broadcast", "updates", "", 0, nil),
+		natsx.DefaultCoreQueueConsumer("queue", "tasks", "workers", 4, nil),
 	}
 	if !reflect.DeepEqual(batch.coreConsumers, wantCore) {
 		t.Fatalf("未沿用 Core Default: %+v", batch.coreConsumers)
@@ -163,6 +164,58 @@ func TestNATSRegistrationOptionalReplicas(t *testing.T) {
 	}
 }
 
+func TestNATSRegistrationQueueSubscribers(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config string
+		valid  bool
+	}{
+		{name: "omitted"},
+		{
+			name:   "null",
+			config: "    subscribers: null\n",
+		},
+		{
+			name:   "negative",
+			config: "    subscribers: -1\n",
+		},
+		{
+			name:   "zero",
+			config: "    subscribers: 0\n",
+		},
+		{
+			name:   "one",
+			config: "    subscribers: 1\n",
+		},
+		{
+			name:   "two",
+			config: "    subscribers: 2\n",
+			valid:  true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := strings.Replace(registrationYAML, "    subscribers: 4\n", tc.config, 1)
+			cfg, err := parseNATSRegistration(t, content)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = cfg.bind(
+				natsx.MustNewJetStreamHandlerRegistry(registrationTask),
+				natsx.MustNewCoreHandlerRegistry(registrationCore),
+			)
+			if tc.valid {
+				if err != nil {
+					t.Fatalf("队列订阅数大于 1 应合法: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), `coreConsumers[1] "queue" subscribers`) || !strings.Contains(err.Error(), "must be greater than 1") {
+				t.Fatalf("队列订阅数不大于 1 应在配置层拒绝: %v", err)
+			}
+		})
+	}
+}
+
 func TestNATSRegistrationRejectsInvalidConfig(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -186,6 +239,11 @@ func TestNATSRegistrationRejectsInvalidConfig(t *testing.T) {
 		{name: "unknown", content: registrationYAML + "\nextra: true", want: "extra"},
 		{name: "unknown-stream", content: strings.Replace(registrationYAML, "replicas: 1", "replica: 1", 1), want: "replica"},
 		{name: "runtime-option", content: strings.Replace(registrationYAML, "durable: worker", "durable: worker\n    workers: 2", 1), want: "workers"},
+		{
+			name:    "string-subscribers",
+			content: strings.Replace(registrationYAML, "subscribers: 4", "subscribers: '4'", 1),
+			want:    "subscribers",
+		},
 		{name: "empty-subjects", content: strings.Replace(registrationYAML, "[orders.>]", "[]", 1), want: "subjects"},
 		{
 			name:    "missing-subjects",

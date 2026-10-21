@@ -39,6 +39,7 @@ coreConsumers:
   - name: queue
     subject: jobs
     queue: workers
+    subscribers: 4
     handler: core
 `
 
@@ -56,6 +57,7 @@ func TestNATSFromConfig(t *testing.T) {
 		{name: "StreamValidation", run: testNATSFromConfigStreamValidation},
 		{name: "JetStreamConsumerValidation", run: testNATSFromConfigJetStreamConsumerValidation},
 		{name: "CoreConsumerValidation", run: testNATSFromConfigCoreConsumerValidation},
+		{name: "CoreSubscribers", run: testNATSFromConfigCoreSubscribers},
 		{name: "CoreOnly", run: testNATSFromConfigCoreOnly},
 		{name: "RemoteConflictsAndPartialCleanup", run: testNATSFromConfigRemoteConflictsAndPartialCleanup},
 	} {
@@ -257,6 +259,29 @@ func testNATSFromConfigPreflightAndErrors(t *testing.T) {
 		if _, err := client.JetStream().Stream(ctx, "EVENTS"); !errors.Is(err, jetstream.ErrStreamNotFound) {
 			t.Fatalf("本地校验失败前不应创建 Stream: %v", err)
 		}
+		core := natsx.MustNewCoreHandlerRegistry()
+		core.MustRegister(func(context.Context, *nats.Msg) error { return nil }, "core")
+		subscriptions := client.Conn().NumSubscriptions()
+		for _, declaration := range []string{
+			"",
+			"    subscribers: null\n",
+			"    subscribers: -1\n",
+			"    subscribers: 0\n",
+			"    subscribers: 1\n",
+		} {
+			content := strings.Replace(natsRegistrationTemplate, "    subscribers: 4\n", declaration, 1)
+			writeNATSRegistration(t, "demo", content)
+			err := bootstrap.RegisterNATSFromConfig(ctx, "demo", js, core)
+			if err == nil || !strings.Contains(err.Error(), `coreConsumers[1] "queue" subscribers`) || !strings.Contains(err.Error(), "nats-register.demo.yaml") {
+				t.Fatalf("队列订阅数错误应带路径及位置: %v", err)
+			}
+			if _, err := client.JetStream().Stream(ctx, "EVENTS"); !errors.Is(err, jetstream.ErrStreamNotFound) {
+				t.Fatalf("队列订阅数校验失败前不应创建 Stream: %v", err)
+			}
+			if client.Conn().NumSubscriptions() != subscriptions {
+				t.Fatal("队列订阅数校验失败前不应建立订阅")
+			}
+		}
 		// 本地预检失败和 nil ctx 均不应消耗注册次数，随后用同一实例成功提交空声明。
 		writeNATSRegistration(t, "demo", "streamDefaults: {replicas: 1}")
 		if err := bootstrap.RegisterNATSFromConfig(nil, "demo", nil, nil); err == nil || !strings.Contains(err.Error(), "natsx: nil registration context") {
@@ -422,6 +447,7 @@ func testNATSFromConfigCoreConsumerValidation(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		consumerName string
+		extraConfig  string
 	}{
 		{
 			name:         "name-whitespace",
@@ -430,6 +456,11 @@ func testNATSFromConfigCoreConsumerValidation(t *testing.T) {
 		{
 			name:         "duplicate",
 			consumerName: "first",
+		},
+		{
+			name:         "negative-broadcast-subscribers",
+			consumerName: "second",
+			extraConfig:  "    subscribers: -1\n",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -445,7 +476,7 @@ coreConsumers:
   - name: '`+test.consumerName+`'
     subject: core.second
     handler: core
-`)
+`+test.extraConfig)
 				handlers := natsx.MustNewCoreHandlerRegistry()
 				handlers.MustRegister(func(context.Context, *nats.Msg) error { return nil }, "core")
 				subscriptions := client.Conn().NumSubscriptions()
@@ -458,6 +489,56 @@ coreConsumers:
 				}
 				if err = client.RegisterCoreConsumers(ctx); err == nil || !strings.Contains(err.Error(), "RegisterCoreConsumers already called") {
 					t.Fatalf("Core Consumer 校验失败应消耗注册次数: %v", err)
+				}
+			})
+		})
+	}
+}
+
+func testNATSFromConfigCoreSubscribers(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		config string
+		want   int
+	}{
+		{
+			name:   "queue-minimum",
+			config: "    queue: workers\n    subscribers: 2\n",
+			want:   2,
+		},
+		{
+			name: "broadcast-omitted",
+			want: 1,
+		},
+		{
+			name:   "queue-multiple",
+			config: "    queue: workers\n    subscribers: 4\n",
+			want:   4,
+		},
+		{
+			name:   "broadcast",
+			config: "    subscribers: 4\n",
+			want:   1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			isolatedNATS(t, func() {
+				client := registrationClients(t, false, "core")[0]
+				writeNATSRegistration(t, "core", `
+streamDefaults: {replicas: 1}
+coreConsumers:
+  - name: worker
+    subject: tasks
+    handler: core
+`+test.config)
+				handlers := natsx.MustNewCoreHandlerRegistry()
+				handlers.MustRegister(func(context.Context, *nats.Msg) error { return nil }, "core")
+				before := client.Conn().NumSubscriptions()
+				if err := bootstrap.RegisterNATSFromConfig(context.Background(), "core", nil, handlers); err != nil {
+					t.Fatal(err)
+				}
+				if got := client.Conn().NumSubscriptions() - before; got != test.want {
+					t.Fatalf("配置创建的订阅数 = %d，期望 %d", got, test.want)
 				}
 			})
 		})

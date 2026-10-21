@@ -296,8 +296,11 @@
 // streamDefaults.replicas 始终必填，解码后必须为正整数，即使没有 Stream。
 // 逐项 replicas 解码后非 nil 且大于零时覆盖，否则继承；解码及数字转换沿用 configx。
 // 逐项 replicas 不得超过 streamDefaults.replicas，超限时在注册任何资源前返回错误。
+// coreConsumers 的 queue 非空时，subscribers 必须配置且解码后大于 1，否则在注册任何资源前报错。
+// 按 subscribers 为当前 Client 建立同组订阅，多订阅 Handler 须支持并发。
+// queue 为空时始终只有一个广播订阅，subscribers 可省略，负数由 natsx 注册入口拒绝。
 // 所有其他运行参数沿用 natsx Default，未引用的 Handler 不启动。
-// 配置层检查全局副本数、逐项副本数上限、Stream subjects 列表必填，并在注册前绑定全部 Handler。
+// 配置层检查全局副本数、逐项副本数上限、Stream subjects 列表必填、Core 队列订阅数，并在注册前绑定全部 Handler。
 // 各类资源的通用参数校验和判重交给各自的 natsx 注册入口，失败也占用该入口的注册次数。
 // 三个入口各调用一次，空清单也占用次数，不与手动注册混用。
 // 各入口分阶段预检，后序校验失败时前序资源或消费可能已启动。
