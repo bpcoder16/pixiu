@@ -146,14 +146,17 @@ func main() {
 | [`infra/clickhousex`](infra/clickhousex/doc.go) | ClickHouse 连接池、显式主从选择、查询日志 | GORM、ClickHouse 驱动、logit |
 | [`infra/sqlitex`](infra/sqlitex/doc.go) | SQLite 单库连接池、常用参数配置、查询日志 | GORM、go-sqlite3、logit |
 | [`infra/redisx`](infra/redisx/doc.go) | 单机 Redis 客户端、初始化验活、命令结果日志 | go-redis v9、logit |
-| [`infra/natsx`](infra/natsx/doc.go) | NATS 发布 / 请求 / 订阅、JetStream 发布与消费、统一日志 | nats.go、logit |
+| [`infra/natsx`](infra/natsx/doc.go) | Core / JetStream 消息收发、启动期批量消费注册、Handler 注册表、命名空间与统一日志 | nats.go、logit |
 | [`infra/elasticsearchx`](infra/elasticsearchx/doc.go) | Elasticsearch 通用操作、Bulk、默认及命名实例、结果日志与版本适配 | 官方 Elasticsearch SDK、logit |
+| [`infra/estextsearch`](infra/estextsearch/doc.go) | Elasticsearch 短文本查询 DSL、基础召回与混合输入扩展召回 | 标准库 |
 | [`infra/aliyun/ossx`](infra/aliyun/ossx/doc.go) | OSS 固定 Bucket 的流与文件上传、独立账号、结果日志与生命周期 | 阿里云 OSS SDK V2、credentials-go、logit |
 | [`infra/aliyun/esx`](infra/aliyun/esx/doc.go) | 阿里云 ES 固定 InstanceID 的同义词清单、完整清单更新、实例查询 | 阿里云 Elasticsearch 管理 SDK、credentials-go、logit |
 
 Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/doc.go)、[`v8`](infra/elasticsearchx/v8/doc.go) 或 [`v9`](infra/elasticsearchx/v9/doc.go) 适配包；共用操作位于 `infra/elasticsearchx`。各版本的 `NewDefault` / `NewNamed` 共用注册表，通过 `elasticsearchx.Default()` / `Named(name)` 获取实例，应用统一调用 `CloseAll()` 关闭；独立 `New` 创建的实例仍需自行关闭。
 
 独立 Elasticsearch 客户端默认关闭请求结果日志，通过 `OptLogRequests(true)` 开启；请求体和响应详情还需开启 `OptLogDetails(true)`。context 已调用 `logit.WithStart` 时，关闭结果日志仍会记录请求级下游耗时。`Search` 超时或分片失败会保留已有结果并返回 `PartialSearchError`；`Bulk` 动作失败返回 `BulkError` 并保留成功数与失败项，调用方应检查错误后再决定是否接受结果或重试。
+
+`infra/estextsearch` 独立构建查询子句，不执行网络请求：`Query(field, text)` 提供基础召回，`QueryExpanded(field, text)` 扩展跨词同义词与编号等符号片段的组合召回，可能增加查询成本并改变评分或排名。调用方须准备主字段及 `.contains`、`.contains_unigram` 子字段，索引配置见 [模板说明](infra/estextsearch/templates/README.md)；空输入返回 `nil, nil`，合并请求时应省略该条件。
 
 `infra/aliyun/ossx` 和 `infra/aliyun/esx` 独立持有配置、凭据、连接池和命名注册表，可使用不同账号。两者均支持成对配置 `AccessKeyID` / `AccessKeySecret`，或注入与其互斥的 `Credential`；`New` 只构造，不联网验活，结果日志默认关闭。共享实例使用 `NewNamed` / `NewDefault` 创建并统一 `CloseAll`；独立 `New` 创建的实例自行关闭。
 
@@ -164,7 +167,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | 包 | 能力 | 典型用途 |
 | --- | --- | --- |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
-| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，运行管理器、Gin / HTTP / Cron 服务构造与显式 MySQL 迁移入口 | 声明实例、登记关闭栈；应用持有 Manager 并注册 HTTP/Cron 服务，日志最后关闭 |
+| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin / HTTP / Cron 服务构造、NATS 消费配置装配与显式 MySQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
 | [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
 | [`biz/appconfig`](biz/appconfig/doc.go) | 直接定义 env/log，严格解析应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/appconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
@@ -178,9 +181,11 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 
 初始化完成后，应用可调用 `bootstrap.NewAppManager()` 创建默认总关闭期限为 20 秒的管理器，也可传入不小于 5 秒的自定义时长，传入 0 仍使用默认值。`bootstrap.NewHTTPService(handler)` 从 `env.ConfigDirPath()` 下严格加载 `http.yaml` 并返回可注册的 `apprun.Service`，HTTP 关闭期限默认 15 秒。应用显式调用 `manager.Register(service)` 和 `manager.RunSignals()`，管理器返回后再关闭共享资源栈。
 
+常见启动流程可直接将服务构造函数传给 `bootstrap.Start(factories...)`，由其按顺序构造、登记服务，再接管 SIGINT / SIGTERM。构造或登记失败时逆序回收已构造服务；运行期总关闭期限默认 20 秒。需要显式配置期限时使用 `StartWithConfig`，其中 `StartConfig.ShutdownTimeout` 不得小于 5 秒；共享资源栈与日志的关闭仍由应用在返回后执行。
+
 `bootstrap.NewCronScheduler(handlers...)` 从独立的 [cron.yaml](biz/bootstrap/conf.example/cron.yaml) 读取调度，按名称绑定 `cronx.NamedHandler`，也可使用 `cronx.MustNewHandlerRegistry(handlers...).Handlers()...` 提供声明；`CronService` 适配现有 Manager。启用 lock 段时直接组合命名 Redis 与 gocron-redis-lock，设置租期和自动续租，不扩展 lockx。任务超时只取消 context，实际返回后才解锁；失租不会自动取消业务，不保证集群每周期只执行一次。
 
-默认 Cron 总关闭预算为 15 秒，前 10 秒自然排空，默认管理器的 20 秒可覆盖独立 Cron。混合运行先登记 HTTP、再登记 Cron，关闭先 Cron 后 HTTP，再释放客户端，日志最后关闭。包级调用方式见 [bootstrap 文档](biz/bootstrap/doc.go)，具体独立与混合运行样例后续在 pixiu-demo 中引入。
+默认 Cron 总关闭预算为 15 秒，前 10 秒自然排空，默认管理器的 20 秒可覆盖独立 Cron。混合运行先登记 HTTP、再登记 Cron，关闭先 Cron 后 HTTP，再释放客户端，日志最后关闭。包级调用方式见 [bootstrap 文档](biz/bootstrap/doc.go)；[pixiu-demo](https://github.com/bpcoder16/pixiu-demo) 已提供通过 `Start` 组合 Gin HTTP 与 Cron 的运行示例，以及 NATS 消息收发和应用装配示例。
 
 ### 规划中的能力
 
@@ -216,6 +221,7 @@ pixiu/
 │   ├── redisx/             Redis
 │   ├── natsx/              NATS
 │   ├── elasticsearchx/     Elasticsearch 与 v7 / v8 / v9 适配
+│   ├── estextsearch/       Elasticsearch 短文本查询 DSL
 │   ├── aliyun/             阿里云 SDK 适配
 │   │   ├── ossx/           阿里云 OSS 上传
 │   │   └── esx/            阿里云 ES 管理 API
@@ -263,6 +269,7 @@ import (
 
 	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
+	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
@@ -285,24 +292,15 @@ func run() (runErr error) {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	manager, err := bootstrap.NewAppManager()
-	if err != nil {
-		return err
-	}
-	service, err := bootstrap.NewHTTPService(mux)
-	if err != nil {
-		return err
-	}
-	if err := manager.Register(service); err != nil {
-		return errors.Join(err, service.Shutdown())
-	}
-	return manager.RunSignals()
+	return bootstrap.Start(func() (apprun.Service, error) {
+		return bootstrap.NewHTTPService(mux)
+	})
 }
 ```
 
 </details>
 
-`NewHTTPService` 构造时不监听端口；`RunSignals` 启动服务，并在收到 SIGINT / SIGTERM 时关闭。注册成功的服务由管理器关闭，无需重复登记到资源栈。HTTP 排空默认 15 秒，管理器总关闭期限默认 20 秒；超时后可能仍有未退出的 handler，应用需处理返回错误并尽力清理后退出。共享资源清理时间不计入管理器总期限。
+`NewHTTPService` 构造时不监听端口；`Start` 统一构造、登记并运行服务，在收到 SIGINT / SIGTERM 时关闭。运行后的服务由内部管理器关闭，无需重复登记到资源栈。HTTP 排空默认 15 秒，管理器总关闭期限默认 20 秒；超时后可能仍有未退出的 handler，应用需处理返回错误并尽力清理后退出。共享资源清理时间不计入管理器总期限。
 
 通过 bootstrap 初始化后，业务日志默认写入 `<dir>/<appName>/biz/` 下的 `debug.log`、`info.log`、`wf.log`，分别对应 Debug、Info 和 Warn / Error / Fatal；命名 Logger 增加 `<name>.` 文件前缀。`dir` 默认 `./log`，相对应用启动目录解析；release 输出 Info 及以上，debug/test 输出 Debug 及以上。
 
@@ -312,6 +310,8 @@ func run() (runErr error) {
 
 使用 Gin 时，在初始化环境后显式调用 `gin.SetMode(env.RunMode())`，通过 `bootstrap.NewGinEngine()` 构造 Engine，注册业务路由，再将 Engine 传给 `bootstrap.NewHTTPService`。需额外导入 Gin 和 `infra/env`；将 [`gin.yaml`](biz/bootstrap/conf.example/gin.yaml) 放在同一配置目录。文件必须存在，内容为 `{}` 时沿用默认值。
 
+也可在 `Start` 的服务构造函数中调用 `bootstrap.NewGinHTTPService(registerRoutes, modules...)`：它设置 Gin 模式、读取 `gin.yaml` 和 `http.yaml`，在 Engine 与文档路由创建成功后调用业务路由注册回调，并返回 `apprun.Service`。构造仍不监听端口，须在启动阶段串行调用；完整装配示例见 [bootstrap 文档](biz/bootstrap/doc.go)。
+
 `NewGinEngine` 根据应用环境决定文档路由：
 
 - **debug/test**：自动注册 OpenAPI 与内嵌的 Stoplight Elements。应用须先使用 Swag CLI 生成文档（例如 `swag init -o ./openapi`），并在入口 blank import 生成包；未注册文档时构造返回错误。默认页面为 `/docs`，文档为 `/openapi/doc.json`。
@@ -319,7 +319,9 @@ func run() (runErr error) {
 
 多模块应用可向 `NewGinEngine` 传入 `ginx.OpenAPIModule`，以 `Name` 对应 Swag 的命名文档实例，`Title` 作为导航标题。每个模块提供 `/openapi/<Name>.json` 和 `/docs/<Name>`，`/docs` 展示首个模块；静态资源位于 `/docs/assets/`。旧 `/elements` 及其子路径不注册，也不重定向。生成参数、Bearer 前缀补齐等用法见 [`ginx` 包文档](infra/ginx/doc.go)。
 
-文档路由在 Engine 构造时注册，之后添加的业务中间件不会作用于它们，也不会自动增加认证。需要控制文档访问时，可使用 `ginx.New`，在带认证中间件的路由组调用 `ginx.RegisterOpenAPI`。`gin.yaml` 模板开启完整请求和响应详情；使用文档 UI 时建议关闭 `logResponseInfo`，避免记录完整静态资源。
+文档路由在 Engine 构造时注册，之后添加的业务中间件不会作用于它们，也不会自动增加认证。需要控制文档访问时，可使用 `ginx.New`，在带认证中间件的路由组调用 `ginx.RegisterOpenAPI`。
+
+文档页面、JSON 端点和内嵌静态资源的 GET 路由会自动跳过 ginx 访问日志、请求和响应详情采集及 `Observe`，仍保留请求作用域、组中间件与 Recovery。`gin.yaml` 模板对业务路由开启完整请求和响应详情，可按需调整对应开关；其他需要跳过观察的路由可通过 `ginx.RegisterIgnoredRoute` 显式登记。
 
 ### 应用配置与多实例初始化
 
@@ -377,7 +379,15 @@ func main() {
 
 各组件独立选择默认实例，`Default()` 与 `Named(默认名称)` 返回同一客户端。共享组件由 bootstrap 各登记一次 `CloseAll`，业务无需重复登记单个客户端关闭；应用退出前先停止并等待业务任务，再关闭资源栈。配置或初始化失败会 panic，提前登记的 defer 负责回收已创建资源；初始化只在启动阶段串行执行，失败后不支持重试。
 
-此示例只展示初始化；常驻 HTTP 应用还需接入上面的服务管理器。使用 NATS 消费时，在回调依赖就绪后注册订阅，消费者在启动时保存客户端引用，排空期间不再查询 `Default` / `Named`。先停止并等待外部生产者，再由资源栈排空 NATS，随后关闭数据库等依赖，日志最后关闭。
+此示例只展示初始化；常驻 HTTP 应用还需接入上面的服务管理器。`MustRegisterNATS` 声明实例，`MustBaseInit` 只完成连接初始化，不会自动准备 Stream 或启动消费。
+
+需要消费时，应用先通过 `natsx.MustNewJetStreamHandlerRegistry` / `MustNewCoreHandlerRegistry` 登记处理函数，在迁移及回调依赖就绪后调用 `bootstrap.RegisterNATSFromConfig(setupCtx, "events", jsHandlers, coreHandlers)`。它读取独立的 `conf/nats-register.events.yaml`，按 Handler 名称绑定函数，并依次注册 Stream、JetStream 消费者和 Core 消费者；模板见 [NATS 消费注册配置](biz/bootstrap/conf.example/nats-register.example.yaml)，调用样例见 [bootstrap 文档](biz/bootstrap/doc.go)。包级具名函数默认保留原始大小写，闭包、方法值及泛型函数须显式命名，配置中的 Handler 引用须完全一致。
+
+注册文件中的 `streamDefaults.replicas` 始终必填且为正整数，即使清单为空。每个客户端的三类注册入口各只允许调用一次，通过入口检查后，空清单或失败也占用次数；配置装配不能与手动注册混用，失败后应中止启动并关闭客户端，不在同一实例上重试。JetStream 处理函数完成本条业务后返回，由组件根据返回结果确认或重投，业务不自行 ACK / NAK / Term，仍需保证幂等。
+
+可选 `namespace` 配置在连接文件 `nats.events.yaml`，注册文件不接受该字段。非空值仅允许 ASCII 字母、数字、`_`、`-`；例如 `test1` 会将主题 `orders.created` 映射为 `test1.orders.created`，将 Stream `ORDERS` 映射为 `test1_ORDERS`，Durable、Core 名称及非空 Queue 也添加 `test1_`。注册与发布 / Request 均填写原始名称或主题，Handler 名称不变；回调主题已含前缀，原生 `Conn()` / `JetStream()` 不自动添加前缀。修改 namespace 不会迁移或删除旧资源，完整边界见 [`natsx` 包文档](infra/natsx/doc.go)。
+
+消费者在启动时保存客户端引用，排空期间不再查询 `Default` / `Named`。先停止并等待外部生产者，再由资源栈排空 NATS，随后关闭数据库等依赖，日志最后关闭。
 
 OSS 文件必填 `region`、`bucket`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`requestTimeout` 默认 60s，`slowThreshold` 默认 500ms，`logRequests` 默认关闭。初始化不联网校验 Bucket 或权限，业务通过 `ossx.Default()` / `Named(name)` 取得固定 Bucket 的实例。
 
@@ -508,6 +518,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"time"
 
 	"github.com/bpcoder16/pixiu/infra/httpcall"
@@ -516,6 +527,17 @@ import (
 )
 
 func main() {
+	logger := logit.MustNew(
+		logit.OptWriter(logit.Stdout()),
+		logit.OptEncoder(logit.DefaultJSONEncoder),
+	)
+	logit.SetDefault(logger)
+	defer func() {
+		if err := logit.Close(logger); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	}()
+
 	downstream := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
@@ -578,7 +600,16 @@ func main() {
 	}
 }
 
-func run() error {
+func run() (runErr error) {
+	logger := logit.MustNew(
+		logit.OptWriter(logit.Stdout()),
+		logit.OptEncoder(logit.DefaultJSONEncoder),
+	)
+	logit.SetDefault(logger)
+	defer func() {
+		runErr = errors.Join(runErr, logit.Close(logger))
+	}()
+
 	pool, err := taskpool.New(taskpool.Config{
 		MinWorkers:   1,
 		MaxWorkers:   4,
@@ -606,7 +637,7 @@ func run() error {
 
 </details>
 
-`Submit` 成功只表示任务已接收。任务保存在内存中；需要进程异常退出后的可靠恢复时，应用应选择持久化消息队列。示例通过 `Shutdown` 发起排空，再用 `Wait` 确认 worker 退出；`Wait` 没有等待上限。
+`Submit` 成功只表示任务已接收。任务保存在内存中；需要进程异常退出后的可靠恢复时，应用应选择持久化消息队列。示例显式启用标准输出 JSON 日志，通过 `Shutdown` 发起排空，再用 `Wait` 确认 worker 退出，最后关闭 Logger；`Wait` 没有等待上限。
 
 ### JWT 签发与验签
 
