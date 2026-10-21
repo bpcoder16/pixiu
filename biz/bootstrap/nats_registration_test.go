@@ -240,6 +240,31 @@ func TestNATSRegistrationRejectsInvalidConfig(t *testing.T) {
 		{name: "unknown-stream", content: strings.Replace(registrationYAML, "replicas: 1", "replica: 1", 1), want: "replica"},
 		{name: "runtime-option", content: strings.Replace(registrationYAML, "durable: worker", "durable: worker\n    workers: 2", 1), want: "workers"},
 		{
+			name:    "unknown-retention",
+			content: strings.Replace(registrationYAML, "subjects: [orders.>]", "subjects: [orders.>]\n    retention: unknown", 1),
+			want:    `streams[0] "ORDERS" retention`,
+		},
+		{
+			name:    "empty-retention",
+			content: strings.Replace(registrationYAML, "subjects: [orders.>]", "subjects: [orders.>]\n    retention: ''", 1),
+			want:    `streams[0] "ORDERS" retention`,
+		},
+		{
+			name:    "numeric-retention",
+			content: strings.Replace(registrationYAML, "subjects: [orders.>]", "subjects: [orders.>]\n    retention: 1", 1),
+			want:    "retention",
+		},
+		{
+			name:    "invalid-max-age",
+			content: strings.Replace(registrationYAML, "subjects: [orders.>]", "subjects: [orders.>]\n    maxAge: 1d", 1),
+			want:    "maxAge",
+		},
+		{
+			name:    "invalid-duplicates",
+			content: strings.Replace(registrationYAML, "subjects: [orders.>]", "subjects: [orders.>]\n    duplicates: forever", 1),
+			want:    "duplicates",
+		},
+		{
 			name:    "string-subscribers",
 			content: strings.Replace(registrationYAML, "subscribers: 4", "subscribers: '4'", 1),
 			want:    "subscribers",

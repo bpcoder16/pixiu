@@ -9,7 +9,13 @@ streams:
   - name: "ORDERS"
     subjects:
       - "orders.>"
-    # replicas: 1  # 可选覆盖，不得超过全局值；省略、null、0 或负数时沿用全局值，解码及数字转换沿用 configx。
+    # 以下四项均可省略或设为 null，按需取消注释覆盖。
+    # replicas 沿用 streamDefaults.replicas；其余三项沿用 natsx Default，注释中列出当前默认值。
+    # replicas: 1          # 不得超过全局值；0 或负数也沿用全局值，解码及数字转换沿用 configx。
+    # retention: "limits"  # 可选 limits、interest、workqueue。
+    # maxAge: "2160h"      # 消息最大年龄；0 表示不限制年龄。支持 Go 时长单位，不支持 d。
+    # duplicates: "2m"     # 消息 ID 去重窗口；0 由服务端确定，不代表关闭去重。
+    # 时长范围由服务端校验；maxAge 大于 0 时，去重窗口不得超过它。
 
 # 下面的 Handler 须由应用的 JetStreamHandlerRegistry 登记。
 jetStreamConsumers:

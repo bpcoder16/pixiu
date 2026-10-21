@@ -55,6 +55,7 @@ func TestNATSFromConfig(t *testing.T) {
 		{name: "PreflightAndErrors", run: testNATSFromConfigPreflightAndErrors},
 		{name: "DuplicateStreams", run: testNATSFromConfigDuplicateStreams},
 		{name: "StreamValidation", run: testNATSFromConfigStreamValidation},
+		{name: "StreamOptions", run: testNATSFromConfigStreamOptions},
 		{name: "JetStreamConsumerValidation", run: testNATSFromConfigJetStreamConsumerValidation},
 		{name: "CoreConsumerValidation", run: testNATSFromConfigCoreConsumerValidation},
 		{name: "CoreSubscribers", run: testNATSFromConfigCoreSubscribers},
@@ -389,6 +390,137 @@ streams:
 			})
 		})
 	}
+}
+
+func testNATSFromConfigStreamOptions(t *testing.T) {
+	isolatedNATS(t, func() {
+		clients := registrationClients(t, true, "options", "negative-age", "negative-duplicates", "invalid-window")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		const content = `
+streamDefaults: {replicas: 1}
+streams:
+  - name: DEFAULTS
+    subjects: [defaults]
+  - name: NULLS
+    subjects: [nulls]
+    retention: null
+    maxAge: null
+    duplicates: null
+  - name: TASKS
+    subjects: [tasks]
+    retention: workqueue
+    maxAge: 1h
+    duplicates: 30s
+  - name: EVENTS
+    subjects: [events]
+    retention: limits
+    maxAge: 1m
+    duplicates: 0
+  - name: UPDATES
+    subjects: [updates]
+    retention: interest
+    maxAge: 0
+    duplicates: 5m
+`
+		// 后续声明的策略或时长格式非法时，配置预检应阻止前面的 Stream 创建。
+		for _, invalid := range []string{
+			strings.Replace(content, "retention: interest", "retention: invalid", 1),
+			strings.Replace(content, "maxAge: 1h", "maxAge: 1d", 1),
+			strings.Replace(content, "duplicates: 5m", "duplicates: forever", 1),
+		} {
+			writeNATSRegistration(t, "options", invalid)
+			err := bootstrap.RegisterNATSFromConfig(ctx, "options", nil, nil)
+			if err == nil || !strings.Contains(err.Error(), "nats-register.options.yaml") {
+				t.Fatalf("非法 Stream 配置应在预检阶段报错并包含路径: %v", err)
+			}
+			if _, err := clients[0].JetStream().Stream(ctx, "DEFAULTS"); !errors.Is(err, jetstream.ErrStreamNotFound) {
+				t.Fatalf("预检失败前不应创建 Stream: %v", err)
+			}
+		}
+		writeNATSRegistration(t, "options", content)
+		if err := bootstrap.RegisterNATSFromConfig(ctx, "options", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		for _, test := range []struct {
+			name       string
+			retention  jetstream.RetentionPolicy
+			maxAge     time.Duration
+			duplicates time.Duration
+		}{
+			{
+				name:       "DEFAULTS",
+				retention:  jetstream.LimitsPolicy,
+				maxAge:     90 * 24 * time.Hour,
+				duplicates: 2 * time.Minute,
+			},
+			{
+				name:       "NULLS",
+				retention:  jetstream.LimitsPolicy,
+				maxAge:     90 * 24 * time.Hour,
+				duplicates: 2 * time.Minute,
+			},
+			{
+				name:       "TASKS",
+				retention:  jetstream.WorkQueuePolicy,
+				maxAge:     time.Hour,
+				duplicates: 30 * time.Second,
+			},
+			{
+				name:       "EVENTS",
+				retention:  jetstream.LimitsPolicy,
+				maxAge:     time.Minute,
+				duplicates: time.Minute,
+			},
+			{
+				name:       "UPDATES",
+				retention:  jetstream.InterestPolicy,
+				maxAge:     0,
+				duplicates: 5 * time.Minute,
+			},
+		} {
+			stream, err := clients[0].JetStream().Stream(ctx, test.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := stream.CachedInfo().Config
+			if got.Retention != test.retention || got.MaxAge != test.maxAge || got.Duplicates != test.duplicates {
+				t.Fatalf("Stream %s 有效配置错误: retention=%v, maxAge=%v, duplicates=%v", test.name, got.Retention, got.MaxAge, got.Duplicates)
+			}
+		}
+		for i, test := range []struct {
+			instance string
+			fields   string
+		}{
+			{
+				instance: "negative-age",
+				fields:   "    maxAge: -1s\n",
+			},
+			{
+				instance: "negative-duplicates",
+				fields:   "    duplicates: -1s\n",
+			},
+			{
+				instance: "invalid-window",
+				fields:   "    maxAge: 1s\n    duplicates: 2m\n",
+			},
+		} {
+			writeNATSRegistration(t, test.instance, `
+streamDefaults: {replicas: 1}
+streams:
+  - name: INVALID
+    subjects: [invalid]
+`+test.fields)
+			err := bootstrap.RegisterNATSFromConfig(ctx, test.instance, nil, nil)
+			var apiErr *jetstream.APIError
+			if !errors.As(err, &apiErr) || !strings.Contains(err.Error(), "register streams") {
+				t.Fatalf("%s 的时长范围应由服务端校验并保留错误链: %v", test.instance, err)
+			}
+			if _, err := clients[i+1].JetStream().Stream(ctx, "INVALID"); !errors.Is(err, jetstream.ErrStreamNotFound) {
+				t.Fatalf("非法 Stream 不应创建: %v", err)
+			}
+		}
+	})
 }
 
 func testNATSFromConfigJetStreamConsumerValidation(t *testing.T) {

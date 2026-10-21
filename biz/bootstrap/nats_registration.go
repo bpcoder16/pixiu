@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/env"
@@ -21,6 +22,7 @@ import (
 // 各入口分阶段预检，后序校验失败时前序资源或消费可能已启动。
 // nil 注册表视为空表，未引用的 Handler 不启动；全局 streamDefaults.replicas 始终必填且为正整数。
 // 逐项 Stream 的 replicas 不得超过全局值，超限时在注册任何资源前返回错误。
+// Stream retention、maxAge、duplicates 可选，省略或 null 沿用 Default；显式零时长按 NATS 语义处理。
 // Core queue 非空时 subscribers 必须大于 1，否则在注册任何资源前返回错误。
 // 返回前可能执行 Handler；失败须中止启动并由原资源栈关闭 Client，不回滚远端资源或业务。
 // ctx 必须非 nil；其校验与 Client 关闭检查沿用 natsx，ctx 不控制长期 Handler，不提供热更新或整批重试。
@@ -64,9 +66,12 @@ type natsRegistrationConfig struct {
 }
 
 type natsStreamRegistration struct {
-	Name     string   `mapstructure:"name"`
-	Subjects []string `mapstructure:"subjects"`
-	Replicas *int     `mapstructure:"replicas"`
+	Name       string         `mapstructure:"name"`
+	Subjects   []string       `mapstructure:"subjects"`
+	Replicas   *int           `mapstructure:"replicas"`
+	Retention  *string        `mapstructure:"retention"`
+	MaxAge     *time.Duration `mapstructure:"maxAge"`
+	Duplicates *time.Duration `mapstructure:"duplicates"`
 }
 
 type natsJetStreamRegistration struct {
@@ -109,7 +114,27 @@ func (cfg *natsRegistrationConfig) bind(jsRegistry *natsx.JetStreamHandlerRegist
 			}
 			effectiveReplicas = *spec.Replicas
 		}
-		batch.streams = append(batch.streams, natsx.DefaultStreamConfig(spec.Name, effectiveReplicas, spec.Subjects...))
+		stream := natsx.DefaultStreamConfig(spec.Name, effectiveReplicas, spec.Subjects...)
+		if spec.Retention != nil {
+			switch *spec.Retention {
+			case "limits":
+				stream.Retention = jetstream.LimitsPolicy
+			case "interest":
+				stream.Retention = jetstream.InterestPolicy
+			case "workqueue":
+				stream.Retention = jetstream.WorkQueuePolicy
+			default:
+				return nil, fmt.Errorf("streams[%d] %q retention %q must be one of limits, interest, workqueue", i, spec.Name, *spec.Retention)
+			}
+		}
+		// 显式零时长须覆盖 Default；范围及组合约束继续由服务端校验。
+		if spec.MaxAge != nil {
+			stream.MaxAge = *spec.MaxAge
+		}
+		if spec.Duplicates != nil {
+			stream.Duplicates = *spec.Duplicates
+		}
+		batch.streams = append(batch.streams, stream)
 	}
 	for i, spec := range cfg.JetStreamConsumers {
 		handler, ok := jsHandlers[spec.Handler]
