@@ -1,6 +1,21 @@
 // Package cronx 组合 gocron v2 与 logit，提供实例式 Cron、固定和随机间隔调度。
 // 不读取配置文件、不持有全局调度器，不依赖 HTTP 或其他公开 infra 包。
 //
+// HandlerRegistry 维护应用持有的具名函数清单，登记不读配置或启动调度：
+//
+//	func Heartbeat(context.Context) error {
+//		return nil
+//	}
+//
+//	var Registry = cronx.MustNewHandlerRegistry(Heartbeat)
+//
+// 注册表零值可用；MustRegister(handler, name) 支持显式稳定名称。
+// 包级具名函数默认保留原始大小写；方法值、闭包、泛型函数必须显式命名。
+// nil、非法名称、多个名称参数及重名均以带 cronx: 前缀的 error 值 panic；
+// 登记失败不改变清单。Handlers 按登记顺序返回 []NamedHandler 独立副本，
+// 可交给 bootstrap.NewCronScheduler 或自行绑定调度。
+// 登记与快照读取可并发，首次使用后不得复制；后续登记不影响已构造的调度器。
+//
 // 独立构造并运行（需导入 context、log、time 及本包）：
 //
 //	scheduler, err := cronx.New(cronx.Config{}, cronx.Job{

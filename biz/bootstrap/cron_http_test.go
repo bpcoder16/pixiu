@@ -21,7 +21,7 @@ func TestCronMixedShutdownOrder(t *testing.T) {
 		writeCronConfig(t, "drainTimeout: 1s\nshutdownTimeout: 2s\njobs:\n  - name: job\n    every: 100ms\n")
 		entered := make(chan struct{}, 1)
 		var running atomic.Int32
-		scheduler, err := bootstrap.NewCronScheduler(bootstrap.CronHandler{
+		scheduler, err := bootstrap.NewCronScheduler(cronx.NamedHandler{
 			Name: "job",
 			Handler: func(ctx context.Context) error {
 				running.Add(1)

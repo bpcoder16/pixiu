@@ -12,9 +12,12 @@ import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
+	"github.com/bpcoder16/pixiu/infra/cronx"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/lifecycle"
 )
+
+func RegistryHeartbeat(context.Context) error { return nil }
 
 func writeCronConfig(t *testing.T, content string) {
 	t.Helper()
@@ -26,7 +29,7 @@ func writeCronConfig(t *testing.T, content string) {
 func TestCronConfigurationAndBinding(t *testing.T) {
 	isolatedLog(t, func() {
 		initHTTPConfigDir(t)
-		handler := bootstrap.CronHandler{
+		handler := cronx.NamedHandler{
 			Name:    "job",
 			Handler: func(context.Context) error { return nil },
 		}
@@ -55,7 +58,7 @@ func TestCronConfigurationAndBinding(t *testing.T) {
 			}
 		}
 		writeCronConfig(t, "{}\n")
-		for _, handlers := range [][]bootstrap.CronHandler{{handler, handler}, {{Name: "job"}}, {{
+		for _, handlers := range [][]cronx.NamedHandler{{handler, handler}, {{Name: "job"}}, {{
 			Name:    " job",
 			Handler: handler.Handler,
 		}}} {
@@ -80,7 +83,7 @@ func TestCronConfigurationAndBinding(t *testing.T) {
 func TestCronRegistryCaseSensitiveBinding(t *testing.T) {
 	isolatedLog(t, func() {
 		initHTTPConfigDir(t)
-		registry := bootstrap.MustNewCronRegistry(RegistryHeartbeat)
+		registry := cronx.MustNewHandlerRegistry(RegistryHeartbeat)
 		for _, name := range []string{"RegistryHeartbeat", "registryHeartbeat", "registryheartbeat"} {
 			t.Run(name, func(t *testing.T) {
 				writeCronConfig(t, fmt.Sprintf("jobs:\n  - name: %s\n    every: 1s\n", name))
@@ -120,7 +123,7 @@ func TestCronMinimumInterval(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				writeCronConfig(t, "jobs:\n  - name: job\n    "+tc.schedule+"\n")
-				s, err := bootstrap.NewCronScheduler(bootstrap.CronHandler{
+				s, err := bootstrap.NewCronScheduler(cronx.NamedHandler{
 					Name:    "job",
 					Handler: func(context.Context) error { return nil },
 				})
@@ -155,7 +158,7 @@ func TestCronLockedTimeoutValidatedByScheduler(t *testing.T) {
 		bootstrap.MustBaseInit(cfg, &resources)
 		for _, timeout := range []string{"0s", "-1s"} {
 			writeCronConfig(t, fmt.Sprintf("lock: {redisName: cron-lock, keyPrefix: 'test:'}\njobs:\n  - name: job\n    every: 1s\n    timeout: %s\n", timeout))
-			s, err := bootstrap.NewCronScheduler(bootstrap.CronHandler{
+			s, err := bootstrap.NewCronScheduler(cronx.NamedHandler{
 				Name:    "job",
 				Handler: func(context.Context) error { return nil },
 			})
@@ -176,7 +179,7 @@ func TestCronStandaloneDoesNotNeedHTTPAndShutdownBeforeRun(t *testing.T) {
 		writeCronConfig(t, "lock: null\njobs:\n  - name: job\n    every: 100ms\n")
 		ran := make(chan struct{}, 1)
 		var unused atomic.Bool
-		handler := bootstrap.CronHandler{
+		handler := cronx.NamedHandler{
 			Name: "job",
 			Handler: func(context.Context) error {
 				select {
@@ -186,7 +189,7 @@ func TestCronStandaloneDoesNotNeedHTTPAndShutdownBeforeRun(t *testing.T) {
 				return nil
 			},
 		}
-		s, err := bootstrap.NewCronScheduler(handler, bootstrap.CronHandler{
+		s, err := bootstrap.NewCronScheduler(handler, cronx.NamedHandler{
 			Name: "unused",
 			Handler: func(context.Context) error {
 				unused.Store(true)
@@ -236,7 +239,7 @@ func TestCronAllJobsCommentedOut(t *testing.T) {
 		initHTTPConfigDir(t)
 		writeCronConfig(t, "jobs:\n  # - name: job\n  #   every: 100ms\n")
 		var called atomic.Bool
-		s, err := bootstrap.NewCronScheduler(bootstrap.CronHandler{
+		s, err := bootstrap.NewCronScheduler(cronx.NamedHandler{
 			Name: "job",
 			Handler: func(context.Context) error {
 				called.Store(true)

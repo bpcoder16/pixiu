@@ -178,7 +178,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 
 初始化完成后，应用可调用 `bootstrap.NewAppManager()` 创建默认总关闭期限为 20 秒的管理器，也可传入不小于 5 秒的自定义时长，传入 0 仍使用默认值。`bootstrap.NewHTTPService(handler)` 从 `env.ConfigDirPath()` 下严格加载 `http.yaml` 并返回可注册的 `apprun.Service`，HTTP 关闭期限默认 15 秒。应用显式调用 `manager.Register(service)` 和 `manager.RunSignals()`，管理器返回后再关闭共享资源栈。
 
-`bootstrap.NewCronScheduler(handlers...)` 从独立的 [cron.yaml](biz/bootstrap/conf.example/cron.yaml) 读取调度，按名称绑定 `CronHandler`；`CronService` 适配现有 Manager。启用 lock 段时直接组合命名 Redis 与 gocron-redis-lock，设置租期和自动续租，不扩展 lockx。任务超时只取消 context，实际返回后才解锁；失租不会自动取消业务，不保证集群每周期只执行一次。
+`bootstrap.NewCronScheduler(handlers...)` 从独立的 [cron.yaml](biz/bootstrap/conf.example/cron.yaml) 读取调度，按名称绑定 `cronx.NamedHandler`，也可使用 `cronx.MustNewHandlerRegistry(handlers...).Handlers()...` 提供声明；`CronService` 适配现有 Manager。启用 lock 段时直接组合命名 Redis 与 gocron-redis-lock，设置租期和自动续租，不扩展 lockx。任务超时只取消 context，实际返回后才解锁；失租不会自动取消业务，不保证集群每周期只执行一次。
 
 默认 Cron 总关闭预算为 15 秒，前 10 秒自然排空，默认管理器的 20 秒可覆盖独立 Cron。混合运行先登记 HTTP、再登记 Cron，关闭先 Cron 后 HTTP，再释放客户端，日志最后关闭。包级调用方式见 [bootstrap 文档](biz/bootstrap/doc.go)，具体独立与混合运行样例后续在 pixiu-demo 中引入。
 
@@ -714,16 +714,28 @@ func run() error {
 git clone https://github.com/bpcoder16/pixiu.git
 cd pixiu
 go build ./...
-go test ./...
-go test -race ./...
+make test
+make test-race
 ```
+
+`make test` 和 `make test-race` 是完整测试入口，每个入口顺序执行常规测试与 NATS 配置注册集成测试两轮。等价的 Go 命令如下，CI 也应执行完整两轮：
+
+```bash
+go test ./...
+go test -tags=natsintegration ./biz/bootstrap -run '^TestNATSFromConfig$'
+
+go test -race ./...
+go test -race -tags=natsintegration ./biz/bootstrap -run '^TestNATSFromConfig$'
+```
+
+NATS 集成测试与被测代码保持同目录，通过 `natsintegration` build tag 编入内嵌服务端，无需预先安装服务端或在测试中另行构建可执行文件。常规测试不编入该组用例；带标签的第二轮仅运行 `TestNATSFromConfig`，其中不调用会修改 `time.Local` 的 `MustBaseInit`。不要使用 `go test -tags=natsintegration ./...` 混跑全部用例，否则 macOS 上服务端初始化的后台采样可能与时区初始化测试发生竞争。直接执行 `go test ./...` 或 `go test -race ./...` 只完成第一轮。
 
 开发时遵循以下约定：
 
 1. 先确认能力所属层次和职责边界，复用既有实现，保持变更聚焦。
 2. 功能变更先用测试定义预期行为；修复问题时提供可复现的输入或场景。
 3. 新增公开包时补充中文 `doc.go` 和调用示例；公开 API 变化同步更新文档。
-4. 提交前运行全量测试与 race 检查，并使用 `gofmt` 格式化本次修改的 Go 文件。
+4. 提交前运行 `make test` 与 `make test-race`，确保包含两轮测试，并使用 `gofmt` 格式化本次修改的 Go 文件。
 5. 日志或轮转热路径变更需运行与功能等价的性能基准，保留正确性门禁和原始结果。
 
 数据库、Redis 和 Elasticsearch 的真实服务验证需要相应环境；具体条件与跳过行为以各包测试为准。全量构建包含 SQLite 驱动，需要 CGO 与 C 编译器。

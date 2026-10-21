@@ -1,9 +1,6 @@
 package natsx
 
 import (
-	"errors"
-	"strings"
-
 	"github.com/bpcoder16/pixiu/infra/internal/named"
 	"github.com/nats-io/nats.go"
 )
@@ -12,10 +9,8 @@ var namedClients = named.New[*Client]("natsx")
 
 // NewNamed 创建并按 Config.Name 登记客户端，保留 New 的连接选项与错误语义。
 // 仅在启动阶段串行创建，全部创建完成后再启动业务；不得与 CloseAll 并发。
+// 注册表先检查关闭及重复状态，连接参数统一由 New 校验。
 func NewNamed(cfg Config, options ...nats.Option) (*Client, error) {
-	if strings.TrimSpace(cfg.Name) == "" {
-		return nil, errors.New("natsx: empty connection name")
-	}
 	return namedClients.Create(cfg.Name, func() (*Client, error) {
 		return New(cfg, options...)
 	})
@@ -29,9 +24,6 @@ func Named(name string) *Client {
 // NewDefault 创建默认客户端，同时按 Config.Name 登记；已有默认实例时返回错误。
 // 创建失败不占用名称或默认引用；初始化与关闭约束与 NewNamed 相同。
 func NewDefault(cfg Config, options ...nats.Option) (*Client, error) {
-	if strings.TrimSpace(cfg.Name) == "" {
-		return nil, errors.New("natsx: empty connection name")
-	}
 	return namedClients.CreateDefault(cfg.Name, func() (*Client, error) {
 		return New(cfg, options...)
 	})

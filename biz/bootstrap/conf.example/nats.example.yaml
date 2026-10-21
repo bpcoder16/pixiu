@@ -15,7 +15,8 @@ drainTimeout: "10s"
 # 消费排空、异步确认等待、最终连接关闭共用此整体期限。
 closeTimeout: "20s"
 
-# 不负责启用或校验服务端 JetStream；业务自行准备 Stream/Consumer。
+# 不负责启用或校验服务端 JetStream；依赖就绪后可通过 RegisterNATSFromConfig
+# 读取独立的 nats-register.<name>.yaml 准备 Stream/Consumer。
 jetStream:
   # 仅限制默认上下文的异步 PubAck 等待，不影响同步发布或 Consumer AckWait。
   publishAsyncTimeout: "5s"

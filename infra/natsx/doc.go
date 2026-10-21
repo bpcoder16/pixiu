@@ -9,6 +9,27 @@
 // 详细契约见 docs/natsx-design.md。
 // 第一版原样记录错误文本并保留原始错误链，不脱敏其中可能包含的 URL、密码或 Token。
 //
+// Handler 注册表可独立于客户端使用，供应用按名称选择强类型处理函数：
+//
+//	func HandleTask(context.Context, jetstream.Msg) error {
+//		return nil
+//	}
+//
+//	func HandleBroadcast(context.Context, *nats.Msg) error {
+//		return nil
+//	}
+//
+//	var JetStreamHandlers = natsx.MustNewJetStreamHandlerRegistry(HandleTask)
+//	var CoreHandlers = natsx.MustNewCoreHandlerRegistry(HandleBroadcast)
+//
+// 示例另需导入 context、nats.go 和 nats.go/jetstream。两个注册表零值可用，
+// 包级具名函数默认保留原始大小写，闭包、方法值和泛型函数须用 MustRegister(handler, name) 显式命名。
+// nil、非法名称及同类重名均 panic；两类名称空间独立，登记不读配置、建连或启动消费。
+// Handlers 返回名称到函数的独立 map 快照，nil 或空注册表返回空清单；可交给配置装配，
+// 或自行取出函数传入 DefaultJetStreamConsumer / DefaultCoreConsumer 等工厂。
+// 登记与快照读取可并发，首次使用后不得复制；函数捕获的业务依赖仍由调用方管理。
+// 注册表不改变 Client 的一次性注册和关闭语义；运行时通过强类型函数直接调用业务。
+//
 // 共享客户端可在启动阶段使用 NewDefault/NewNamed 创建，由 Default/Named 获取。
 // 默认引用与同名实例相同；独立 New 不登记到注册表，仍由调用方显式关闭。
 // 以下为共享客户端的发布样例（需导入 context 和 natsx）：
@@ -24,6 +45,7 @@
 //	return client.Publish(context.Background(), "events.created", []byte("hello"))
 //
 // NewDefault/NewNamed 只在启动阶段串行调用，不能与 CloseAll 并发；失败不占用名称。
+// 注册表先拒绝重复或关闭状态，连接参数统一由 New 校验。
 // 未初始化、名称不存在或 CloseAll 开始后查询会 panic。CloseAll 只关闭已登记实例，
 // 默认实例只关闭一次，并汇总错误；重复调用返回同一次结果。
 // 关闭前停止并等待外部生产者，托管消费由 Client.Close 排空；消费者及其发布服务须在
@@ -158,9 +180,16 @@
 // 默认构造函数不校验参数；手写消费声明仍须显式配置确认超时。
 // RegisterJetStreamConsumers 仅支持 Pull Consumer，Config.DeliverSubject 非空时在创建本批任何远端 Consumer 前报错。
 // RegisterStreams/RegisterJetStreamConsumers 使用 SDK 创建语义：同配置复用、冲突返回错误，不更新或删除已有资源。
+// RegisterStreams 创建资源前整批检查名称、主题元素非空且无首尾空白，以及同批名称唯一。
+// Subjects 列表允许省略或为空，保留原生默认主题及 Mirror 等用法；其余约束由 SDK/服务端处理。
+// RegisterJetStreamConsumers 创建资源前整批校验本地参数及 (Stream, Durable) 唯一。
+// Stream、Durable 必须非空且无首尾空白；过滤条件允许省略，已提供的主题元素须非空且无首尾空白。
+// RegisterCoreConsumers 建立订阅前整批校验本地参数及 Name 唯一。
+// Name、Subject 必须非空且无首尾空白；Queue 为空时广播，非空时不得有首尾空白。
 // 已有使用旧默认 AckWait=5s 的 Durable，采用新默认值前须显式更新远端配置。
 // RegisterStreams、RegisterJetStreamConsumers 和 RegisterCoreConsumers 分别计数，通过入口检查后每个 Client 各只允许调用一次；
 // 须一次传入该类的全部配置，空清单或失败也不可重试，各 Client 互不影响。
+// 消费参数校验和归一化统一在注册入口完成，内部 worker 和订阅函数不重复处理。
 // 三个 Register 入口仅在启动阶段串行调用，不与 Close 并发；入口检查初始状态，
 // ctx 仅传给资源 RPC 和有 deadline 时的 Core Flush，由 SDK 处理取消和连接错误。
 // 不额外检查 ctx.Err()；本地消费启动不受启动 ctx 取消限制，全部操作成功即返回 nil。
@@ -181,7 +210,7 @@
 // 消费错误文本直接调用 err.Error() 获取，调用方须保证 Error 方法可安全调用；日志被过滤后不求值错误。
 //
 // Core 通过 RegisterCoreConsumers(setupCtx, CoreConsumer{...}) 集中注册：
-// Name 必填且不能全为空白，同批名称按原值判重；不同 Name 可使用相同 Subject 和 Queue，不同 Client 可使用相同 Name。
+// Name 必须非空且无首尾空白，同批名称按原值判重；不同 Name 可使用相同 Subject 和 Queue，不同 Client 可使用相同 Name。
 // Queue 为空时广播，否则竞争消费；Handler 返回错误只记日志，不重投，使用 Msg.Respond 显式应答。
 // DefaultCoreConsumer(name, subject, handler) 构建广播声明，Subscribers 显式设为 1。
 // DefaultCoreQueueConsumer(name, subject, queue, subscribers, handler) 构建同组声明，subscribers 原样写入，注册时零值默认 1。

@@ -17,12 +17,6 @@ import (
 	"github.com/go-co-op/gocron/v2"
 )
 
-// CronHandler 将业务方法或闭包绑定到配置中的稳定任务名，不保存全局注册表。
-type CronHandler struct {
-	Name    string
-	Handler cronx.Handler
-}
-
 type cronConfig struct {
 	LoggerName      string          `mapstructure:"loggerName"`
 	ShutdownTimeout time.Duration   `mapstructure:"shutdownTimeout"`
@@ -57,7 +51,7 @@ type cronLockConfig struct {
 // 只启用 jobs 中列出的任务；允许多注册 Handler，配置引用未注册的名称会报错。
 // 注释或删除某个 job 后重启即可停用；全部注释时允许零任务运行。
 // 构造不执行业务；返回后由调用方管理，通常通过 CronService 交给运行管理器。
-func NewCronScheduler(handlers ...CronHandler) (*cronx.Scheduler, error) {
+func NewCronScheduler(handlers ...cronx.NamedHandler) (*cronx.Scheduler, error) {
 	path := filepath.Join(env.ConfigDirPath(), "cron.yaml")
 	cfg, err := configx.Parse[cronConfig](path)
 	if err != nil {
@@ -86,7 +80,7 @@ func NewCronScheduler(handlers ...CronHandler) (*cronx.Scheduler, error) {
 	return scheduler, nil
 }
 
-func (c *cronConfig) bind(handlers []CronHandler) ([]cronx.Job, error) {
+func (c *cronConfig) bind(handlers []cronx.NamedHandler) ([]cronx.Job, error) {
 	bindings := make(map[string]cronx.Handler, len(handlers))
 	for _, handler := range handlers {
 		if handler.Name == "" || strings.TrimSpace(handler.Name) != handler.Name || handler.Handler == nil {

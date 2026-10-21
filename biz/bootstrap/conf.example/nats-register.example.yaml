@@ -1,0 +1,35 @@
+# 复制为 nats-register.<name>.yaml，与 nats.<name>.yaml 放在同一配置目录。
+# 仅由依赖就绪后的 RegisterNATSFromConfig 显式读取，不随 MustBaseInit 自动启动消费。
+streamDefaults:
+  # 始终必填且为正整数，同时作为逐项副本数的上限，即使没有 Stream 或每个 Stream 均有覆盖值。
+  # 单节点使用 1；服务端继续校验副本数范围与集群条件。
+  replicas: 1
+
+streams:
+  - name: "ORDERS"
+    subjects:
+      - "orders.>"
+    # replicas: 1  # 可选覆盖，不得超过全局值；省略、null、0 或负数时沿用全局值，解码及数字转换沿用 configx。
+
+# 下面的 Handler 须由应用的 JetStreamHandlerRegistry 登记。
+jetStreamConsumers:
+  - stream: "ORDERS"
+    durable: "order-created-worker"
+    filterSubjects:
+      - "orders.created"
+    handler: "HandleOrderCreated"
+
+# 下面的 Handler 须由应用的 CoreHandlerRegistry 登记。
+coreConsumers:
+  - name: "config-refresh"
+    subject: "config.refresh"
+    handler: "HandleConfigRefresh"
+  - name: "notification-worker"
+    subject: "notifications.send"
+    queue: "notification-workers"
+    handler: "HandleNotification"
+
+# 三份清单均可省略或设为 []；未引用的 Handler 不启动。
+# filterSubjects 省略或为空时消费整个 Stream；queue 省略或为空时广播。
+# 除上述字段外全部沿用 natsx 的 Default，不支持 enabled、运行调参或完整 SDK 配置。
+# 删除声明后重启不删除远端 Stream/Durable；同配置复用，冲突报错，不自动更新。

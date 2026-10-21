@@ -455,6 +455,114 @@ func (js consumerPullLimitsJetStream) CreateConsumer(ctx context.Context, stream
 	return js.JetStream.UpdateConsumer(ctx, stream, cfg)
 }
 
+func TestRegisterStreamsValidateWholeBatch(t *testing.T) {
+	captureLogs(t)
+	for _, test := range []struct {
+		name     string
+		stream   string
+		subjects []string
+	}{
+		{
+			name:     "empty-name",
+			subjects: []string{"invalid"},
+		},
+		{
+			name:     "blank-name",
+			stream:   " \t",
+			subjects: []string{"invalid"},
+		},
+		{
+			name:     "leading-name",
+			stream:   " INVALID",
+			subjects: []string{"invalid"},
+		},
+		{
+			name:     "trailing-name",
+			stream:   "INVALID ",
+			subjects: []string{"invalid"},
+		},
+		{
+			name:     "empty-subject",
+			stream:   "INVALID",
+			subjects: []string{""},
+		},
+		{
+			name:     "blank-subject",
+			stream:   "INVALID",
+			subjects: []string{" \t"},
+		},
+		{
+			name:     "leading-subject",
+			stream:   "INVALID",
+			subjects: []string{"valid", " invalid"},
+		},
+		{
+			name:     "trailing-subject",
+			stream:   "INVALID",
+			subjects: []string{"valid", "invalid "},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := registrationClient(t)
+			ctx := context.Background()
+			err := c.RegisterStreams(ctx,
+				jetstream.StreamConfig{
+					Name:     "FIRST",
+					Subjects: []string{"first"},
+					Storage:  jetstream.MemoryStorage,
+				},
+				jetstream.StreamConfig{
+					Name:     test.stream,
+					Subjects: test.subjects,
+					Storage:  jetstream.MemoryStorage,
+				},
+			)
+			if err == nil {
+				t.Fatal("应拒绝后续非法声明")
+			}
+			if _, err = c.JetStream().Stream(ctx, "FIRST"); !errors.Is(err, jetstream.ErrStreamNotFound) {
+				t.Fatalf("整批校验失败前不应创建首个 Stream: %v", err)
+			}
+			if err = c.RegisterStreams(ctx); err == nil || !strings.Contains(err.Error(), "RegisterStreams already called") {
+				t.Fatalf("本地校验失败仍应消耗注册次数: %v", err)
+			}
+		})
+	}
+}
+
+func TestRegisterStreamsAllowsOmittedSubjects(t *testing.T) {
+	captureLogs(t)
+	c := registrationClient(t)
+	ctx := context.Background()
+	// 原生配置允许省略主题；Mirror 的 Subjects 必须为空。
+	if err := c.RegisterStreams(ctx,
+		jetstream.StreamConfig{
+			Name:    "DEFAULT_SUBJECT",
+			Storage: jetstream.MemoryStorage,
+		},
+		jetstream.StreamConfig{
+			Name:     "ORIGIN",
+			Subjects: []string{"origin.>"},
+			Storage:  jetstream.MemoryStorage,
+		},
+		jetstream.StreamConfig{
+			Name:     "MIRROR",
+			Subjects: []string{},
+			Mirror: &jetstream.StreamSource{
+				Name: "ORIGIN",
+			},
+			Storage: jetstream.MemoryStorage,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"DEFAULT_SUBJECT", "MIRROR"} {
+		if _, err := c.JetStream().Stream(ctx, name); err != nil {
+			t.Fatalf("应允许省略 subjects 的 Stream %q: %v", name, err)
+		}
+	}
+}
+
 func TestRegisterStreamsOncePerClient(t *testing.T) {
 	captureLogs(t)
 	cfg := jetstream.StreamConfig{
@@ -502,6 +610,71 @@ func TestRegisterStreamsOncePerClient(t *testing.T) {
 			}
 			if _, err := c.JetStream().Stream(ctx, "LATE"); !errors.Is(err, jetstream.ErrStreamNotFound) {
 				t.Fatalf("重复调用仍创建了 Stream: %v", err)
+			}
+		})
+	}
+}
+
+func TestRegisterJetStreamConsumersValidateWholeBatch(t *testing.T) {
+	captureLogs(t)
+	for _, test := range []struct {
+		name          string
+		stream        string
+		durable       string
+		filterSubject string
+		filters       []string
+	}{
+		{
+			name:    "stream-whitespace",
+			stream:  " TASKS",
+			durable: "second",
+		},
+		{
+			name:    "durable-whitespace",
+			stream:  "TASKS",
+			durable: "second ",
+		},
+		{
+			name:    "empty-filter",
+			stream:  "TASKS",
+			durable: "second",
+			filters: []string{"tasks.created", ""},
+		},
+		{
+			name:    "filter-whitespace",
+			stream:  "TASKS",
+			durable: "second",
+			filters: []string{"tasks.created", " tasks.updated"},
+		},
+		{
+			name:          "singular-filter-whitespace",
+			stream:        "TASKS",
+			durable:       "second",
+			filterSubject: "tasks.created ",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := registrationClient(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := c.RegisterStreams(ctx, DefaultStreamConfig("TASKS", 1, "tasks.>")); err != nil {
+				t.Fatal(err)
+			}
+			handler := func(context.Context, jetstream.Msg) error { return nil }
+			invalid := DefaultJetStreamConsumer(test.stream, test.durable, handler, test.filters...)
+			invalid.Config.FilterSubject = test.filterSubject
+			err := c.RegisterJetStreamConsumers(ctx,
+				DefaultJetStreamConsumer("TASKS", "first", handler),
+				invalid,
+			)
+			if err == nil {
+				t.Fatal("未拒绝非法 Consumer 参数")
+			}
+			if _, err = c.JetStream().Consumer(ctx, "TASKS", "first"); !errors.Is(err, jetstream.ErrConsumerNotFound) {
+				t.Fatalf("后续声明非法时不应创建首个 Consumer: %v", err)
+			}
+			if err = c.RegisterJetStreamConsumers(ctx); err == nil || !strings.Contains(err.Error(), "RegisterJetStreamConsumers already called") {
+				t.Fatalf("通用校验失败应消耗注册次数: %v", err)
 			}
 		})
 	}
@@ -567,6 +740,53 @@ func TestRegisterJetStreamConsumersOncePerClient(t *testing.T) {
 			}
 			if _, err := c.JetStream().Consumer(ctx, "ONCE", "late"); !errors.Is(err, jetstream.ErrConsumerNotFound) {
 				t.Fatalf("重复调用仍创建了 Consumer: %v", err)
+			}
+		})
+	}
+}
+
+func TestRegisterCoreConsumersValidateWholeBatch(t *testing.T) {
+	captureLogs(t)
+	for _, test := range []struct {
+		name         string
+		consumerName string
+		subject      string
+		queue        string
+	}{
+		{
+			name:         "name-whitespace",
+			consumerName: " second",
+			subject:      "core.second",
+		},
+		{
+			name:         "subject-whitespace",
+			consumerName: "second",
+			subject:      "core.second ",
+		},
+		{
+			name:         "queue-whitespace",
+			consumerName: "second",
+			subject:      "core.second",
+			queue:        " workers ",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := registrationClient(t)
+			ctx := context.Background()
+			handler := func(context.Context, *nats.Msg) error { return nil }
+			subscriptions := c.Conn().NumSubscriptions()
+			err := c.RegisterCoreConsumers(ctx,
+				DefaultCoreConsumer("first", "core.first", handler),
+				DefaultCoreQueueConsumer(test.consumerName, test.subject, test.queue, 1, handler),
+			)
+			if err == nil {
+				t.Fatal("未拒绝非法 Core Consumer 参数")
+			}
+			if c.Conn().NumSubscriptions() != subscriptions {
+				t.Fatal("后续声明非法时不应建立本批任何订阅")
+			}
+			if err = c.RegisterCoreConsumers(ctx); err == nil || !strings.Contains(err.Error(), "RegisterCoreConsumers already called") {
+				t.Fatalf("通用校验失败应消耗注册次数: %v", err)
 			}
 		})
 	}
@@ -987,15 +1207,18 @@ func TestRegisteredCoreBroadcastQueueReplyAndFailure(t *testing.T) {
 	if received[0].Load() != 20 || received[1].Load() != 20 || received[2].Load()+received[3].Load() != 20 {
 		t.Fatal("广播或 Queue 分发不正确")
 	}
-	var failures int
+	var failures, panicStacks int
 	for _, record := range readLogs(t, buf) {
 		details, _ := record[logit.DownstreamDetailsKey].(map[string]any)
 		if details["operation"] == "coreCallback" && record["level"] == "ERROR" {
 			failures++
+			if record["panic_stack"] != nil {
+				panicStacks++
+			}
 		}
 	}
-	if failures != 2 {
-		t.Fatalf("Core 错误日志数量: %d", failures)
+	if failures != 2 || panicStacks != 1 {
+		t.Fatalf("Core 错误或 panic 堆栈日志数量: failures=%d panicStacks=%d", failures, panicStacks)
 	}
 }
 

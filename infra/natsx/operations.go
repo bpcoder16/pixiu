@@ -144,10 +144,8 @@ func cloneHeader(header nats.Header) nats.Header {
 	return cloned
 }
 
+// subscribeHandler 接收注册入口已预检的参数，统一管理回调、结果日志及关闭跟踪。
 func (c *Client) subscribeHandler(subject, queue string, handler CoreHandler) (*nats.Subscription, error) {
-	if strings.TrimSpace(subject) == "" || handler == nil {
-		return nil, errors.New("natsx: empty subject or nil handler")
-	}
 	ctx := c.handlerCtx
 	wrapped := func(msg *nats.Msg) {
 		c.consumerMu.Lock()
@@ -160,7 +158,7 @@ func (c *Client) subscribeHandler(subject, queue string, handler CoreHandler) (*
 		defer c.coreHandlers.Done()
 		msgCtx := MessageContext(ctx, msg.Header)
 		begin := time.Now()
-		err := handler(msgCtx, msg)
+		err := invokeHandler(msgCtx, func() error { return handler(msgCtx, msg) })
 		c.logResult(msgCtx, "coreCallback", msg.Subject, msg, nil, begin, err, nil)
 	}
 	c.consumerMu.Lock()

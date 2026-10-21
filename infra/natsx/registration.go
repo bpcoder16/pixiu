@@ -41,7 +41,7 @@ type JetStreamConsumer struct {
 // 同一订阅内串行调用 handler，多个订阅之间可并发执行且不保证处理顺序，handler 须支持并发调用。
 // pending 溢出由 SDK 异步错误日志报告，不保证重投。
 type CoreConsumer struct {
-	// Name 是当前 Client 内唯一的本地声明标识，必填且不能全为空白，不发送给服务端。
+	// Name 是当前 Client 内唯一的本地声明标识，必须非空且无首尾空白，不发送给服务端。
 	Name    string
 	Subject string
 	Queue   string
@@ -136,7 +136,8 @@ func (c *Client) checkRegistration(ctx context.Context) error {
 // RegisterStreams 在启动期依次创建或复用 Stream，不自动更新、删除已有资源。
 // 只在启动阶段串行调用，不与 Close 并发。
 // 通过入口检查后，每个 Client 只允许调用一次；须一次传入全部配置，空清单或失败也不可重试。
-// 配置直接交给 SDK；同批名称不得重复。失败保留已创建资源，由应用中止启动并 Close。
+// 创建资源前整批检查名称、主题元素非空且无首尾空白，以及同批名称唯一，不自动裁剪。
+// Subjects 列表允许省略或为空；其余约束交给 SDK。失败保留已创建资源，由应用中止启动并 Close。
 func (c *Client) RegisterStreams(ctx context.Context, configs ...jetstream.StreamConfig) error {
 	if err := c.checkRegistration(ctx); err != nil {
 		return err
@@ -146,8 +147,13 @@ func (c *Client) RegisterStreams(ctx context.Context, configs ...jetstream.Strea
 	}
 	seen := make(map[string]struct{}, len(configs))
 	for _, cfg := range configs {
-		if strings.TrimSpace(cfg.Name) == "" {
-			return errors.New("natsx: empty stream name")
+		if cfg.Name == "" || strings.TrimSpace(cfg.Name) != cfg.Name {
+			return fmt.Errorf("natsx: stream name %q must be nonempty and without surrounding whitespace", cfg.Name)
+		}
+		for i, subject := range cfg.Subjects {
+			if subject == "" || strings.TrimSpace(subject) != subject {
+				return fmt.Errorf("natsx: stream %q subjects[%d] must be nonempty and without surrounding whitespace", cfg.Name, i)
+			}
 		}
 		if _, exists := seen[cfg.Name]; exists {
 			return fmt.Errorf("natsx: duplicate stream %q", cfg.Name)
@@ -165,6 +171,8 @@ func (c *Client) RegisterStreams(ctx context.Context, configs ...jetstream.Strea
 // RegisterJetStreamConsumers 先准备本批全部远端 Consumer，再启动固定 worker；返回前可能执行 handler。
 // 只在依赖就绪后的启动期串行调用，不与 Close 并发。
 // 通过入口检查后，每个 Client 只允许调用一次；须一次传入全部配置，空清单或失败也不可重试。
+// 本地参数及 (Stream, Durable) 判重在创建本批任何远端 Consumer 前完成。
+// Stream、Durable 必须非空且无首尾空白；过滤条件允许省略，已提供的主题元素须非空且无首尾空白。
 // ctx 仅传给资源 RPC，不额外限制本地 worker 启动，也不影响长期 handler。
 // 失败中止启动，由 Client.Close 回收已启动消费；
 // 已创建远端资源不删除，已执行业务不回滚，不支持失败后重新登记整批。
@@ -180,8 +188,18 @@ func (c *Client) RegisterJetStreamConsumers(ctx context.Context, consumers ...Je
 	seen := make(map[[2]string]struct{}, len(specs))
 	for i := range specs {
 		spec := &specs[i]
-		if strings.TrimSpace(spec.Stream) == "" || strings.TrimSpace(spec.Config.Durable) == "" || spec.Handler == nil {
-			return fmt.Errorf("natsx: consumer %d requires stream, durable and handler", i)
+		if spec.Stream == "" || strings.TrimSpace(spec.Stream) != spec.Stream ||
+			spec.Config.Durable == "" || strings.TrimSpace(spec.Config.Durable) != spec.Config.Durable ||
+			spec.Handler == nil {
+			return fmt.Errorf("natsx: consumer %d requires nonempty stream and durable without surrounding whitespace, and handler", i)
+		}
+		if strings.TrimSpace(spec.Config.FilterSubject) != spec.Config.FilterSubject {
+			return fmt.Errorf("natsx: consumer %q filterSubject must be without surrounding whitespace", spec.Config.Durable)
+		}
+		for j, subject := range spec.Config.FilterSubjects {
+			if subject == "" || strings.TrimSpace(subject) != subject {
+				return fmt.Errorf("natsx: consumer %q filterSubjects[%d] must be nonempty and without surrounding whitespace", spec.Config.Durable, j)
+			}
 		}
 		if spec.Config.Name != "" && spec.Config.Name != spec.Config.Durable {
 			return fmt.Errorf("natsx: consumer %q name must equal durable", spec.Config.Durable)
@@ -243,6 +261,7 @@ func (c *Client) RegisterJetStreamConsumers(ctx context.Context, consumers ...Je
 // RegisterCoreConsumers 在启动期建立全部订阅并执行一次 Flush；空清单不 Flush。
 // 只在启动阶段串行调用，不与 Close 并发。
 // 通过入口检查后，每个 Client 只允许调用一次；须一次传入全部声明，空清单或失败也不可重试。
+// Name、Subject 必须非空且无首尾空白；Queue 允许为空，非空时不得带首尾空白。
 // 同批 Name 不得重复，全部声明校验完成前不建立订阅。
 // ctx 有 deadline 时用于 Flush，否则沿用 SDK 默认 Flush；不额外限制本地订阅建立。
 // handler 使用 Client 生命周期，返回前可能开始处理消息。
@@ -257,10 +276,10 @@ func (c *Client) RegisterCoreConsumers(ctx context.Context, consumers ...CoreCon
 	}
 	seen := make(map[string]struct{}, len(consumers))
 	for i, spec := range consumers {
-		if strings.TrimSpace(spec.Name) == "" ||
-			strings.TrimSpace(spec.Subject) == "" ||
+		if spec.Name == "" || strings.TrimSpace(spec.Name) != spec.Name ||
+			spec.Subject == "" || strings.TrimSpace(spec.Subject) != spec.Subject ||
 			spec.Handler == nil ||
-			(spec.Queue != "" && strings.TrimSpace(spec.Queue) == "") ||
+			strings.TrimSpace(spec.Queue) != spec.Queue ||
 			spec.Subscribers < 0 ||
 			spec.PendingMessages < 0 ||
 			spec.PendingBytes < 0 {
@@ -277,9 +296,7 @@ func (c *Client) RegisterCoreConsumers(ctx context.Context, consumers ...CoreCon
 			subscribers = spec.Subscribers
 		}
 		for range subscribers {
-			sub, err := c.subscribeHandler(spec.Subject, spec.Queue, func(ctx context.Context, msg *nats.Msg) error {
-				return invokeHandler(ctx, func() error { return spec.Handler(ctx, msg) })
-			})
+			sub, err := c.subscribeHandler(spec.Subject, spec.Queue, spec.Handler)
 			if err != nil {
 				return fmt.Errorf("natsx: register Core subject %q: %w", spec.Subject, err)
 			}

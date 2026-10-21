@@ -58,7 +58,7 @@ func TestCronRedisLeaseAndDrain(t *testing.T) {
 		finish := func() { releaseOnce.Do(func() { close(release) }) }
 		var running, runs, overlaps atomic.Int32
 		var canceled atomic.Bool
-		handler := bootstrap.CronHandler{
+		handler := cronx.NamedHandler{
 			Name: "job",
 			Handler: func(ctx context.Context) error {
 				if running.Add(1) != 1 {

@@ -27,17 +27,8 @@ type ConsumeConfig struct {
 
 // consumeWithWorkers 为注册入口建立迭代器并启动固定 worker，成功后立即返回。
 // 消费句柄由 Client 内部登记，关闭时统一排空；消息确认由传入的 handler 负责。
-// 拉取限制由注册入口在整批准备阶段统一校验。
+// 参数校验、归一化及拉取限制检查由注册入口在整批准备阶段统一完成。
 func (c *Client) consumeWithWorkers(consumer jetstream.Consumer, cfg ConsumeConfig, handler JetStreamHandler) error {
-	if consumer == nil || handler == nil {
-		return errors.New("natsx: nil consumer or handler")
-	}
-	if cfg.Workers <= 0 || cfg.MaxMessages < 0 {
-		return errors.New("natsx: workers must be positive and max messages must be non-negative")
-	}
-	if cfg.MaxMessages == 0 {
-		cfg.MaxMessages = 2 * cfg.Workers
-	}
 	c.consumerMu.Lock()
 	defer c.consumerMu.Unlock()
 	if c.closing.Load() {

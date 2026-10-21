@@ -130,27 +130,27 @@
 // HTTP 超时后强制关闭普通连接，不额外等待 handler；管理器返回后应用尽力清理共享资源及日志。
 //
 // Cron 独立加载 cron.yaml，通过任务名绑定业务方法；不需要 HTTP/Gin 配置。
-// 包级具名函数可在业务包中批量声明，无需为每个任务编写 init：
+// 包级具名函数可通过 infra/cronx 在业务包中批量声明，无需为每个任务编写 init：
 //
 //	func Heartbeat(ctx context.Context) error {
 //		logit.Info(ctx, "heartbeat")
 //		return nil
 //	}
 //
-//	var Registry = bootstrap.MustNewCronRegistry(
+//	var Registry = cronx.MustNewHandlerRegistry(
 //		Heartbeat,
 //	)
 //
 // 构造时调用 NewCronScheduler(Registry.Handlers()...)，示例自动名称为 Heartbeat。
 // 注册器只登记元数据、不读配置或执行任务，各实例独立，Handlers 返回副本。
-// 零值 CronRegistry 也可直接使用；MustRegister(handler, name) 支持显式稳定名称，
+// 零值 cronx.HandlerRegistry 也可直接使用；MustRegister(handler, name) 支持显式稳定名称，
 // 适用于闭包、方法值、泛型函数和需要保持 YAML/锁标识兼容的重命名。
 // 自动名称保留包级函数名的大小写，配置中的 name 必须与之完全一致；nil、无法自动取名、非法名称及重名均 panic。
 // 登记与读取快照可并发，首次使用后不得复制注册器；登记不会更新已构造的 Scheduler。
 //
-// 也可直接传入带有稳定名称的 CronHandler；以下示例只在 jobs 中启用 scan-orders：
+// 也可直接传入带有稳定名称的 cronx.NamedHandler；以下示例只在 jobs 中启用 scan-orders：
 //
-//	scheduler, err := bootstrap.NewCronScheduler(bootstrap.CronHandler{
+//	scheduler, err := bootstrap.NewCronScheduler(cronx.NamedHandler{
 //		Name: "scan-orders",
 //		Handler: func(ctx context.Context) error {
 //			logit.Info(ctx, "scan orders")
@@ -267,8 +267,42 @@
 // 超时零值使用 natsx 默认值，负值无效；connectTimeout 默认 5s，是单次拨号期限。
 // drainTimeout 默认 10s，仅用于底层连接 Drain；closeTimeout 默认 20s，限制完整关闭流程。
 // jetStream.publishAsyncTimeout 默认 5s，只限制默认上下文的异步 PubAck 等待。
-// 连接成功不代表 JetStream 已启用或业务权限已验证；业务自行准备 Stream/Consumer，
-// 在 handler 依赖就绪后注册订阅。消息格式、ACK、重试和幂等策略由业务负责。
+// 连接成功不代表 JetStream 已启用或业务权限已验证。迁移和 Handler 依赖就绪后，
+// RegisterNATSFromConfig 读取独立的 nats-register.<name>.yaml，绑定 Handler 并调用 natsx 的三个注册入口：
+//
+//	jsHandlers := natsx.MustNewJetStreamHandlerRegistry()
+//	jsHandlers.MustRegister(func(ctx context.Context, msg jetstream.Msg) error {
+//	    // 完成本条业务后返回；组件根据结果 ACK 或重投。
+//	    return nil
+//	}, "HandleOrderCreated")
+//	coreHandlers := natsx.MustNewCoreHandlerRegistry()
+//	coreHandlers.MustRegister(func(ctx context.Context, msg *nats.Msg) error {
+//	    return nil
+//	}, "HandleConfigRefresh")
+//	if err := bootstrap.RegisterNATSFromConfig(
+//	    context.Background(),
+//	    "orders",
+//	    jsHandlers,
+//	    coreHandlers,
+//	); err != nil {
+//	    return err
+//	}
+//
+// 示例需导入 context、infra/natsx、nats.go 和 nats.go/jetstream，并已初始化 orders 命名客户端及配置环境。
+// 客户端未登记或 CloseAll 开始后查询沿用 natsx.Named 的 panic；配置和资源注册失败返回 error。
+// ctx 和 Client 关闭状态在配置预检后交给 natsx 注册入口校验。
+// 文件可使用 conf.example/nats-register.example.yaml，保留示例已登记的 Handler 对应项。
+// 包级具名函数可直接传入构造器，自动名称保留大小写；方法值、闭包、泛型函数必须显式命名。
+// streamDefaults.replicas 始终必填，解码后必须为正整数，即使没有 Stream。
+// 逐项 replicas 解码后非 nil 且大于零时覆盖，否则继承；解码及数字转换沿用 configx。
+// 逐项 replicas 不得超过 streamDefaults.replicas，超限时在注册任何资源前返回错误。
+// 所有其他运行参数沿用 natsx Default，未引用的 Handler 不启动。
+// 配置层检查全局副本数、逐项副本数上限、Stream subjects 列表必填，并在注册前绑定全部 Handler。
+// 各类资源的通用参数校验和判重交给各自的 natsx 注册入口，失败也占用该入口的注册次数。
+// 三个入口各调用一次，空清单也占用次数，不与手动注册混用。
+// 各入口分阶段预检，后序校验失败时前序资源或消费可能已启动。
+// 返回前可能执行业务，失败中止启动并由原资源栈收尾，不自动重试、更新或删除远端资源。
+// 修改文件重启生效；删除声明不删除 Durable 或进度。消息协议和业务幂等由应用负责。
 // NATS 关闭前先停止并等待外部生产者，托管订阅及 worker 由 Client.Close 排空，期间允许
 // 回调继续发布和请求。消费者及其发布服务必须在启动时持有客户端引用，不能在排空期间
 // 再次查询 Default/Named；回调依赖的资源晚于 NATS 关闭，日志最后关闭。

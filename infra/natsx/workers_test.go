@@ -423,26 +423,29 @@ func TestRegisteredWorkersValidatesMaxRequestBatch(t *testing.T) {
 	}
 }
 
-func TestWorkerEngineRejectsInvalidArguments(t *testing.T) {
+func TestRegisteredWorkersDefaultsPreserveDeclaration(t *testing.T) {
+	captureLogs(t)
 	c, consumer := newWorkerTestClient(t, time.Second)
-	handler := func(context.Context, jetstream.Msg) error { return nil }
-	for _, tc := range []struct {
-		name     string
-		consumer jetstream.Consumer
-		config   ConsumeConfig
-		handler  JetStreamHandler
-	}{
-		{"nil consumer", nil, ConsumeConfig{Workers: 1}, handler},
-		{"nil handler", consumer, ConsumeConfig{Workers: 1}, nil},
-		{"zero workers", consumer, ConsumeConfig{}, handler},
-		{"negative workers", consumer, ConsumeConfig{Workers: -1}, handler},
-		{"negative prefetch", consumer, ConsumeConfig{Workers: 1, MaxMessages: -1}, handler},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := c.consumeWithWorkers(tc.consumer, tc.config, tc.handler); err == nil {
-				t.Fatal("非法配置未拒绝")
-			}
-		})
+	called := make(chan struct{}, 1)
+	specs := []JetStreamConsumer{{
+		Stream: "WORKERS",
+		Config: consumer.CachedInfo().Config,
+		Handler: func(context.Context, jetstream.Msg) error {
+			called <- struct{}{}
+			return nil
+		},
+	}}
+	publishWorkerMessages(t, c, 1)
+	if err := c.RegisterJetStreamConsumers(context.Background(), specs...); err != nil {
+		t.Fatal(err)
+	}
+	if specs[0].Consume.Workers != 0 || specs[0].Consume.MaxMessages != 0 {
+		t.Fatal("注册归一化不得改写调用方的声明")
+	}
+	select {
+	case <-called:
+	case <-time.After(3 * time.Second):
+		t.Fatal("零值消费参数应在注册时采用默认值并正常消费")
 	}
 }
 
@@ -480,7 +483,8 @@ func TestWorkerEngineContinuesAfterMissingHeartbeat(t *testing.T) {
 			jetstream.ErrConsumerDeleted,
 		}},
 	}, ConsumeConfig{
-		Workers: 2,
+		Workers:     2,
+		MaxMessages: 4,
 		ErrorHandler: func(_ jetstream.ConsumeContext, err error) {
 			called <- err
 		},

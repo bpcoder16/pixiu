@@ -95,6 +95,27 @@ func TestNamedClientsPreserveOwnershipAndRetry(t *testing.T) {
 	}
 }
 
+func TestNamedClientRegistryChecksBeforeClientConfig(t *testing.T) {
+	isolatedNamedClients(t)
+	if _, err := NewDefault(Config{
+		Name: "events",
+		URLs: []string{startServer(t)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewDefault(Config{}); err == nil || !strings.Contains(err.Error(), "default client is already registered") {
+		t.Fatalf("应先拒绝重复默认实例，再委托 New 校验连接配置: %v", err)
+	}
+	if err := CloseAll(); err != nil {
+		t.Fatal(err)
+	}
+	for _, create := range []func(Config, ...nats.Option) (*Client, error){NewNamed, NewDefault} {
+		if client, err := create(Config{}); client != nil || err == nil || !strings.Contains(err.Error(), "named clients closed") {
+			t.Fatalf("关闭后的注册表不应进入客户端构造: client=%v err=%v", client, err)
+		}
+	}
+}
+
 func TestCloseAllDrainsWithHeldClientBeforeDependencies(t *testing.T) {
 	isolatedNamedClients(t)
 	client, err := NewDefault(Config{Name: "events", URLs: []string{startServer(t)}})
