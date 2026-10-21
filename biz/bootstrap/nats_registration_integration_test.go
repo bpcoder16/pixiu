@@ -52,6 +52,7 @@ func TestNATSFromConfig(t *testing.T) {
 	}{
 		{name: "MissingClientBeforeEnvironment", run: testNATSFromConfigMissingClientBeforeEnvironment},
 		{name: "PublishConsumeAndReuse", run: testNATSFromConfigPublishConsumeAndReuse},
+		{name: "NamespaceIsolation", run: testNATSFromConfigNamespaceIsolation},
 		{name: "PreflightAndErrors", run: testNATSFromConfigPreflightAndErrors},
 		{name: "DuplicateStreams", run: testNATSFromConfigDuplicateStreams},
 		{name: "StreamValidation", run: testNATSFromConfigStreamValidation},
@@ -229,6 +230,147 @@ func testNATSFromConfigPublishConsumeAndReuse(t *testing.T) {
 		}
 		if counts["events"] != 1 || counts["updates"] != 2 || counts["jobs"] != 1 || len(received) != 0 || unused.Load() != 0 {
 			t.Fatalf("选择性消费、广播或 Queue 语义错误: %v, extra=%d, unused=%d", counts, len(received), unused.Load())
+		}
+	})
+}
+
+func testNATSFromConfigNamespaceIsolation(t *testing.T) {
+	isolatedNATS(t, func() {
+		observer := registrationClients(t, true, "observer")[0]
+		var clients []*natsx.Client
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		type receivedMessage struct {
+			namespace string
+			subject   string
+			body      string
+		}
+		received := make(chan receivedMessage, 32)
+		content := strings.Replace(natsRegistrationTemplate, "subjects: [events]", "subjects: [events.>]", 1)
+		content = strings.Replace(content, "durable: worker", "durable: worker\n    filterSubjects: [events.created]", 1)
+		content = strings.Replace(content, "subject: updates", "subject: updates.*", 1)
+		// 两个环境使用相同声明；同一环境的两个实例继续复用 Stream、Durable 和 Queue。
+		for _, instance := range []struct {
+			name      string
+			namespace string
+		}{
+			{
+				name:      "first",
+				namespace: "test1",
+			},
+			{
+				name:      "peer",
+				namespace: "test1",
+			},
+			{
+				name:      "second",
+				namespace: "test2",
+			},
+		} {
+			client, err := natsx.NewNamed(natsx.Config{
+				Name:      instance.name,
+				Namespace: instance.namespace,
+				URLs:      []string{observer.Conn().ConnectedUrl()},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			clients = append(clients, client)
+			js := natsx.MustNewJetStreamHandlerRegistry()
+			js.MustRegister(func(_ context.Context, msg jetstream.Msg) error {
+				received <- receivedMessage{
+					namespace: instance.namespace,
+					subject:   msg.Subject(),
+					body:      string(msg.Data()),
+				}
+				return nil
+			}, "task")
+			core := natsx.MustNewCoreHandlerRegistry()
+			core.MustRegister(func(_ context.Context, msg *nats.Msg) error {
+				received <- receivedMessage{
+					namespace: instance.namespace,
+					subject:   msg.Subject,
+					body:      string(msg.Data),
+				}
+				if msg.Reply != "" {
+					return msg.Respond([]byte(instance.namespace))
+				}
+				return nil
+			}, "core")
+			writeNATSRegistration(t, instance.name, content)
+			if err := bootstrap.RegisterNATSFromConfig(ctx, instance.name, js, core); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i, namespace := range []string{"test1", "test2"} {
+			client := clients[2*i]
+			for _, event := range []string{"created", "ignored"} {
+				ack, err := client.PublishJetStream(ctx, "events."+event, []byte(namespace), event)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ack.Stream != namespace+"_EVENTS" || ack.Duplicate {
+					t.Fatalf("相同消息 ID 应分别写入两个环境的 Stream: %+v", ack)
+				}
+			}
+			if err := client.Publish(ctx, "updates.changed", []byte(namespace)); err != nil {
+				t.Fatal(err)
+			}
+			reply, err := client.Request(ctx, "jobs", []byte(namespace))
+			if err != nil || string(reply.Data) != namespace {
+				t.Fatalf("Request 应由对应环境的队列消费者响应: %v, %v", reply, err)
+			}
+			stream, err := client.JetStream().Stream(ctx, namespace+"_EVENTS")
+			if err != nil {
+				t.Fatal(err)
+			}
+			info := stream.CachedInfo()
+			if len(info.Config.Subjects) != 1 || info.Config.Subjects[0] != namespace+".events.>" || info.State.Msgs != 2 {
+				t.Fatalf("Stream 主题和消息应按环境隔离: %+v", info)
+			}
+			consumer, err := stream.Consumer(ctx, namespace+"_worker")
+			if err != nil {
+				t.Fatal(err)
+			}
+			filters := consumer.CachedInfo().Config.FilterSubjects
+			if len(filters) != 1 || filters[0] != namespace+".events.created" {
+				t.Fatalf("远端 Consumer 过滤主题应带 namespace: %v", filters)
+			}
+		}
+		// 未带前缀的广播不应被任一环境接收。
+		if err := observer.Publish(ctx, "updates.changed", []byte("unprefixed")); err != nil {
+			t.Fatal(err)
+		}
+		counts := make(map[string]int)
+		for range 7 {
+			select {
+			case msg := <-received:
+				if msg.namespace != msg.body || !strings.HasPrefix(msg.subject, msg.namespace+".") {
+					t.Fatalf("收到其他环境的消息或回调丢失主题前缀: %+v", msg)
+				}
+				counts[msg.subject]++
+			case <-ctx.Done():
+				t.Fatalf("未完成隔离消费: %v", counts)
+			}
+		}
+		if err := natsx.CloseAll(); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]int{
+			"test1.events.created":  1,
+			"test1.updates.changed": 2,
+			"test1.jobs":            1,
+			"test2.events.created":  1,
+			"test2.updates.changed": 1,
+			"test2.jobs":            1,
+		}
+		if len(counts) != len(want) || len(received) != 0 {
+			t.Fatalf("出现非预期或重复消费: counts=%v, extra=%d", counts, len(received))
+		}
+		for subject, count := range want {
+			if counts[subject] != count {
+				t.Fatalf("环境隔离、主题过滤或广播/队列语义错误: %v", counts)
+			}
 		}
 	})
 }

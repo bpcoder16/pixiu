@@ -264,6 +264,8 @@
 // 转换阶段检查 URL 解析及内嵌凭据，通用参数由 natsx 在构造时校验；
 // 后续实例校验失败时，此前成功的实例由应用关闭栈回收。
 // urls 必填，地址非空且无首尾空白，不接受 URL 内嵌凭据；认证使用 username/password。
+// namespace 在此连接文件配置，省略、null 或空字符串时不添加前缀；仅允许 ASCII 字母、数字、_、-。
+// natsx 在连接前校验并固定 namespace；纯发布客户端也生效，不依赖注册配置或 Handler。
 // 超时零值使用 natsx 默认值，负值无效；connectTimeout 默认 5s，是单次拨号期限。
 // drainTimeout 默认 10s，仅用于底层连接 Drain；closeTimeout 默认 20s，限制完整关闭流程。
 // jetStream.publishAsyncTimeout 默认 5s，只限制默认上下文的异步 PubAck 等待。
@@ -292,6 +294,15 @@
 // 客户端未登记或 CloseAll 开始后查询沿用 natsx.Named 的 panic；配置和资源注册失败返回 error。
 // ctx 和 Client 关闭状态在配置预检后交给 natsx 注册入口校验。
 // 文件可使用 conf.example/nats-register.example.yaml，保留示例已登记的 Handler 对应项。
+// 注册文件不接受 namespace；该值统一来自 nats.<name>.yaml 的客户端配置。
+// 例如 namespace: test1 时，Stream 名称及引用 ORDERS 变为 test1_ORDERS，Durable worker 变为 test1_worker；
+// Core name、非空 queue 同样添加 test1_；subjects、filterSubjects、Core subject 添加 test1.。
+// 通配主题 orders.> 变为 test1.orders.>；空 queue 保持广播，空过滤列表仍消费整个 Stream。
+// 配置填写原始名称，Handler 引用不加前缀；外部 Stream 引用同样映射到带前缀的名称。
+// 发布和 Request 同样传入原始主题，例如 orders.created；Client 自动发送到 test1.orders.created。
+// 回调、日志和原生返回值保留前缀；Request 回复用 Msg.Respond，不改写回复 inbox。
+// Conn()/JetStream() 原生入口不添加前缀；旧注册文件中的 namespace 须移至连接文件，否则严格解析报错。
+// 修改 namespace 后使用新的资源名称，旧 Stream/Durable 不自动迁移或删除。
 // 包级具名函数可直接传入构造器，自动名称保留大小写；方法值、闭包、泛型函数必须显式命名。
 // streamDefaults.replicas 始终必填，解码后必须为正整数，即使没有 Stream。
 // 逐项 replicas 解码后非 nil 且大于零时覆盖，否则继承；解码及数字转换沿用 configx。

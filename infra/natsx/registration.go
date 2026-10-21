@@ -138,6 +138,7 @@ func (c *Client) checkRegistration(ctx context.Context) error {
 // 通过入口检查后，每个 Client 只允许调用一次；须一次传入全部配置，空清单或失败也不可重试。
 // 创建资源前整批检查名称、主题元素非空且无首尾空白，以及同批名称唯一，不自动裁剪。
 // Subjects 列表允许省略或为空；其余约束交给 SDK。失败保留已创建资源，由应用中止启动并 Close。
+// Name 和 Subjects 使用原始值，由 Client 添加 namespace；其他 SDK 高级字段原样传递。
 func (c *Client) RegisterStreams(ctx context.Context, configs ...jetstream.StreamConfig) error {
 	if err := c.checkRegistration(ctx); err != nil {
 		return err
@@ -161,6 +162,8 @@ func (c *Client) RegisterStreams(ctx context.Context, configs ...jetstream.Strea
 		seen[cfg.Name] = struct{}{}
 	}
 	for _, cfg := range configs {
+		cfg.Name = namespaceValue(c.namePrefix, cfg.Name)
+		cfg.Subjects = namespaceSubjects(c.subjectPrefix, cfg.Subjects)
 		if _, err := c.js.CreateStream(ctx, cfg); err != nil {
 			return fmt.Errorf("natsx: register stream %q: %w", cfg.Name, err)
 		}
@@ -173,6 +176,7 @@ func (c *Client) RegisterStreams(ctx context.Context, configs ...jetstream.Strea
 // 通过入口检查后，每个 Client 只允许调用一次；须一次传入全部配置，空清单或失败也不可重试。
 // 本地参数及 (Stream, Durable) 判重在创建本批任何远端 Consumer 前完成。
 // Stream、Durable 必须非空且无首尾空白；过滤条件允许省略，已提供的主题元素须非空且无首尾空白。
+// Stream、Durable、非空 Name 和过滤主题使用原始值，校验后添加当前 Client 的 namespace。
 // ctx 仅传给资源 RPC，不额外限制本地 worker 启动，也不影响长期 handler。
 // 失败中止启动，由 Client.Close 回收已启动消费；
 // 已创建远端资源不删除，已执行业务不回滚，不支持失败后重新登记整批。
@@ -233,6 +237,11 @@ func (c *Client) RegisterJetStreamConsumers(ctx context.Context, consumers ...Je
 			return fmt.Errorf("natsx: duplicate consumer %q/%q", key[0], key[1])
 		}
 		seen[key] = struct{}{}
+		spec.Stream = namespaceValue(c.namePrefix, spec.Stream)
+		spec.Config.Durable = namespaceValue(c.namePrefix, spec.Config.Durable)
+		spec.Config.Name = namespaceValue(c.namePrefix, spec.Config.Name)
+		spec.Config.FilterSubject = namespaceValue(c.subjectPrefix, spec.Config.FilterSubject)
+		spec.Config.FilterSubjects = namespaceSubjects(c.subjectPrefix, spec.Config.FilterSubjects)
 	}
 	prepared := make([]jetstream.Consumer, len(specs))
 	for i, spec := range specs {
@@ -262,6 +271,7 @@ func (c *Client) RegisterJetStreamConsumers(ctx context.Context, consumers ...Je
 // 只在启动阶段串行调用，不与 Close 并发。
 // 通过入口检查后，每个 Client 只允许调用一次；须一次传入全部声明，空清单或失败也不可重试。
 // Name、Subject 必须非空且无首尾空白；Queue 允许为空，非空时不得带首尾空白。
+// Name、Subject 和 Queue 使用原始值，校验后添加当前 Client 的 namespace；空 Queue 保持广播。
 // 同批 Name 不得重复，全部声明校验完成前不建立订阅。
 // ctx 有 deadline 时用于 Flush，否则沿用 SDK 默认 Flush；不额外限制本地订阅建立。
 // handler 使用 Client 生命周期，返回前可能开始处理消息。
@@ -291,6 +301,9 @@ func (c *Client) RegisterCoreConsumers(ctx context.Context, consumers ...CoreCon
 		seen[spec.Name] = struct{}{}
 	}
 	for _, spec := range consumers {
+		spec.Name = namespaceValue(c.namePrefix, spec.Name)
+		spec.Subject = namespaceValue(c.subjectPrefix, spec.Subject)
+		spec.Queue = namespaceValue(c.namePrefix, spec.Queue)
 		subscribers := 1
 		if spec.Queue != "" && spec.Subscribers > 0 {
 			subscribers = spec.Subscribers

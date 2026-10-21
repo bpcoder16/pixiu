@@ -25,6 +25,9 @@ var (
 type Config struct {
 	// Name 是连接名称，同时用于日志标识；不能为空或仅含空白。
 	Name string
+	// Namespace 是当前实例的业务资源前缀；空值不启用，非空仅接受 ASCII 字母、数字、_、-。
+	// 初始化后固定，封装的发送及注册入口接收原始主题和名称，自动添加前缀。
+	Namespace string
 	// URLs 是服务器地址列表；至少提供一个地址，且每项非空、无首尾空白，不自动裁剪。
 	URLs []string
 	// Username 与 Password 配对，允许空密码；只有 Password 时无效。
@@ -58,6 +61,9 @@ type JetStreamConfig struct {
 type Client struct {
 	// name 是连接名称，用于状态与操作日志标识。
 	name string
+	// 前缀在初始化时生成；只转换业务入口，不影响 SDK 的回复、确认和管理协议。
+	namePrefix    string
+	subjectPrefix string
 	// durationPrefix 是出站调用登记请求级耗时的前缀，初始化后固定。
 	durationPrefix string
 	// nc 是底层 NATS 连接，供 Core 操作与 JetStream 共用。
@@ -108,6 +114,11 @@ func New(cfg Config, options ...nats.Option) (*Client, error) {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return nil, errors.New("natsx: empty connection name")
 	}
+	if strings.IndexFunc(cfg.Namespace, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-')
+	}) >= 0 {
+		return nil, fmt.Errorf("natsx: namespace %q must contain only ASCII letters, digits, underscores or hyphens", cfg.Namespace)
+	}
 	if len(cfg.URLs) == 0 {
 		return nil, errors.New("natsx: no server URLs")
 	}
@@ -146,6 +157,10 @@ func New(cfg Config, options ...nats.Option) (*Client, error) {
 		durationPrefix: downstreamType + "_" + cfg.Name,
 		closeTimeout:   cfg.CloseTimeout,
 		closedEvent:    make(chan struct{}),
+	}
+	if cfg.Namespace != "" {
+		c.namePrefix = cfg.Namespace + "_"
+		c.subjectPrefix = cfg.Namespace + "."
 	}
 	opts := nats.GetDefaultOptions()
 	// 常驻服务意外断连后持续重连；主动关闭及官方认证失败终止规则仍然有效。
@@ -288,12 +303,12 @@ func (c *Client) installCallbacks(opts *nats.Options, asyncErrorHandler nats.Err
 	}
 }
 
-// Conn 返回原生连接；直接操作它不会获得封装层的追踪和结果日志。
+// Conn 返回原生连接；直接操作它不会添加 namespace 前缀，也不会获得封装层的追踪和结果日志。
 // 不得通过原生 setter 或修改 Opts 覆盖 Pixiu 管理的连接回调；可通过 StatusChanged 观察连接状态。
 // 退出时统一调用 Client.Close；自行关闭或排空原生连接后，不保证封装层的优雅关闭语义。
 func (c *Client) Conn() *nats.Conn { return c.nc }
 
-// JetStream 返回默认上下文；直接操作它不会获得封装层的结果日志。
+// JetStream 返回默认上下文；直接操作它须使用实际名称和主题，不添加 namespace 前缀或封装层结果日志。
 func (c *Client) JetStream() jetstream.JetStream { return c.js }
 
 // Close 统一排空启动阶段登记的订阅与消费，期间拒绝新增注册，允许回调继续发布与请求。

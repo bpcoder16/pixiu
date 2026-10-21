@@ -30,6 +30,7 @@ func (c *Client) checkOperation(ctx context.Context, subject string) error {
 }
 
 // Publish 向 Core NATS 发送消息；成功只表示客户端已接受写入。
+// subject 使用原始主题，由 Client 自动添加 namespace 前缀；空 namespace 保持原样。
 // headers 可省略或传入一个 Header（可为 nil），多传返回参数错误；data 允许 nil。
 // data 和提供的 Header 在调用期间须独占；Header 非 nil 时原地写入追踪 ID，已写入的字段不回滚。
 func (c *Client) Publish(ctx context.Context, subject string, data []byte, headers ...nats.Header) error {
@@ -39,6 +40,7 @@ func (c *Client) Publish(ctx context.Context, subject string, data []byte, heade
 	if len(headers) > 1 {
 		return errors.New("natsx: at most one publish header is allowed")
 	}
+	subject = c.subjectPrefix + subject
 	begin := time.Now()
 	msg := &nats.Msg{
 		Subject: subject,
@@ -54,6 +56,7 @@ func (c *Client) Publish(ctx context.Context, subject string, data []byte, heade
 }
 
 // Request 向 Core NATS 发送请求并等待响应，由 ctx 控制等待期限。
+// subject 使用原始主题，由 Client 自动添加 namespace 前缀；空 namespace 保持原样。
 // headers 可省略或传入一个 Header（可为 nil），多传返回参数错误；data 允许 nil。
 // data 和提供的 Header 在调用期间须独占；Header 非 nil 时原地写入追踪 ID，已写入的字段不回滚。
 func (c *Client) Request(ctx context.Context, subject string, data []byte, headers ...nats.Header) (*nats.Msg, error) {
@@ -63,6 +66,7 @@ func (c *Client) Request(ctx context.Context, subject string, data []byte, heade
 	if len(headers) > 1 {
 		return nil, errors.New("natsx: at most one request header is allowed")
 	}
+	subject = c.subjectPrefix + subject
 	begin := time.Now()
 	msg := &nats.Msg{
 		Subject: subject,
@@ -78,6 +82,7 @@ func (c *Client) Request(ctx context.Context, subject string, data []byte, heade
 }
 
 // PublishJetStream 同步发布并等待服务端 PubAck；messageID 必须非空，不自动生成。
+// subject 使用原始主题，由 Client 自动添加 namespace 前缀；空 namespace 保持原样。
 // 同一业务事件重试时复用 messageID，不同事件使用不同 ID；去重仅在同一 Stream 的去重窗口内生效。
 // headers 可省略或传入一个 Header（可为 nil），多传返回参数错误；data 允许 nil。
 // data 在调用期间须独占；Header 深拷贝后写入追踪 ID 并覆盖 Nats-Msg-Id，不修改调用方 Header。
@@ -92,6 +97,7 @@ func (c *Client) PublishJetStream(ctx context.Context, subject string, data []by
 	if len(headers) > 1 {
 		return nil, errors.New("natsx: at most one JetStream publish header is allowed")
 	}
+	subject = c.subjectPrefix + subject
 	begin := time.Now()
 	msg := &nats.Msg{
 		Subject: subject,
@@ -107,6 +113,7 @@ func (c *Client) PublishJetStream(ctx context.Context, subject string, data []by
 }
 
 // PublishJetStreamAsync 提交消息并返回原生 future；提交成功不表示服务端已持久化。
+// subject 使用原始主题，由 Client 自动添加 namespace 前缀；空 namespace 保持原样。
 // messageID 必须非空，Header 至多一个；复制 data 和 Header，不修改调用方输入。
 // 调用期间输入不得并发修改，返回后可复用；future.Msg() 是 SDK 持有的消息，不得修改。
 // ctx 仅用于提交前取消检查、追踪和耗时，不撤销已提交消息或控制后续 PubAck 等待。
@@ -121,6 +128,7 @@ func (c *Client) PublishJetStreamAsync(ctx context.Context, subject string, data
 	if len(headers) > 1 {
 		return nil, errors.New("natsx: at most one JetStream publish header is allowed")
 	}
+	subject = c.subjectPrefix + subject
 	begin := time.Now()
 	msg := &nats.Msg{
 		Subject: subject,

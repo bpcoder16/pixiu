@@ -29,8 +29,9 @@ func MustRegisterNATS(name string, isDefault bool) {
 	natsInstances.mustRegister(name, isDefault)
 }
 
-// 实例身份来自声明；文件只开放连接参数，不解码完整官方选项或业务消费配置。
+// 实例身份来自声明；文件开放连接参数和 namespace，不解码完整官方选项或业务消费配置。
 type natsFileConfig struct {
+	Namespace      string            `mapstructure:"namespace"`
 	URLs           []string          `mapstructure:"urls"`
 	Username       string            `mapstructure:"username"`
 	Password       string            `mapstructure:"password"`
@@ -60,6 +61,7 @@ func (cfg *natsFileConfig) clientConfig(name string) (natsx.Config, error) {
 	}
 	return natsx.Config{
 		Name:           name,
+		Namespace:      cfg.Namespace,
 		URLs:           cfg.URLs,
 		Username:       cfg.Username,
 		Password:       cfg.Password,

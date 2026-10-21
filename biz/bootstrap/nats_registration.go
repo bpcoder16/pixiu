@@ -21,6 +21,8 @@ import (
 // Stream subjects 列表在配置层必填；三个入口各调用一次，空清单也占用次数，不能与手动注册混用。
 // 各入口分阶段预检，后序校验失败时前序资源或消费可能已启动。
 // nil 注册表视为空表，未引用的 Handler 不启动；全局 streamDefaults.replicas 始终必填且为正整数。
+// namespace 来自 nats.<instanceName>.yaml 的客户端初始化配置，本文件不接受该字段。
+// 配置填写原始名称和主题，前缀统一由 Client 的注册及发送入口添加；Handler 名称不变。
 // 逐项 Stream 的 replicas 不得超过全局值，超限时在注册任何资源前返回错误。
 // Stream retention、maxAge、duplicates 可选，省略或 null 沿用 Default；显式零时长按 NATS 语义处理。
 // JetStream ackWait、maxDeliver、maxAckPending、consume.workers、consume.maxMessages、retryDelay 可选，
@@ -124,7 +126,11 @@ func (cfg *natsRegistrationConfig) bind(jsRegistry *natsx.JetStreamHandlerRegist
 			}
 			effectiveReplicas = *spec.Replicas
 		}
-		stream := natsx.DefaultStreamConfig(spec.Name, effectiveReplicas, spec.Subjects...)
+		stream := natsx.DefaultStreamConfig(
+			spec.Name,
+			effectiveReplicas,
+			spec.Subjects...,
+		)
 		if spec.Retention != nil {
 			switch *spec.Retention {
 			case "limits":

@@ -1,5 +1,10 @@
 # 复制为 nats-register.<name>.yaml，与 nats.<name>.yaml 放在同一配置目录。
 # 仅由依赖就绪后的 RegisterNATSFromConfig 显式读取，不随 MustBaseInit 自动启动消费。
+# namespace 在 nats.<name>.yaml 中配置，本文件不接受该字段。
+# 此处填写原始名称和主题；Client 为注册、发布和 Request 统一添加前缀。
+# 例如 namespace 为 test1 时，名称及非空 queue 添加 test1_，主题添加 test1.。
+# Handler 名称不变，回调主题保留前缀；修改 namespace 不迁移或删除旧 Stream/Durable。
+
 streamDefaults:
   # 始终必填且为正整数，同时作为逐项副本数的上限，即使没有 Stream 或每个 Stream 均有覆盖值。
   # 单节点使用 1；服务端继续校验副本数范围与集群条件。

@@ -95,6 +95,65 @@ func TestNATSRegistrationDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestNATSRegistrationRejectsLegacyNamespace(t *testing.T) {
+	for _, value := range []string{"null", "''", "test1"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := parseNATSRegistration(t, "namespace: "+value+"\n"+registrationYAML)
+			if err == nil || !strings.Contains(err.Error(), "namespace") {
+				t.Fatalf("旧注册配置的 namespace 应作为未知字段拒绝: %v", err)
+			}
+		})
+	}
+}
+
+func TestNATSRegistrationPreservesEmptyAndInvalidFields(t *testing.T) {
+	for _, value := range []string{"", " leading", "trailing ", " "} {
+		t.Run(value, func(t *testing.T) {
+			cfg, err := parseNATSRegistration(t, registrationYAML)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Streams[0].Name = value
+			cfg.Streams[0].Subjects = []string{value}
+			cfg.JetStreamConsumers[0].Stream = value
+			cfg.JetStreamConsumers[0].Durable = value
+			cfg.JetStreamConsumers[0].FilterSubjects = []string{value}
+			cfg.CoreConsumers[0].Name = value
+			cfg.CoreConsumers[0].Subject = value
+			cfg.CoreConsumers[1].Queue = value
+			batch, err := cfg.bind(
+				natsx.MustNewJetStreamHandlerRegistry(registrationTask),
+				natsx.MustNewCoreHandlerRegistry(registrationCore),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, got := range []string{
+				batch.streams[0].Name,
+				batch.streams[0].Subjects[0],
+				batch.jetStreamConsumers[0].Stream,
+				batch.jetStreamConsumers[0].Config.Durable,
+				batch.jetStreamConsumers[0].Config.FilterSubjects[0],
+				batch.coreConsumers[0].Name,
+				batch.coreConsumers[0].Subject,
+				batch.coreConsumers[1].Queue,
+			} {
+				if got != value {
+					t.Fatalf("空字段和首尾空白应保留原值，交给原注册入口校验: got %q, want %q", got, value)
+				}
+			}
+			cfg.JetStreamConsumers[0].FilterSubjects = nil
+			batch, err = cfg.bind(
+				natsx.MustNewJetStreamHandlerRegistry(registrationTask),
+				natsx.MustNewCoreHandlerRegistry(registrationCore),
+			)
+			if err != nil || len(batch.jetStreamConsumers[0].Config.FilterSubjects) != 0 {
+				t.Fatalf("未配置过滤主题时仍应消费整个 Stream: %v", err)
+			}
+		})
+	}
+}
+
 func TestNATSRegistrationJetStreamOptions(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

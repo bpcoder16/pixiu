@@ -74,6 +74,11 @@ func TestNATSValidatesAllFilesBeforeConnecting(t *testing.T) {
 		{name: "identity", content: "name: other\n", want: "name"},
 		{name: "default", content: "isDefault: true\n", want: "isdefault"},
 		{name: "nested", content: "jetStream:\n  typo: true\n", want: "typo"},
+		{
+			name:    "namespace-type",
+			content: "namespace: 42\n",
+			want:    "namespace",
+		},
 		{name: "type", content: "urls: [false]\n", want: "urls"},
 		{name: "duration", content: "connectTimeout: later\n", want: "connectTimeout"},
 		{name: "invalid-url", content: "urls: ['nats://host:%zz']\n", want: "urls"},
@@ -110,6 +115,11 @@ func TestNATSClientValidationRunsDuringInitialization(t *testing.T) {
 		content string
 		want    string
 	}{
+		{
+			name:    "namespace",
+			content: "urls: [localhost:4222]\nnamespace: bad.namespace\n",
+			want:    "natsx: namespace",
+		},
 		{name: "empty", content: "urls: []\n", want: "natsx: no server URLs"},
 		{name: "empty-address", content: "urls: ['']\n", want: "natsx: empty server URL"},
 		{name: "password", content: "urls: [localhost:4222]\npassword: secret\n", want: "natsx: password requires username"},

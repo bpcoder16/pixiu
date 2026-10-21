@@ -9,6 +9,19 @@
 // 详细契约见 docs/natsx-design.md。
 // 第一版原样记录错误文本并保留原始错误链，不脱敏其中可能包含的 URL、密码或 Token。
 //
+// Config.Namespace 可选，空值保持原样；非空仅允许 ASCII 字母、数字、_、-，在拨号前校验并固定。
+// 四个发布/Request 入口和三个 Register 入口都接受原始名称与主题；Default 工厂不添加前缀。
+// 例如 namespace 为 test1 时，主题 orders.created 变为 test1.orders.created，Stream ORDERS 变为 test1_ORDERS。
+// 注册的 Stream Name、Consumer Stream/Durable/非空 Name、Core Name/非空 Queue 添加 namespace_；
+// Stream Subjects、Consumer FilterSubject/FilterSubjects、Core Subject 添加 namespace.，保留通配符。
+// 空 queue 保持广播，空过滤条件保持整个 Stream；原始参数先校验，转换不修改调用方配置或主题切片。
+// 其他 SDK 高级字段（如 Mirror、Sources、RePublish、SubjectTransform）原样传递，须自行填写实际值。
+// 不猜测或去重已有前缀；客户端实例名、Handler 名称、messageID 不变。
+// 回调、日志、PubAck 和异步 future 保留真实名称及主题；把回调主题重新传入发送入口会再次添加前缀。
+// Request 回复使用 Msg.Respond/RespondMsg；回复 inbox、JetStream ACK 和管理协议主题保持原样。
+// 原生 Conn()/JetStream() 不添加 namespace，直接操作时须使用完整名称和主题。
+// 每个 Client 独立配置；修改 namespace 不迁移或删除旧 Stream/Durable。
+//
 // Handler 注册表可独立于客户端使用，供应用按名称选择强类型处理函数：
 //
 //	func HandleTask(context.Context, jetstream.Msg) error {
@@ -35,8 +48,9 @@
 // 以下为共享客户端的发布样例（需导入 context 和 natsx）：
 //
 //	client, err := natsx.NewDefault(natsx.Config{
-//		Name: "events",
-//		URLs: []string{"nats://127.0.0.1:4222"},
+//		Name:      "events",
+//		Namespace: "test1",
+//		URLs:      []string{"nats://127.0.0.1:4222"},
 //	})
 //	if err != nil {
 //		return err
