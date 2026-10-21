@@ -18,14 +18,14 @@ func NewNamed[K comparable, V any](name string, cfg Config[K, V]) (*Cache[K, V],
 	if name == "" {
 		return nil, fmt.Errorf("lrucache: cache name must not be empty")
 	}
-	if _, ok := namedCaches.Load(name); ok {
-		return Named[K, V](name)
+	if value, ok := namedCaches.Load(name); ok {
+		return castNamedCache[K, V](name, value)
 	}
 	namedCacheInitMu.Lock()
 	defer namedCacheInitMu.Unlock()
 	// 等待锁期间其他调用可能已完成注册，须再次检查再创建。
-	if _, ok := namedCaches.Load(name); ok {
-		return Named[K, V](name)
+	if value, ok := namedCaches.Load(name); ok {
+		return castNamedCache[K, V](name, value)
 	}
 	cache, err := New(cfg)
 	if err != nil {
@@ -42,6 +42,10 @@ func Named[K comparable, V any](name string) (*Cache[K, V], error) {
 	if !ok {
 		return nil, fmt.Errorf("lrucache: cache %q is not registered", name)
 	}
+	return castNamedCache[K, V](name, value)
+}
+
+func castNamedCache[K comparable, V any](name string, value any) (*Cache[K, V], error) {
 	cache, ok := value.(*Cache[K, V])
 	if !ok {
 		return nil, fmt.Errorf("lrucache: cache %q has different key or value types", name)
