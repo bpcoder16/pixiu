@@ -301,6 +301,13 @@
 // 两个时长沿用 configx 解码，推荐 2160h、2m 等 Go 时长字符串；数字按纳秒处理，不支持 d 单位。
 // maxAge 为 0 时不限制消息年龄；duplicates 为 0 时由服务端确定窗口，不代表关闭去重。
 // 时长范围及组合约束由服务端校验；maxAge 大于 0 时，去重窗口不得超过它。
+// JetStream 的 ackWait、maxDeliver、maxAckPending、consume.workers、consume.maxMessages、retryDelay 可选。
+// 省略或 null 沿用 Default（当前依次为 60s、5、1000、1、0、0）；consume 整体也可省略或为 null。
+// 时长沿用 configx 的 Go 时长字符串或纳秒数解码；显式值覆盖 Default，交给 natsx 和服务端校验。
+// ackWait 必须大于 0；retryDelay 不得为负，0 等待 ackWait 超时重投，正值在失败后发送延迟 NAK。
+// consume.workers、consume.maxMessages 不得为负；零值分别按 1、有效 workers 的两倍处理。
+// workers 控制本地 Handler 并发，maxMessages 是不含处理中消息的 SDK 预取上限。
+// maxDeliver 包含首次投递；maxAckPending 是同一 Durable 下所有实例合计的未确认消息数上限。
 // coreConsumers 的 queue 非空时，subscribers 必须配置且解码后大于 1，否则在注册任何资源前报错。
 // 按 subscribers 为当前 Client 建立同组订阅，多订阅 Handler 须支持并发。
 // queue 为空时始终只有一个广播订阅，subscribers 可省略，负数由 natsx 注册入口拒绝。

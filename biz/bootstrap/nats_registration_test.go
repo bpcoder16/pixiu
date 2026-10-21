@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/natsx"
@@ -91,6 +92,185 @@ func TestNATSRegistrationDefaultsAndOverrides(t *testing.T) {
 	}
 	if !reflect.DeepEqual(batch.coreConsumers, wantCore) {
 		t.Fatalf("未沿用 Core Default: %+v", batch.coreConsumers)
+	}
+}
+
+func TestNATSRegistrationJetStreamOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options string
+		want    func(*natsx.JetStreamConsumer)
+	}{
+		{
+			name: "null",
+			options: `    ackWait: null
+    maxDeliver: null
+    maxAckPending: null
+    consume: null
+    retryDelay: null
+`,
+		},
+		{
+			name: "null-consume-fields",
+			options: `    consume:
+      workers: null
+      maxMessages: null
+`,
+		},
+		{
+			name:    "empty-consume",
+			options: "    consume: {}\n",
+		},
+		{
+			name: "overrides",
+			options: `    ackWait: 45s
+    maxDeliver: 7
+    maxAckPending: 200
+    consume:
+      workers: 4
+      maxMessages: 16
+    retryDelay: 250ms
+`,
+			want: func(consumer *natsx.JetStreamConsumer) {
+				consumer.Config.AckWait = 45 * time.Second
+				consumer.Config.MaxDeliver = 7
+				consumer.Config.MaxAckPending = 200
+				consumer.Consume.Workers = 4
+				consumer.Consume.MaxMessages = 16
+				consumer.RetryDelay = 250 * time.Millisecond
+			},
+		},
+		{
+			name: "workers-only",
+			options: `    consume:
+      workers: 3
+`,
+			want: func(consumer *natsx.JetStreamConsumer) {
+				consumer.Consume.Workers = 3
+			},
+		},
+		{
+			name: "max-messages-only",
+			options: `    consume:
+      maxMessages: 8
+`,
+			want: func(consumer *natsx.JetStreamConsumer) {
+				consumer.Consume.MaxMessages = 8
+			},
+		},
+		{
+			name: "explicit-zero",
+			options: `    ackWait: 0
+    maxDeliver: 0
+    maxAckPending: 0
+    consume:
+      workers: 0
+      maxMessages: 0
+    retryDelay: 0
+`,
+			want: func(consumer *natsx.JetStreamConsumer) {
+				consumer.Config.AckWait = 0
+				consumer.Config.MaxDeliver = 0
+				consumer.Config.MaxAckPending = 0
+				consumer.Consume.Workers = 0
+				consumer.Consume.MaxMessages = 0
+				consumer.RetryDelay = 0
+			},
+		},
+		{
+			name: "unlimited",
+			options: `    maxDeliver: -1
+    maxAckPending: -1
+`,
+			want: func(consumer *natsx.JetStreamConsumer) {
+				consumer.Config.MaxDeliver = -1
+				consumer.Config.MaxAckPending = -1
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := strings.Replace(registrationYAML, "    handler: registrationTask\n", "    handler: registrationTask\n"+tc.options, 1)
+			cfg, err := parseNATSRegistration(t, content)
+			if err != nil {
+				t.Fatal(err)
+			}
+			batch, err := cfg.bind(
+				natsx.MustNewJetStreamHandlerRegistry(registrationTask),
+				natsx.MustNewCoreHandlerRegistry(registrationCore),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			consumer := batch.jetStreamConsumers[0]
+			if consumer.Handler == nil {
+				t.Fatal("覆盖可选配置后仍须绑定 Handler")
+			}
+			consumer.Handler = nil
+			want := natsx.DefaultJetStreamConsumer("ORDERS", "worker", nil, "orders.created")
+			if tc.want != nil {
+				tc.want(&want)
+			}
+			if !reflect.DeepEqual(consumer, want) {
+				t.Fatalf("可选配置应区分缺省与显式值，其余字段保留 Default: got %+v, want %+v", consumer, want)
+			}
+		})
+	}
+}
+
+func TestNATSRegistrationRejectsInvalidJetStreamOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options string
+		want    string
+	}{
+		{
+			name:    "invalid-ack-wait",
+			options: "    ackWait: 1d\n",
+			want:    "ackWait",
+		},
+		{
+			name:    "invalid-retry-delay",
+			options: "    retryDelay: later\n",
+			want:    "retryDelay",
+		},
+		{
+			name:    "string-max-deliver",
+			options: "    maxDeliver: '5'\n",
+			want:    "maxDeliver",
+		},
+		{
+			name:    "map-max-ack-pending",
+			options: "    maxAckPending: {}\n",
+			want:    "maxAckPending",
+		},
+		{
+			name:    "scalar-consume",
+			options: "    consume: invalid\n",
+			want:    "consume",
+		},
+		{
+			name:    "string-workers",
+			options: "    consume:\n      workers: '2'\n",
+			want:    "workers",
+		},
+		{
+			name:    "bool-max-messages",
+			options: "    consume:\n      maxMessages: true\n",
+			want:    "maxMessages",
+		},
+		{
+			name:    "unknown-null-consume-field",
+			options: "    consume:\n      unknown: null\n",
+			want:    "unknown",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := strings.Replace(registrationYAML, "    handler: registrationTask\n", "    handler: registrationTask\n"+tc.options, 1)
+			_, err := parseNATSRegistration(t, content)
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tc.want)) {
+				t.Fatalf("应拒绝非法消费配置并包含 %q，实际: %v", tc.want, err)
+			}
+		})
 	}
 }
 

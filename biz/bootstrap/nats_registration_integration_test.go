@@ -56,6 +56,7 @@ func TestNATSFromConfig(t *testing.T) {
 		{name: "DuplicateStreams", run: testNATSFromConfigDuplicateStreams},
 		{name: "StreamValidation", run: testNATSFromConfigStreamValidation},
 		{name: "StreamOptions", run: testNATSFromConfigStreamOptions},
+		{name: "JetStreamOptions", run: testNATSFromConfigJetStreamOptions},
 		{name: "JetStreamConsumerValidation", run: testNATSFromConfigJetStreamConsumerValidation},
 		{name: "CoreConsumerValidation", run: testNATSFromConfigCoreConsumerValidation},
 		{name: "CoreSubscribers", run: testNATSFromConfigCoreSubscribers},
@@ -250,6 +251,17 @@ func testNATSFromConfigPreflightAndErrors(t *testing.T) {
 			}
 			if _, err := client.JetStream().Stream(ctx, "EVENTS"); !errors.Is(err, jetstream.ErrStreamNotFound) {
 				t.Fatalf("副本配置校验失败前不应创建 Stream: %v", err)
+			}
+		}
+		for _, option := range []string{"ackWait: 1d", "retryDelay: later", "consume:\n      unknown: null"} {
+			content := strings.Replace(natsRegistrationTemplate, "    handler: task", "    handler: task\n    "+option, 1)
+			writeNATSRegistration(t, "demo", content)
+			err := bootstrap.RegisterNATSFromConfig(ctx, "demo", js, nil)
+			if err == nil || !strings.Contains(err.Error(), "jetStreamConsumers[0]") || !strings.Contains(err.Error(), "nats-register.demo.yaml") {
+				t.Fatalf("消费配置解码错误应带路径及位置: %v", err)
+			}
+			if _, err := client.JetStream().Stream(ctx, "EVENTS"); !errors.Is(err, jetstream.ErrStreamNotFound) {
+				t.Fatalf("消费配置解码失败前不应创建 Stream: %v", err)
 			}
 		}
 		writeNATSRegistration(t, "demo", natsRegistrationTemplate)
@@ -523,10 +535,124 @@ streams:
 	})
 }
 
+func testNATSFromConfigJetStreamOptions(t *testing.T) {
+	isolatedNATS(t, func() {
+		client := registrationClients(t, true, "demo")[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		deliveries := make(chan time.Time, 2)
+		started := make(chan string, 2)
+		release := make(chan struct{})
+		defer close(release)
+		handlers := natsx.MustNewJetStreamHandlerRegistry()
+		handlers.MustRegister(func(ctx context.Context, msg jetstream.Msg) error {
+			if string(msg.Data()) == "retry" {
+				metadata, err := msg.Metadata()
+				if err != nil {
+					return err
+				}
+				deliveries <- time.Now()
+				if metadata.NumDelivered == 1 {
+					return errors.New("测试首次处理失败")
+				}
+				return nil
+			}
+			started <- string(msg.Data())
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}, "task")
+		handlers.MustRegister(func(context.Context, jetstream.Msg) error { return nil }, "noop")
+		writeNATSRegistration(t, "demo", `
+streamDefaults: {replicas: 1}
+streams:
+  - name: EVENTS
+    subjects: [events]
+jetStreamConsumers:
+  - stream: EVENTS
+    durable: worker
+    handler: task
+    ackWait: 30s
+    maxDeliver: 3
+    maxAckPending: 12
+    consume:
+      workers: 2
+      maxMessages: 1
+    retryDelay: 100ms
+  - stream: EVENTS
+    durable: defaults
+    handler: noop
+    ackWait: null
+    maxDeliver: null
+    maxAckPending: null
+    consume:
+      workers: null
+      maxMessages: null
+    retryDelay: null
+`)
+		if err := bootstrap.RegisterNATSFromConfig(ctx, "demo", handlers, nil); err != nil {
+			t.Fatal(err)
+		}
+		defaults := natsx.DefaultJetStreamConsumer("EVENTS", "defaults", nil).Config
+		for _, want := range []jetstream.ConsumerConfig{
+			{
+				Durable:       "worker",
+				AckWait:       30 * time.Second,
+				MaxDeliver:    3,
+				MaxAckPending: 12,
+			},
+			defaults,
+		} {
+			consumer, err := client.JetStream().Consumer(ctx, "EVENTS", want.Durable)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := consumer.CachedInfo().Config
+			if got.AckWait != want.AckWait || got.MaxDeliver != want.MaxDeliver || got.MaxAckPending != want.MaxAckPending {
+				t.Fatalf("远端 Consumer 配置未按 YAML 覆盖或继承: got %+v, want %+v", got, want)
+			}
+		}
+		if _, err := client.PublishJetStream(ctx, "events", []byte("retry"), "retry"); err != nil {
+			t.Fatal(err)
+		}
+		var first time.Time
+		for i := range 2 {
+			select {
+			case delivered := <-deliveries:
+				if i == 0 {
+					first = delivered
+				} else if delivered.Sub(first) < 75*time.Millisecond {
+					t.Fatalf("重投未遵守 retryDelay: %v", delivered.Sub(first))
+				}
+			case <-ctx.Done():
+				t.Fatal("正值 retryDelay 应在 AckWait 超时前触发重投")
+			}
+		}
+		// 两个 Handler 都阻塞时仍须同时开始处理，验证 YAML 配置的并发数实际生效。
+		for _, id := range []string{"first", "second"} {
+			if _, err := client.PublishJetStream(ctx, "events", []byte(id), id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for range 2 {
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal("consume.workers=2 应同时启动两个 Handler")
+			}
+		}
+	})
+}
+
 func testNATSFromConfigJetStreamConsumerValidation(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		durable string
+		name        string
+		durable     string
+		extraConfig string
+		want        string
 	}{
 		{
 			name:    "durable-whitespace",
@@ -535,6 +661,36 @@ func testNATSFromConfigJetStreamConsumerValidation(t *testing.T) {
 		{
 			name:    "duplicate",
 			durable: "first",
+		},
+		{
+			name:        "zero-ack-wait",
+			durable:     "second",
+			extraConfig: "    ackWait: 0\n",
+			want:        "requires AckWait or BackOff",
+		},
+		{
+			name:        "negative-ack-wait",
+			durable:     "second",
+			extraConfig: "    ackWait: -1s\n",
+			want:        "requires AckWait or BackOff",
+		},
+		{
+			name:        "negative-workers",
+			durable:     "second",
+			extraConfig: "    consume:\n      workers: -1\n",
+			want:        "negative consumption parameter",
+		},
+		{
+			name:        "negative-max-messages",
+			durable:     "second",
+			extraConfig: "    consume:\n      maxMessages: -1\n",
+			want:        "negative consumption parameter",
+		},
+		{
+			name:        "negative-retry-delay",
+			durable:     "second",
+			extraConfig: "    retryDelay: -1ms\n",
+			want:        "negative consumption parameter",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -554,12 +710,15 @@ jetStreamConsumers:
   - stream: EVENTS
     durable: '`+test.durable+`'
     handler: task
-`)
+`+test.extraConfig)
 				handlers := natsx.MustNewJetStreamHandlerRegistry()
 				handlers.MustRegister(func(context.Context, jetstream.Msg) error { return nil }, "task")
 				err := bootstrap.RegisterNATSFromConfig(ctx, "demo", handlers, nil)
 				if err == nil || !strings.Contains(err.Error(), "register JetStream consumers: natsx:") {
 					t.Fatalf("Consumer 通用校验及判重应由 natsx 执行: %v", err)
+				}
+				if !strings.Contains(err.Error(), test.want) {
+					t.Fatalf("消费参数校验应保留 natsx 错误 %q: %v", test.want, err)
 				}
 				if _, err = client.JetStream().Stream(ctx, "EVENTS"); err != nil {
 					t.Fatalf("Consumer 校验失败应保留前序已创建的 Stream: %v", err)

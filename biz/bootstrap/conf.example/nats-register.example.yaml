@@ -24,6 +24,15 @@ jetStreamConsumers:
     filterSubjects:
       - "orders.created"
     handler: "HandleOrderCreated"
+    # 以下六项均可省略或设为 null，沿用 natsx Default；注释中列出当前默认值。
+    # ackWait: "60s"       # ACK 等待时间，必须大于 0；应覆盖预取等待和业务处理时间。
+    # maxDeliver: 5        # 最大投递次数，包含首次；范围由服务端校验。
+    # maxAckPending: 1000  # 同一 Durable 下所有实例合计的未确认消息数上限。
+    # consume:
+    #   workers: 1         # 本地并发数；0 按 1 处理，Handler 须支持并发。
+    #   maxMessages: 0     # SDK 预取上限；0 为有效 workers 的两倍，不含处理中的消息。
+    # retryDelay: "0s"     # 失败重投延迟；0 等待 ackWait 超时，正值发送延迟 NAK。
+    # ackWait、retryDelay 支持 Go 时长单位；workers、maxMessages、retryDelay 不得为负。
 
 # 下面的 Handler 须由应用的 CoreHandlerRegistry 登记。
 coreConsumers:
@@ -40,5 +49,5 @@ coreConsumers:
 # 三份清单均可省略或设为 []；未引用的 Handler 不启动。
 # filterSubjects 省略或为空时消费整个 Stream；queue 省略或为空时广播。
 # subscribers 仅在 queue 非空时控制订阅数，广播始终只有一个订阅。
-# 除上述字段外全部沿用 natsx 的 Default，不支持 enabled、运行调参或完整 SDK 配置。
+# 除上述字段外全部沿用 natsx 的 Default，不支持 enabled、热更新或完整 SDK 配置。
 # 删除声明后重启不删除远端 Stream/Durable；同配置复用，冲突报错，不自动更新。

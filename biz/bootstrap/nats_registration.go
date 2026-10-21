@@ -23,6 +23,8 @@ import (
 // nil 注册表视为空表，未引用的 Handler 不启动；全局 streamDefaults.replicas 始终必填且为正整数。
 // 逐项 Stream 的 replicas 不得超过全局值，超限时在注册任何资源前返回错误。
 // Stream retention、maxAge、duplicates 可选，省略或 null 沿用 Default；显式零时长按 NATS 语义处理。
+// JetStream ackWait、maxDeliver、maxAckPending、consume.workers、consume.maxMessages、retryDelay 可选，
+// 省略或 null 沿用 Default，显式值的归一化及校验交给 natsx 注册入口和服务端。
 // Core queue 非空时 subscribers 必须大于 1，否则在注册任何资源前返回错误。
 // 返回前可能执行 Handler；失败须中止启动并由原资源栈关闭 Client，不回滚远端资源或业务。
 // ctx 必须非 nil；其校验与 Client 关闭检查沿用 natsx，ctx 不控制长期 Handler，不提供热更新或整批重试。
@@ -75,10 +77,18 @@ type natsStreamRegistration struct {
 }
 
 type natsJetStreamRegistration struct {
-	Stream         string   `mapstructure:"stream"`
-	Durable        string   `mapstructure:"durable"`
-	FilterSubjects []string `mapstructure:"filterSubjects"`
-	Handler        string   `mapstructure:"handler"`
+	Stream         string         `mapstructure:"stream"`
+	Durable        string         `mapstructure:"durable"`
+	FilterSubjects []string       `mapstructure:"filterSubjects"`
+	Handler        string         `mapstructure:"handler"`
+	AckWait        *time.Duration `mapstructure:"ackWait"`
+	MaxDeliver     *int           `mapstructure:"maxDeliver"`
+	MaxAckPending  *int           `mapstructure:"maxAckPending"`
+	Consume        struct {
+		Workers     *int `mapstructure:"workers"`
+		MaxMessages *int `mapstructure:"maxMessages"`
+	} `mapstructure:"consume"`
+	RetryDelay *time.Duration `mapstructure:"retryDelay"`
 }
 
 type natsCoreRegistration struct {
@@ -141,15 +151,32 @@ func (cfg *natsRegistrationConfig) bind(jsRegistry *natsx.JetStreamHandlerRegist
 		if !ok {
 			return nil, fmt.Errorf("jetStreamConsumers[%d] %q/%q: unknown JetStream handler %q", i, spec.Stream, spec.Durable, spec.Handler)
 		}
-		batch.jetStreamConsumers = append(
-			batch.jetStreamConsumers,
-			natsx.DefaultJetStreamConsumer(
-				spec.Stream,
-				spec.Durable,
-				handler,
-				spec.FilterSubjects...,
-			),
+		consumer := natsx.DefaultJetStreamConsumer(
+			spec.Stream,
+			spec.Durable,
+			handler,
+			spec.FilterSubjects...,
 		)
+		// 仅覆盖显式配置的字段，保留零值语义，由 natsx 和服务端统一归一化及校验。
+		if spec.AckWait != nil {
+			consumer.Config.AckWait = *spec.AckWait
+		}
+		if spec.MaxDeliver != nil {
+			consumer.Config.MaxDeliver = *spec.MaxDeliver
+		}
+		if spec.MaxAckPending != nil {
+			consumer.Config.MaxAckPending = *spec.MaxAckPending
+		}
+		if spec.Consume.Workers != nil {
+			consumer.Consume.Workers = *spec.Consume.Workers
+		}
+		if spec.Consume.MaxMessages != nil {
+			consumer.Consume.MaxMessages = *spec.Consume.MaxMessages
+		}
+		if spec.RetryDelay != nil {
+			consumer.RetryDelay = *spec.RetryDelay
+		}
+		batch.jetStreamConsumers = append(batch.jetStreamConsumers, consumer)
 	}
 	for i, spec := range cfg.CoreConsumers {
 		if spec.Queue != "" && spec.Subscribers <= 1 {
