@@ -29,8 +29,9 @@ import (
 // 省略或 null 沿用 Default，显式值的归一化及校验交给 natsx 注册入口和服务端。
 // Core queue 非空时 subscribers 必须大于 1，否则在注册任何资源前返回错误。
 // 返回前可能执行 Handler；失败须中止启动并由原资源栈关闭 Client，不回滚远端资源或业务。
-// ctx 必须非 nil；其校验与 Client 关闭检查沿用 natsx，ctx 不控制长期 Handler，不提供热更新或整批重试。
-func RegisterNATSFromConfig(ctx context.Context, instanceName string, jetStreamHandlers *natsx.JetStreamHandlerRegistry, coreHandlers *natsx.CoreHandlerRegistry) error {
+// 内部使用 context.Background()，不设置整体注册期限，资源请求与 Core Flush 沿用 SDK 默认行为。
+// Client 关闭检查沿用 natsx；长期 Handler 使用独立消息 context，不提供热更新或整批重试。
+func RegisterNATSFromConfig(instanceName string, jetStreamHandlers *natsx.JetStreamHandlerRegistry, coreHandlers *natsx.CoreHandlerRegistry) error {
 	if instanceName == "" || strings.IndexFunc(instanceName, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-')
 	}) >= 0 {
@@ -48,6 +49,7 @@ func RegisterNATSFromConfig(ctx context.Context, instanceName string, jetStreamH
 	if err != nil {
 		return fmt.Errorf("%s: %w", location, err)
 	}
+	ctx := context.Background()
 	if err = client.RegisterStreams(ctx, batch.streams...); err != nil {
 		return fmt.Errorf("%s: register streams: %w", location, err)
 	}

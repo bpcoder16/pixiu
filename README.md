@@ -381,7 +381,7 @@ func main() {
 
 此示例只展示初始化；常驻 HTTP 应用还需接入上面的服务管理器。`MustRegisterNATS` 声明实例，`MustBaseInit` 只完成连接初始化，不会自动准备 Stream 或启动消费。
 
-需要消费时，应用先通过 `natsx.MustNewJetStreamHandlerRegistry` / `MustNewCoreHandlerRegistry` 登记处理函数，在迁移及回调依赖就绪后调用 `bootstrap.RegisterNATSFromConfig(setupCtx, "events", jsHandlers, coreHandlers)`。它读取独立的 `conf/nats-register.events.yaml`，按 Handler 名称绑定函数，并依次注册 Stream、JetStream 消费者和 Core 消费者；模板见 [NATS 消费注册配置](biz/bootstrap/conf.example/nats-register.example.yaml)，调用样例见 [bootstrap 文档](biz/bootstrap/doc.go)。包级具名函数默认保留原始大小写，闭包、方法值及泛型函数须显式命名，配置中的 Handler 引用须完全一致。
+需要消费时，应用先通过 `natsx.MustNewJetStreamHandlerRegistry` / `MustNewCoreHandlerRegistry` 登记处理函数，在迁移及回调依赖就绪后调用 `bootstrap.RegisterNATSFromConfig("events", jsHandlers, coreHandlers)`。它读取独立的 `conf/nats-register.events.yaml`，按 Handler 名称绑定函数，并在内部创建 `context.Background()`，依次注册 Stream、JetStream 消费者和 Core 消费者，不设置整体注册期限；模板见 [NATS 消费注册配置](biz/bootstrap/conf.example/nats-register.example.yaml)，调用样例见 [bootstrap 文档](biz/bootstrap/doc.go)。包级具名函数默认保留原始大小写，闭包、方法值及泛型函数须显式命名，配置中的 Handler 引用须完全一致。
 
 注册文件中的 `streamDefaults.replicas` 始终必填且为正整数，即使清单为空。每个客户端的三类注册入口各只允许调用一次，通过入口检查后，空清单或失败也占用次数；配置装配不能与手动注册混用，失败后应中止启动并关闭客户端，不在同一实例上重试。JetStream 处理函数完成本条业务后返回，由组件根据返回结果确认或重投，业务不自行 ACK / NAK / Term，仍需保证幂等。
 

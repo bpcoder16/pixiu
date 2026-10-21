@@ -282,7 +282,6 @@
 //	    return nil
 //	}, "HandleConfigRefresh")
 //	if err := bootstrap.RegisterNATSFromConfig(
-//	    context.Background(),
 //	    "orders",
 //	    jsHandlers,
 //	    coreHandlers,
@@ -292,7 +291,8 @@
 //
 // 示例需导入 context、infra/natsx、nats.go 和 nats.go/jetstream，并已初始化 orders 命名客户端及配置环境。
 // 客户端未登记或 CloseAll 开始后查询沿用 natsx.Named 的 panic；配置和资源注册失败返回 error。
-// ctx 和 Client 关闭状态在配置预检后交给 natsx 注册入口校验。
+// 内部创建 context.Background()，不设置整体注册期限，资源请求与 Core Flush 沿用 SDK 默认行为。
+// Client 关闭状态在配置预检后交给 natsx 注册入口校验；长期 Handler 使用独立消息 context。
 // 文件可使用 conf.example/nats-register.example.yaml，保留示例已登记的 Handler 对应项。
 // 注册文件不接受 namespace；该值统一来自 nats.<name>.yaml 的客户端配置。
 // 例如 namespace: test1 时，Stream 名称及引用 ORDERS 变为 test1_ORDERS，Durable worker 变为 test1_worker；
