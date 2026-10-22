@@ -170,8 +170,8 @@ func (c *Client) subscribeHandler(subject, queue string, handler CoreHandler) (*
 		c.logResult(msgCtx, "coreCallback", msg.Subject, msg, nil, begin, err, nil)
 	}
 	c.consumerMu.Lock()
-	defer c.consumerMu.Unlock()
 	if c.closing.Load() {
+		c.consumerMu.Unlock()
 		return nil, ErrClosed
 	}
 	begin := time.Now()
@@ -184,13 +184,15 @@ func (c *Client) subscribeHandler(subject, queue string, handler CoreHandler) (*
 	} else {
 		sub, err = c.nc.QueueSubscribe(subject, queue, wrapped)
 	}
-	if err != nil {
-		c.logResult(ctx, "coreSubscribe", subject, nil, nil, begin, err, nil)
-		return nil, err
+	if err == nil {
+		c.coreSubscriptions = append(c.coreSubscriptions, sub)
 	}
-	c.coreSubscriptions = append(c.coreSubscriptions, sub)
-	c.logResult(ctx, "coreSubscribe", subject, nil, nil, begin, nil, nil)
-	return sub, nil
+	// 日志不能占用停收锁；成功和失败的注册日志都须计入实际排空。
+	c.coreHandlers.Add(1)
+	c.consumerMu.Unlock()
+	defer c.coreHandlers.Done()
+	c.logResult(ctx, "coreSubscribe", subject, nil, nil, begin, err, nil)
+	return sub, err
 }
 
 func (c *Client) logResult(ctx context.Context, action, subject string, msg, reply *nats.Msg, begin time.Time, err error, ack *jetstream.PubAck) {

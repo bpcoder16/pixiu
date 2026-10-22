@@ -49,14 +49,20 @@ func TestGinHTTPServiceAssembly(t *testing.T) {
 						c.Status(http.StatusNoContent)
 					})
 				},
-					ginx.OpenAPIModule{Name: "app", Title: "App"},
-					ginx.OpenAPIModule{Name: "admin", Title: "Admin"},
+					ginx.OpenAPIModule{
+						Name:  "app",
+						Title: "App",
+					},
+					ginx.OpenAPIModule{
+						Name:  "admin",
+						Title: "Admin",
+					},
 				)
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer service.Shutdown()
-				if calls != 1 || engine == nil || service.Name != "http" || service.Run == nil || service.Shutdown == nil {
+				defer stopAndWait(service.Stop, service.Wait, service.Cancel)
+				if calls != 1 || engine == nil || service.Name != "http" || service.Run == nil || service.Stop == nil {
 					t.Fatalf("Gin HTTP 服务装配不完整: calls=%d, service=%+v", calls, service)
 				}
 				for _, path := range []string{"/healthz", "/docs/app", "/openapi/admin.json"} {
@@ -78,7 +84,7 @@ func TestGinHTTPServiceAssembly(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if err := empty.Shutdown(); err != nil {
+					if err := stopAndWait(empty.Stop, empty.Wait, empty.Cancel); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -105,7 +111,7 @@ func TestGinHTTPServiceConstructionErrors(t *testing.T) {
 				service, err := bootstrap.NewGinHTTPService(func(*gin.Engine) {
 					calls++
 				})
-				if err == nil || service.Run != nil || service.Shutdown != nil {
+				if err == nil || service.Run != nil || service.Stop != nil {
 					t.Fatalf("构造失败不应返回可用服务: service=%+v, err=%v", service, err)
 				}
 				wantCalls := 0

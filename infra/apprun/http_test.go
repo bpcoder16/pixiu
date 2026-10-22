@@ -13,13 +13,14 @@ import (
 
 	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/httpserver"
+	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
 func TestHTTPShutdownThenDependencyCleanup(t *testing.T) {
 	for _, timeout := range []bool{false, true} {
 		name := "完整响应后退出"
 		if timeout {
-			name = "组件超时后继续清理"
+			name = "总超时后取消并回收资源"
 		}
 		t.Run(name, func(t *testing.T) {
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -28,39 +29,28 @@ func TestHTTPShutdownThenDependencyCleanup(t *testing.T) {
 			}
 			addr := listener.Addr().String()
 			_ = listener.Close()
-			manager, err := apprun.New(time.Second)
+			budget := time.Second
+			if timeout {
+				budget = 80 * time.Millisecond
+			}
+			manager, err := apprun.New(budget)
 			if err != nil {
 				t.Fatal(err)
 			}
 			var dependencyClosed atomic.Bool
-			dependencyStop := make(chan struct{})
-			if err := manager.Register(apprun.Service{
-				Name: "dependency",
-				Run: func() error {
-					<-dependencyStop
-					return nil
-				},
-				Shutdown: func() error {
-					dependencyClosed.Store(true)
-					close(dependencyStop)
-					return nil
-				},
-			}); err != nil {
-				t.Fatal(err)
-			}
+			var resources lifecycle.Stack
+			_ = resources.Register(func() error {
+				dependencyClosed.Store(true)
+				return nil
+			})
 			entered := make(chan context.Context, 1)
 			release := make(chan struct{})
 			handlerDone := make(chan struct{})
 			var releaseOnce sync.Once
 			unblock := func() { releaseOnce.Do(func() { close(release) }) }
 			defer unblock()
-			drainTimeout := 2 * time.Second
-			if timeout {
-				drainTimeout = 80 * time.Millisecond
-			}
 			server, err := httpserver.New(httpserver.Config{
-				Addr:            addr,
-				ShutdownTimeout: drainTimeout,
+				Addr: addr,
 			}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/healthz" {
 					w.WriteHeader(http.StatusNoContent)
@@ -72,7 +62,7 @@ func TestHTTPShutdownThenDependencyCleanup(t *testing.T) {
 					<-r.Context().Done()
 				}
 				<-release
-				if !timeout && dependencyClosed.Load() {
+				if dependencyClosed.Load() && !timeout {
 					t.Error("请求处理期间依赖被关闭")
 				}
 				_, _ = io.WriteString(w, "complete")
@@ -90,17 +80,23 @@ func TestHTTPShutdownThenDependencyCleanup(t *testing.T) {
 					}
 					return err
 				},
-				Shutdown: func() error {
+				Stop: func() error {
 					close(stopping)
-					return server.Shutdown()
+					return server.Stop()
 				},
+				Wait:   server.Wait,
+				Cancel: server.Cancel,
 			}); err != nil {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			done := make(chan error, 1)
-			go func() { done <- manager.Run(ctx) }()
+			go func() {
+				err := manager.Run(ctx)
+				err = errors.Join(err, resources.Close())
+				done <- err
+			}()
 			client := &http.Client{Timeout: 5 * time.Second}
 			defer client.CloseIdleConnections()
 			waitHTTP(t, client, "http://"+addr+"/healthz")
@@ -133,12 +129,12 @@ func TestHTTPShutdownThenDependencyCleanup(t *testing.T) {
 			}
 			if timeout {
 				receive(t, requestCtx.Done())
-				// 保持 handler 阻塞，HTTP 自身超时后就应继续清理，不耗尽总期限。
+				// 保持 handler 阻塞，验证取消后仍会进入资源回收。
 			} else {
 				unblock()
 			}
 			err = receive(t, done)
-			if errors.Is(err, apprun.ErrShutdownTimeout) || timeout && !errors.Is(err, context.DeadlineExceeded) || !timeout && err != nil {
+			if errors.Is(err, apprun.ErrShutdownTimeout) != timeout || timeout && !errors.Is(err, context.DeadlineExceeded) || !timeout && err != nil {
 				t.Fatalf("关闭结果: %v", err)
 			}
 			if timeout {
@@ -156,7 +152,7 @@ func TestHTTPShutdownThenDependencyCleanup(t *testing.T) {
 				t.Fatal("HTTP 超时未强制关闭请求连接")
 			}
 			if !dependencyClosed.Load() {
-				t.Fatal("未关闭依赖")
+				t.Fatalf("资源回收不符合排空结果: timeout=%v, closed=%v", timeout, dependencyClosed.Load())
 			}
 		})
 	}
@@ -176,9 +172,11 @@ func TestHTTPListenFailure(t *testing.T) {
 	}
 	var manager apprun.Manager
 	if err := manager.Register(apprun.Service{
-		Name:     "http",
-		Run:      server.Run,
-		Shutdown: server.Shutdown,
+		Name:   "http",
+		Run:    server.Run,
+		Stop:   server.Stop,
+		Wait:   server.Wait,
+		Cancel: server.Cancel,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -212,11 +210,13 @@ func TestHTTPShutdownBeforeRunEntersServer(t *testing.T) {
 			}
 			return err
 		},
-		Shutdown: func() error {
-			err := server.Shutdown()
+		Stop: func() error {
+			err := server.Stop()
 			close(proceed)
 			return err
 		},
+		Wait:   server.Wait,
+		Cancel: server.Cancel,
 	}); err != nil {
 		t.Fatal(err)
 	}

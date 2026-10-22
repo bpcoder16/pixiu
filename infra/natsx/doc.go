@@ -62,13 +62,17 @@
 // 注册表先拒绝重复或关闭状态，连接参数统一由 New 校验。
 // 未初始化、名称不存在或 CloseAll 开始后查询会 panic。CloseAll 只关闭已登记实例，
 // 默认实例只关闭一次，并汇总错误；重复调用返回同一次结果。
-// 关闭前停止并等待外部生产者，托管消费由 Client.Close 排空；消费者及其发布服务须在
-// 启动时持有客户端引用，排空期间不能再次查询 Default/Named。数据库等依赖和日志晚于 NATS 关闭。
+// 统一停机先调用 StopConsumers，WaitConsumers(ctx) 等待已接收消息、Handler、ACK 和日志完成。
+// Core 注册日志在停收锁外写入，成功和失败日志都纳入实际排空；慢日志不阻塞停收和取消。
+// 停收期间保留共享连接和发布/请求能力，不设独立消费排空期限；托管服务共享 30 秒。
+// 排空超时调用 CancelConsumers，然后继续资源栈回收。StopConsumers 与 Close 复用同一次停收状态。
+// CancelConsumers 也可直接或重复调用：先停收再取消业务，随后仍可通过 WaitConsumers 确认实际收尾。
+// 显式 CancelConsumers 后 Close 不再等待未退出 Handler；断连引起的取消仍保留原有回调等待。
 // 注册表不保证多实例关闭顺序，各实例使用独立的 CloseTimeout，不支持关闭期跨实例依赖。
 //
 // 应用启动时在依赖就绪后创建并持有客户端，依次调用 RegisterStreams、
 // RegisterJetStreamConsumers 和 RegisterCoreConsumers；运行期间保持消费关系固定。
-// 关闭时先停止并等待外部生产者，再通过 Client.Close 统一排空并关闭连接，最后关闭日志。
+// 受管服务先通过 StopConsumers/WaitConsumers 排空，再由资源栈关闭客户端；独立 New 客户端也可直接 Close，使用已持有引用完成消费收尾。
 // Close 拒绝新增注册，排空消费后拒绝新发布与请求，再等待异步发布结果并 drain 连接。
 // 排空期间 handler ctx 保持有效，可以继续发布和完成 ACK；Close 不汇总单条发布错误。
 // 连接意外永久关闭后停止接纳新的 Core 回调，Close 在整体期限内等待在途回调及其结果日志结束，
@@ -77,8 +81,8 @@
 // 调用方可通过 nats.MaxReconnects、nats.PingInterval、nats.ReconnectBufSize 等官方选项覆盖。
 // 首次连接失败仍直接返回错误；重连成功后由官方客户端恢复原有订阅。
 // DrainTimeout、CloseTimeout 的零值默认保持 10 秒、20 秒，由调用方通过 Config 按需设置。
-// DrainTimeout 仅用于底层 NATS 连接 drain；消费排空、异步确认等待和最终连接关闭
-// 共用 CloseTimeout 整体期限，各阶段不重新计时。
+// DrainTimeout 仅用于底层 NATS 连接 drain；直接 Close 时消费排空、异步确认等待和连接关闭共用 CloseTimeout。
+// 已完成 WaitConsumers 的客户端不会再次排空原消费句柄；该方法的等待由外部服务预算管理。
 // 关闭完成后的连接 LastError 仅对 ErrDrainTimeout、ErrTimeout 记录日志，不作为返回错误。
 // 发起连接 Drain 失败及整体关闭超时仍返回错误。
 // Config.JetStream 使用 JetStreamConfig，目前仅开放 PublishAsyncTimeout：

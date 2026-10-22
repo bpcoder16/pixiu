@@ -25,6 +25,7 @@ var natsInstances = instanceGroup[natsFileConfig, natsx.Config, *natsx.Client]{
 // 仅在 MustBaseInit 前串行调用；名称为非空 ASCII 字母、数字、下划线和连字符组合。
 // 重复名称、第二个默认实例或初始化开始后注册均 panic；允许没有默认实例。
 // MustBaseInit 从 env.ConfigDirPath() 读取 nats.<name>.yaml，失败时 panic。
+// 客户端关闭登记到资源栈；资源回收前由 Start 排空 NATS 消费服务。
 func MustRegisterNATS(name string, isDefault bool) {
 	natsInstances.mustRegister(name, isDefault)
 }

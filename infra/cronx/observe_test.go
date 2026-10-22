@@ -85,7 +85,7 @@ func TestOverlapSkipsWithoutLogging(t *testing.T) {
 	// 让同一个引擎推进多个调度周期，慢任务应持续占用自己的执行位置。
 	waitFor(t, func() bool { return ticks.Load() >= 4 })
 	closed := make(chan error, 1)
-	go func() { closed <- s.Shutdown() }()
+	go func() { closed <- stopAndWait(s.Stop, s.Wait, s.Cancel) }()
 	waitFor(t, func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -95,7 +95,6 @@ func TestOverlapSkipsWithoutLogging(t *testing.T) {
 	if err := <-closed; err != nil {
 		t.Fatal(err)
 	}
-	s.Wait()
 	if runs.Load() != 1 {
 		t.Fatalf("重叠触发不得重复执行，实际次数: %d", runs.Load())
 	}
@@ -111,7 +110,7 @@ func TestWaitIncludesShutdownLogging(t *testing.T) {
 	finish := sync.OnceFunc(func() { close(release) })
 	defer finish()
 	captureLogs(t, func(p []byte) (int, error) {
-		if strings.Contains(string(p), "CronShutdown") {
+		if strings.Contains(string(p), "CronStopped") {
 			close(logging)
 			<-release
 		}
@@ -122,11 +121,11 @@ func TestWaitIncludesShutdownLogging(t *testing.T) {
 		t.Fatal(err)
 	}
 	closed := make(chan error, 1)
-	go func() { closed <- s.Shutdown() }()
+	go func() { closed <- stopAndWait(s.Stop, s.Wait, s.Cancel) }()
 	<-logging
 	waited := make(chan struct{})
 	go func() {
-		s.Wait()
+		s.Wait(context.Background())
 		close(waited)
 	}()
 	select {
@@ -139,110 +138,6 @@ func TestWaitIncludesShutdownLogging(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-waited
-}
-
-func TestShutdownDeadlineIncludesLifecycleLogging(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		message string
-		run     bool
-	}{
-		{
-			name:    "before-run",
-			message: "CronShutdown",
-		},
-		{
-			name:    "shutdown-log",
-			message: "CronShutdown",
-			run:     true,
-		},
-		{
-			name:    "start-log",
-			message: "CronStart",
-			run:     true,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			started, logging, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
-			finish := sync.OnceFunc(func() { close(release) })
-			captureLogs(t, func(p []byte) (int, error) {
-				if strings.Contains(string(p), "CronStart") {
-					close(started)
-				}
-				if strings.Contains(string(p), tc.message) {
-					close(logging)
-					<-release
-				}
-				return len(p), nil
-			})
-			s, err := New(Config{
-				DrainTimeout:    30 * time.Millisecond,
-				ShutdownTimeout: 100 * time.Millisecond,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				finish()
-				_ = s.Shutdown()
-				s.Wait()
-			})
-			ran := make(chan error, 1)
-			if tc.run {
-				go func() { ran <- s.Run() }()
-				select {
-				case <-started:
-				case <-time.After(2 * time.Second):
-					t.Fatal("未进入启动日志")
-				}
-			}
-			closed := make(chan error, 1)
-			go func() { closed <- s.Shutdown() }()
-			select {
-			case <-logging:
-			case <-time.After(2 * time.Second):
-				t.Fatal("未进入待验证的生命周期日志")
-			}
-			var closeErr error
-			select {
-			case closeErr = <-closed:
-				if !errors.Is(closeErr, context.DeadlineExceeded) {
-					t.Fatalf("日志未写完应返回关闭超时: %v", closeErr)
-				}
-			case <-time.After(2 * time.Second):
-				t.Fatal("日志写入阻塞不能绕过关闭总预算")
-			}
-			if tc.run {
-				select {
-				case err := <-ran:
-					if err != closeErr {
-						t.Fatalf("Run 应返回同一次关闭结果: %v", err)
-					}
-				case <-time.After(2 * time.Second):
-					t.Fatal("日志写入阻塞不能阻止 Run 返回")
-				}
-			}
-			if err := s.Shutdown(); err != closeErr {
-				t.Fatalf("重复关闭应保留同一次超时结果: %v", err)
-			}
-			waited := make(chan struct{})
-			go func() {
-				s.Wait()
-				close(waited)
-			}()
-			select {
-			case <-waited:
-				t.Fatal("超时后 Wait 仍须等待日志实际写完")
-			case <-time.After(20 * time.Millisecond):
-			}
-			finish()
-			select {
-			case <-waited:
-			case <-time.After(2 * time.Second):
-				t.Fatal("日志写完后 Wait 未返回")
-			}
-		})
-	}
 }
 
 func TestTimeoutWarningAndUnlockFailure(t *testing.T) {
@@ -294,7 +189,7 @@ func TestTimeoutWarningAndUnlockFailure(t *testing.T) {
 	default:
 	}
 	closed := make(chan error, 1)
-	go func() { closed <- s.Shutdown() }()
+	go func() { closed <- stopAndWait(s.Stop, s.Wait, s.Cancel) }()
 	waitFor(t, func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -348,10 +243,7 @@ func TestShutdownPreservesBusinessFailure(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			records := recordLogs(t)
 			entered := make(chan struct{})
-			s, _ := runScheduler(t, Config{
-				DrainTimeout:    30 * time.Millisecond,
-				ShutdownTimeout: time.Second,
-			}, Job{
+			s, _ := runScheduler(t, Config{}, Job{
 				Name:  "job",
 				Every: 100 * time.Millisecond,
 				Handler: func(ctx context.Context) error {
@@ -361,7 +253,9 @@ func TestShutdownPreservesBusinessFailure(t *testing.T) {
 				},
 			})
 			<-entered
-			if err := s.Shutdown(); err != nil {
+			_ = s.Stop()
+			s.Cancel()
+			if err := stopAndWait(s.Stop, s.Wait, s.Cancel); err != nil {
 				t.Fatal(err)
 			}
 			if countResults(records(), tc.status) != 1 {
@@ -413,7 +307,7 @@ func TestResultDurationExcludesTimeoutLogWait(t *testing.T) {
 	})
 	<-entered
 	closed := make(chan error, 1)
-	go func() { closed <- s.Shutdown() }()
+	go func() { closed <- stopAndWait(s.Stop, s.Wait, s.Cancel) }()
 	waitFor(t, func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -438,5 +332,31 @@ func TestResultDurationExcludesTimeoutLogWait(t *testing.T) {
 	duration := time.Duration(record.Duration * float64(time.Millisecond))
 	if duration >= beforeLogRelease.Sub(started)-20*time.Millisecond {
 		t.Fatalf("执行耗时不应包含等待超时日志的时间: duration=%s wall=%s", duration, beforeLogRelease.Sub(started))
+	}
+}
+
+func TestWaitDeadlineIncludesLifecycleLogging(t *testing.T) {
+	logging, release := make(chan struct{}), make(chan struct{})
+	captureLogs(t, func(p []byte) (int, error) {
+		if strings.Contains(string(p), "CronStopped") {
+			close(logging)
+			<-release
+		}
+		return len(p), nil
+	})
+	s, err := New(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Stop()
+	<-logging
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := s.Wait(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("日志阻塞未受期限限制: %v", err)
+	}
+	close(release)
+	if err := s.Wait(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

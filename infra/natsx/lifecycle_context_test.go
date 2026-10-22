@@ -12,7 +12,7 @@ import (
 
 func TestHandlerContextOwnedByClient(t *testing.T) {
 	for _, mode := range []string{"core", "queue", "pull"} {
-		for _, shutdown := range []string{"drain", "timeout"} {
+		for _, shutdown := range []string{"drain", "consumer-drain", "timeout"} {
 			t.Run(mode+"/"+shutdown, func(t *testing.T) {
 				closeTimeout := 2 * time.Second
 				if shutdown == "timeout" {
@@ -97,8 +97,16 @@ func TestHandlerContextOwnedByClient(t *testing.T) {
 					t.Fatalf("消息 ctx 不应带外部期限或取消状态: %v", msgCtx.Err())
 				}
 				closed := make(chan error, 1)
-				go func() { closed <- c.Close() }()
-				if shutdown == "drain" {
+				go func() {
+					if shutdown == "consumer-drain" {
+						c.StopConsumers()
+						_ = c.WaitConsumers(context.Background())
+						closed <- nil
+						return
+					}
+					closed <- c.Close()
+				}()
+				if shutdown != "timeout" {
 					deadline := time.After(time.Second)
 					for !c.closing.Load() {
 						select {
@@ -114,18 +122,26 @@ func TestHandlerContextOwnedByClient(t *testing.T) {
 				}
 				select {
 				case err := <-closed:
-					if shutdown == "drain" && err != nil || shutdown == "timeout" && !errors.Is(err, ErrCloseTimeout) {
+					if shutdown != "timeout" && err != nil || shutdown == "timeout" && !errors.Is(err, ErrCloseTimeout) {
 						t.Fatalf("Close 结果不符: %v", err)
 					}
 				case <-time.After(3 * time.Second):
 					t.Fatal("Close 未按期限返回")
+				}
+				if shutdown == "consumer-drain" {
+					if c.Conn().IsClosed() {
+						t.Fatal("消费排空不应关闭共享连接")
+					}
+					if err := c.Publish(context.Background(), "after.drain", nil); err != nil {
+						t.Fatalf("排空后连接仍须允许发布: %v", err)
+					}
 				}
 				if !errors.Is(msgCtx.Err(), context.Canceled) {
 					t.Fatalf("关闭后没有取消消息 ctx: %v", msgCtx.Err())
 				}
 				select {
 				case err := <-finished:
-					if shutdown == "drain" && err != nil || shutdown == "timeout" && !errors.Is(err, context.Canceled) {
+					if shutdown != "timeout" && err != nil || shutdown == "timeout" && !errors.Is(err, context.Canceled) {
 						t.Fatalf("回调退出状态不符: %v", err)
 					}
 				case <-time.After(time.Second):
@@ -169,5 +185,105 @@ func TestOperationsRetainCallerContext(t *testing.T) {
 	defer cancelRequest()
 	if _, err := c.Request(requestCtx, subject, nil, nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Request 未遵守调用方超时: %v", err)
+	}
+}
+
+func TestCancelConsumersBeforeRegistration(t *testing.T) {
+	c, err := New(Config{
+		Name: "cancel-before-registration",
+		URLs: []string{startServer(t)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	if err := c.RegisterStreams(context.Background(), DefaultStreamConfig("EVENTS", 1, "events")); err != nil {
+		t.Fatal(err)
+	}
+	c.CancelConsumers()
+	c.CancelConsumers()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := c.WaitConsumers(ctx); err != nil {
+		t.Errorf("直接 CancelConsumers 后未完成排空: %v", err)
+	}
+	core := DefaultCoreConsumer("work", "work", func(context.Context, *nats.Msg) error { return nil })
+	if err := c.RegisterCoreConsumers(context.Background(), core); !errors.Is(err, ErrClosed) {
+		t.Errorf("CancelConsumers 后 Core 注册 = %v，期望 ErrClosed", err)
+	}
+	pull := DefaultJetStreamConsumer("EVENTS", "worker", func(context.Context, jetstream.Msg) error { return nil })
+	if err := c.RegisterJetStreamConsumers(context.Background(), pull); !errors.Is(err, ErrClosed) {
+		t.Errorf("CancelConsumers 后 JetStream 注册 = %v，期望 ErrClosed", err)
+	}
+	if c.Conn().IsClosed() {
+		t.Error("CancelConsumers 不应关闭共享连接")
+	}
+	if err := c.Publish(context.Background(), "after.cancel", nil); err != nil {
+		t.Errorf("CancelConsumers 后共享连接应仍允许发布: %v", err)
+	}
+}
+
+func TestExplicitCancelAllowsCloseBeforeHandlerReturns(t *testing.T) {
+	c, err := New(Config{
+		Name: "cancel-close",
+		URLs: []string{startServer(t)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	defer func() {
+		close(release)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := c.WaitConsumers(ctx); err != nil {
+			t.Error(err)
+		}
+		_ = c.Close()
+	}()
+	entered := make(chan context.Context, 1)
+	if err := c.RegisterCoreConsumers(context.Background(), CoreConsumer{
+		Name:    "worker",
+		Subject: "work",
+		Handler: func(ctx context.Context, _ *nats.Msg) error {
+			entered <- ctx
+			<-release
+			return ctx.Err()
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Publish(context.Background(), "work", nil); err != nil {
+		t.Fatal(err)
+	}
+	var handlerCtx context.Context
+	select {
+	case handlerCtx = <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("回调未启动")
+	}
+	c.StopConsumers()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := c.WaitConsumers(ctx); !errors.Is(err, context.DeadlineExceeded) || handlerCtx.Err() != nil {
+		t.Fatalf("Wait 只限制等待，不应提前取消业务: %v / %v", err, handlerCtx.Err())
+	}
+	c.CancelConsumers()
+	if !errors.Is(handlerCtx.Err(), context.Canceled) {
+		t.Fatal("Cancel 未取消消费 context")
+	}
+	closed := make(chan error, 2)
+	for range 2 {
+		go func() { closed <- c.Close() }()
+	}
+	for range 2 {
+		select {
+		case err := <-closed:
+			if !errors.Is(err, ErrCloseTimeout) || !c.Conn().IsClosed() {
+				t.Fatalf("取消后未强制回收共享连接: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("取消后 Close 仍在等待未返回的回调")
+		}
 	}
 }

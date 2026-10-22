@@ -19,7 +19,7 @@ func TestHTTPServiceConfigurationFailsBeforeRunning(t *testing.T) {
 		for _, content := range []string{
 			"unknown: true\n",
 			"readHeaderTimeout: -1s\n",
-			"shutdownTimeout: -1s\n",
+			"shutdownTimeout: 15s\n",
 			"addr: [invalid]\n",
 		} {
 			writeHTTPConfig(t, content)
@@ -50,7 +50,7 @@ func TestHTTPServiceShutdownBeforeRun(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := service.Shutdown(); err != nil {
+		if err := stopAndWait(service.Stop, service.Wait, service.Cancel); err != nil {
 			t.Fatal(err)
 		}
 		if err := service.Run(); err != nil {
@@ -73,7 +73,7 @@ func TestHTTPServicePreservesListenError(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer service.Shutdown()
+		defer stopAndWait(service.Stop, service.Wait, service.Cancel)
 		var opErr *net.OpError
 		if err := service.Run(); !errors.As(err, &opErr) || opErr.Op != "listen" {
 			t.Fatalf("监听失败未保留错误链: %v", err)

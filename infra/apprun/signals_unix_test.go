@@ -5,12 +5,15 @@ package apprun
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
 func TestProcessSignals(t *testing.T) {
@@ -19,9 +22,19 @@ func TestProcessSignals(t *testing.T) {
 		first  os.Signal
 		second bool
 	}{
-		{name: "SIGINT平滑关闭", first: syscall.SIGINT},
-		{name: "SIGTERM平滑关闭", first: syscall.SIGTERM},
-		{name: "第二次SIGINT直接终止", first: syscall.SIGINT, second: true},
+		{
+			name:  "SIGINT平滑关闭",
+			first: syscall.SIGINT,
+		},
+		{
+			name:  "SIGTERM平滑关闭",
+			first: syscall.SIGTERM,
+		},
+		{
+			name:   "第二次SIGINT直接终止",
+			first:  syscall.SIGINT,
+			second: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -100,12 +113,16 @@ func TestSignalChild(t *testing.T) {
 			<-stop
 			return nil
 		},
-		Shutdown: func() error {
+		Stop: func() error {
 			fmt.Println("draining")
 			_, err := bufio.NewReader(os.Stdin).ReadString('\n')
 			close(stop)
 			return err
 		},
+		Wait: func(context.Context) error {
+			return nil
+		},
+		Cancel: func() {},
 	})
 	if err := manager.RunSignals(); err != nil {
 		t.Fatal(err)
@@ -122,5 +139,68 @@ func waitLine(t *testing.T, lines <-chan string, want string) {
 		if line == want {
 			return
 		}
+	}
+}
+
+// 子进程故意留下不响应取消的工作与关闭回调，验证入口仍能按两个期限退出。
+func TestProcessExitsAfterDrainAndCleanupTimeout(t *testing.T) {
+	const childEnv = "PIXIU_APPRUN_BOUNDED_EXIT_CHILD"
+	if os.Getenv(childEnv) == "1" {
+		manager, err := New(40 * time.Millisecond)
+		if err != nil {
+			t.Fatal(err)
+		}
+		started, canceled := make(chan struct{}), make(chan struct{})
+		register(t, manager, Service{
+			Name: "unresponsive",
+			Run: func() error {
+				close(started)
+				select {}
+			},
+			Stop: func() error { return nil },
+			Wait: func(ctx context.Context) error {
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			Cancel: func() { close(canceled) },
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			<-started
+			cancel()
+		}()
+		if err := manager.Run(ctx); !errors.Is(err, ErrShutdownTimeout) {
+			t.Fatalf("排空未超时: %v", err)
+		}
+		select {
+		case <-canceled:
+		default:
+			t.Fatal("未取消剩余服务")
+		}
+		resources, err := lifecycle.New(40 * time.Millisecond)
+		if err != nil {
+			t.Fatal(err)
+		}
+		closing := make(chan struct{})
+		_ = resources.Register(func() error {
+			close(closing)
+			select {}
+		})
+		if err := resources.Close(); !errors.Is(err, lifecycle.ErrCloseTimeout) {
+			t.Fatalf("资源回收未超时: %v", err)
+		}
+		select {
+		case <-closing:
+		default:
+			t.Fatal("排空超时后跳过了资源回收")
+		}
+		os.Exit(0)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestProcessExitsAfterDrainAndCleanupTimeout$")
+	cmd.Env = append(os.Environ(), childEnv+"=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("有界退出失败: %v\n%s", err, output)
 	}
 }

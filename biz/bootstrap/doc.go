@@ -1,14 +1,13 @@
 // Package bootstrap 提供日志、MySQL、Redis、Elasticsearch、OSS、阿里云 ES 和 NATS 多实例的通用初始化入口，
 // 以及应用运行管理器、Gin Engine、HTTP 和 Cron 服务的构造方法，供项目自己的 bootstrap 组装。设计见 docs/bootstrap-design.md。
 //
-// 应用负责加载配置、创建资源关闭栈，并在初始化前登记关闭流程：
+// 应用负责加载配置、创建资源关闭栈，并在初始化前登记关闭流程。
+// 以下片段放在具名返回 runErr error 的 run 函数内；main 在返回错误后退出：
 //
 //	config := appconfig.MustLoadAppConfig("./conf/app.yaml")
 //	var resources lifecycle.Stack
 //	defer func() {
-//		if err := resources.Close(); err != nil {
-//			log.Printf("close resources: %v", err)
-//		}
+//		runErr = errors.Join(runErr, resources.Close())
 //	}()
 //	bootstrap.MustRegisterMySQL("orders", true)
 //	bootstrap.MustRegisterMySQL("reports", false)
@@ -21,12 +20,12 @@
 //	moduleLogger := logit.With(logit.Str("mod", "orders"))
 //	moduleLogger.Info(context.Background(), "application initialized")
 //
-// 示例使用标准库 context、log，以及 pixiu 的 biz/appconfig、biz/bootstrap、
-// lifecycle、logit。初始化 panic 原样传播，已登记资源由应用的 defer 关闭。
+// 示例使用标准库 context、errors，以及 pixiu 的 biz/appconfig、biz/bootstrap、
+// lifecycle、logit。初始化 panic 原样传播，已创建资源由应用的 defer 关闭。
 // 通用入口接收 *appconfig.AppConfig；HTTP 与 Cron 共用 env/log 配置及初始化流程。
 // 先应用 env 时区，再依次初始化日志、OSS、阿里云 ES、MySQL、Redis、Elasticsearch 和 NATS；
-// 共享客户端仅初始化已声明的实例。服务及外部生产者停止后，资源栈按登记逆序关闭：
-// NATS、Elasticsearch、Redis、MySQL、阿里云 ES、OSS、日志；未声明的组件跳过。
+// 共享客户端仅初始化已声明的实例。HTTP、Cron 和 NATS 消费者完成排空或超时取消后，
+// 资源栈依次关闭 NATS、Elasticsearch、Redis、MySQL、阿里云 ES、OSS、日志。
 // 该顺序按组件类别描述，不保证同一组件内多个命名实例的关闭顺序。
 //
 // 新项目应先完成 MustBaseInit，再通过 logit.Default、logit.With 或 logit.Named 创建和保存模块 Logger，
@@ -55,8 +54,9 @@
 // 此示例另用标准库 net/http 和 pixiu 的 infra/apprun；handler 由应用提供，http.yaml 从 env.ConfigDirPath() 读取。
 // ServiceFactory 的签名为 func() (apprun.Service, error)，Start 按传入顺序同步构造并登记，全部成功后运行。
 // 后续构造或登记失败时逆序回收此前成功构造的服务，包括本轮登记失败的服务，并保留原错误与回收错误。
+// 启动前回收时，Wait 返回错误或共享 context 到期均调用该服务的 Cancel 兜底，继续回收其他服务。
 // 构造函数返回错误时负责自行回收本轮部分资源；nil 构造函数返回错误，无服务时返回 apprun.ErrNoServices。
-// Start 使用管理器默认的 20 秒运行期总关闭预算；进入运行阶段后由管理器逆序关闭服务，不重复回收。
+// Start 使用管理器默认的 30 秒运行期总关闭预算；进入运行阶段后由管理器统一停收并行排空服务，不重复回收。
 // 构造及启动前回收不计入运行期关闭预算，信号仅从所有服务登记成功后开始接管。
 // 使用 Gin 的应用可在启动阶段先构造 Engine（另需导入 github.com/gin-gonic/gin 和 pixiu 的 infra/env，
 // debug/test 模式还须 blank import 应用生成的 Swag 文档包）：
@@ -118,16 +118,16 @@
 // 全部文档 GET 路由自动忽略访问日志、详情及 Observe，保留 Recovery。
 // 包括文档页面、首页别名、JSON 端点和三个内嵌静态资源。
 //
-// NewAppManager() 或 NewAppManager(0) 使用 apprun 默认的 20 秒总关闭期限，
+// NewAppManager() 或 NewAppManager(0) 使用 apprun 默认的 30 秒总关闭期限，
 // 也可传入一个不小于 5 秒的 time.Duration，负值或不足 5 秒的正值返回错误；
 // 不保存全局管理器，不自动注册服务或接管信号。
 // 需要自定义预算或自行控制运行 context 时，直接持有 NewAppManager 返回的管理器，登记后调用 Run 或 RunSignals。
 // NewHTTPService 从 env.ConfigDirPath() 下读取 http.yaml，严格解析 httpserver.Config 并返回名为 http 的 apprun.Service，
-// 构造时不监听，HTTP ShutdownTimeout 省略或为零时默认 15 秒。
+// 构造时不监听，HTTP 排空期限由管理器提供，不再读取 shutdownTimeout。
 // Run 将启动与关闭竞争产生的 httpserver.ErrClosed 视为正常退出，保留其他运行与关闭错误。
 // 直接使用管理器时，进入有效 Run 前的构造或登记失败由调用方逆序关闭全部已构造服务（含已登记服务）。
 // 运行后由管理器关闭，不重复登记到资源栈。
-// HTTP 超时后强制关闭普通连接，不额外等待 handler；管理器返回后应用尽力清理共享资源及日志。
+// 排空超时取消剩余任务、关闭未完成普通连接，然后由入口有界回收资源并退出进程。
 //
 // Cron 独立加载 cron.yaml，通过任务名绑定业务方法；不需要 HTTP/Gin 配置。
 // 包级具名函数可通过 infra/cronx 在业务包中批量声明，无需为每个任务编写 init：
@@ -141,7 +141,7 @@
 //		Heartbeat,
 //	)
 //
-// 构造时调用 NewCronScheduler(Registry.Handlers()...)，示例自动名称为 Heartbeat。
+// 构造服务时调用 NewCronService(Registry.Handlers()...)，示例自动名称为 Heartbeat。
 // 注册器只登记元数据、不读配置或执行任务，各实例独立，Handlers 返回副本。
 // 零值 cronx.HandlerRegistry 也可直接使用；MustRegister(handler, name) 支持显式稳定名称，
 // 适用于闭包、方法值、泛型函数和需要保持 YAML/锁标识兼容的重命名。
@@ -150,7 +150,7 @@
 //
 // 也可直接传入带有稳定名称的 cronx.NamedHandler；以下示例只在 jobs 中启用 scan-orders：
 //
-//	scheduler, err := bootstrap.NewCronScheduler(cronx.NamedHandler{
+//	service, err := bootstrap.NewCronService(cronx.NamedHandler{
 //		Name: "scan-orders",
 //		Handler: func(ctx context.Context) error {
 //			logit.Info(ctx, "scan orders")
@@ -162,25 +162,36 @@
 //	}
 //	manager, err := bootstrap.NewAppManager(40 * time.Second)
 //	if err != nil {
-//		return errors.Join(err, scheduler.Shutdown())
+//		_ = service.Stop()
+//		service.Cancel()
+//		return err
 //	}
-//	if err := manager.Register(bootstrap.CronService(scheduler)); err != nil {
-//		return errors.Join(err, scheduler.Shutdown())
+//	if err := manager.Register(service); err != nil {
+//		_ = service.Stop()
+//		service.Cancel()
+//		return err
 //	}
 //	return manager.RunSignals()
 //
-// 此示例另需标准库 errors、time；cron.yaml 中只配置 scan-orders 或补齐其他 Handler，模板见 conf.example/cron.yaml。
+// 此示例使用标准库 context、time；cron.yaml 中只配置 scan-orders 或补齐其他 Handler，模板见 conf.example/cron.yaml。
 // 代码可以注册全部 Handler，jobs 只列出需要启用的任务；引用未注册的名称会报绑定错误。
 // 注释或删除某个 job 后重启即可停用，全部注释或 jobs: [] 时允许零任务运行。
-// 任务支持六字段 Cron、固定 every、随机 randomEvery，三者互斥；默认总关闭 15s、自然排空 10s。
+// 任务支持六字段 Cron、固定 every、随机 randomEvery，三者互斥；关闭由 Stop、Wait(ctx)、Cancel 组成，不设置组件级排空预算。
 // every 与 randomEvery.min 最短均为 100ms，小于下限时构造报错。
-// 默认管理器的 20s 可覆盖独立 Cron；上例保留显式 40s 作为自定义预算的用法。
-// 使用默认预算时，也可将 NewCronScheduler 与 CronService 组合为 ServiceFactory 后传给 Start。
+// 默认管理器的 30s 可覆盖独立 Cron；上例保留显式 40s 作为自定义预算的用法。
+// 使用默认预算时，可通过 ServiceFactory 直接构造 Cron 服务：
+//
+//	return bootstrap.Start(func() (apprun.Service, error) {
+//		return bootstrap.NewCronService(Registry.Handlers()...)
+//	})
+//
+// NewCronService 内部调用 NewCronScheduler，构造错误原样返回，成功后由管理器接管运行与关闭。
+// 需要直接操作 Scheduler 时仍可使用 NewCronScheduler(Registry.Handlers()...) 并自行管理其生命周期。
 // lock 段存在时通过已初始化的命名 Redis 构造 gocron-redis-lock，配置 TTL 与自动续租；
 // 任务须设置正 timeout。仅在租约有效时互斥，不保证每周期一次，失租不自动取消业务。
-// 混合运行先登记 HTTP、再登记 Cron，总预算须覆盖各组件关闭期限；共享客户端和日志在服务关闭后释放。
+// 混合运行统一停收所有服务、共享一个排空期限；资源栈在正常完成或超时取消后执行。
 // 具体独立与混合运行样例后续在 pixiu-demo 中引入。
-// Shutdown 超时后仍可能有业务运行；默认不追加无限 Wait，不承诺超时路径完整排空。
+// Wait 超时后仍可能有业务运行；Cancel 不保证业务已结束，入口回收资源后退出。
 //
 // 初始化最先将 time.Local 设置为 env.TimeLocation()，随后创建日志及轮转资源。
 // 配置加载只发布环境，设置默认时区由本包负责；必须在并发使用时间或日志前执行。
@@ -218,7 +229,7 @@
 // 创建首个实例前只登记一次 redisx.CloseAll，单个失败实例由 redisx 立即清理；
 // 此前成功创建的共享实例和日志交给应用资源栈关闭，不重复登记单个客户端 Close。
 // 关闭前先停止并等待外部生产者及业务管理的订阅；NATS 托管消费由其 CloseAll 排空，
-// 再依次关闭 Elasticsearch、Redis、MySQL、阿里云 ES、OSS 与日志。消费者仍使用的项目资源也必须晚于 NATS 关闭。
+// 再依次关闭 Elasticsearch、Redis、MySQL、阿里云 ES、OSS 与日志。资源栈共享总期限，超时后入口立即退出。
 //
 // Elasticsearch 使用 MustRegisterElasticsearch(name, isDefault) 声明，与 MySQL、Redis 独立判重。
 // Redis 初始化后读取 elasticsearch.<name>.yaml，文件前缀统一小写；未声明时跳过。
@@ -259,10 +270,12 @@
 // 退出时按通用逆序在 MySQL 之后关闭阿里云 ES，随后关闭 OSS 和日志；Close 不排空在途请求。
 //
 // NATS 使用 MustRegisterNATS(name, isDefault) 声明，Elasticsearch 之后读取 nats.<name>.yaml。
-// 全部 NATS 文件严格解析并转换后，登记一次 natsx.CloseAll，再创建默认或命名客户端；
+// 全部 NATS 文件严格解析并转换后，先登记一次 natsx.CloseAll，再创建默认或命名客户端；
 // 未声明时跳过。模板见 conf.example/nats.example.yaml；文件不接受 name、isDefault。
+// 消费者通过 NewNATSConsumerService 纳入 Start，与 HTTP/Cron 同时停收，登记顺序不保证业务依赖。
+// 全部服务共享总关闭预算；ErrShutdownTimeout 时取消剩余任务，入口仍执行资源栈回收，普通错误沿用管理器和资源栈汇总。
 // 转换阶段检查 URL 解析及内嵌凭据，通用参数由 natsx 在构造时校验；
-// 后续实例校验失败时，此前成功的实例由应用关闭栈回收。
+// 入口须在初始化前登记资源栈 defer，后续实例校验失败时也回收已创建的客户端。
 // urls 必填，地址非空且无首尾空白，不接受 URL 内嵌凭据；认证使用 username/password。
 // namespace 在此连接文件配置，省略、null 或空字符串时不添加前缀；仅允许 ASCII 字母、数字、_、-。
 // natsx 在连接前校验并固定 namespace；纯发布客户端也生效，不依赖注册配置或 Handler。
@@ -270,7 +283,8 @@
 // drainTimeout 默认 10s，仅用于底层连接 Drain；closeTimeout 默认 20s，限制完整关闭流程。
 // jetStream.publishAsyncTimeout 默认 5s，只限制默认上下文的异步 PubAck 等待。
 // 连接成功不代表 JetStream 已启用或业务权限已验证。迁移和 Handler 依赖就绪后，
-// RegisterNATSFromConfig 读取独立的 nats-register.<name>.yaml，绑定 Handler 并调用 natsx 的三个注册入口：
+// NewNATSConsumerService 内部调用 NewNATSConsumer，读取独立的 nats-register.<name>.yaml 并绑定 Handler，
+// 构造错误原样返回；Run 调用 natsx 的三个注册入口：
 //
 //	jsHandlers := natsx.MustNewJetStreamHandlerRegistry()
 //	jsHandlers.MustRegister(func(ctx context.Context, msg jetstream.Msg) error {
@@ -281,16 +295,16 @@
 //	coreHandlers.MustRegister(func(ctx context.Context, msg *nats.Msg) error {
 //	    return nil
 //	}, "HandleConfigRefresh")
-//	if err := bootstrap.RegisterNATSFromConfig(
-//	    "orders",
-//	    jsHandlers,
-//	    coreHandlers,
-//	); err != nil {
-//	    return err
-//	}
+//	return bootstrap.Start(func() (apprun.Service, error) {
+//		return bootstrap.NewNATSConsumerService("orders", jsHandlers, coreHandlers)
+//	})
 //
-// 示例需导入 context、infra/natsx、nats.go 和 nats.go/jetstream，并已初始化 orders 命名客户端及配置环境。
-// 客户端未登记或 CloseAll 开始后查询沿用 natsx.Named 的 panic；配置和资源注册失败返回 error。
+// 需要直接操作消费组件时仍可使用 NewNATSConsumer，并自行管理 Run/Stop/Wait/Cancel。
+// 示例需导入 context、infra/apprun、infra/natsx、nats.go 和 nats.go/jetstream，并已初始化 orders 命名客户端及配置环境。
+// 客户端未登记或 CloseAll 开始后查询沿用 natsx.Named 的 panic；配置错误由构造返回，注册失败由 Run 返回。
+// 调用方无论排空结果都回收资源；Run/Stop/Wait/Cancel 分工，启动失败也收尾已启动消费。
+// NATSConsumer.Cancel 先复用 Stop，再取消剩余消费；可直接或重复调用，不关闭共享连接。
+// Start 并发运行服务，登记顺序不规定停机依赖。手动同步注册可使用 RegisterNATSFromConfig，资源回收前通过 StopConsumers、WaitConsumers 和必要的 CancelConsumers 处理消费。
 // 内部创建 context.Background()，不设置整体注册期限，资源请求与 Core Flush 沿用 SDK 默认行为。
 // Client 关闭状态在配置预检后交给 natsx 注册入口校验；长期 Handler 使用独立消息 context。
 // 文件可使用 conf.example/nats-register.example.yaml，保留示例已登记的 Handler 对应项。
@@ -328,12 +342,11 @@
 // 各类资源的通用参数校验和判重交给各自的 natsx 注册入口，失败也占用该入口的注册次数。
 // 三个入口各调用一次，空清单也占用次数，不与手动注册混用。
 // 各入口分阶段预检，后序校验失败时前序资源或消费可能已启动。
-// 返回前可能执行业务，失败中止启动并由原资源栈收尾，不自动重试、更新或删除远端资源。
+// Run 注册期间可能执行业务；失败先由管理器排空已启动消费，再由资源栈收尾，不自动重试或删除远端资源。
 // 修改文件重启生效；删除声明不删除 Durable 或进度。消息协议和业务幂等由应用负责。
-// NATS 关闭前先停止并等待外部生产者，托管订阅及 worker 由 Client.Close 排空，期间允许
-// 回调继续发布和请求。消费者及其发布服务必须在启动时持有客户端引用，不能在排空期间
-// 再次查询 Default/Named；回调依赖的资源晚于 NATS 关闭，日志最后关闭。
-// CloseTimeout 超时强制关闭连接并取消消息 ctx，不能强制终止不响应取消的业务函数。
+// NATS 消费服务的 Stop 启动消费排空，Wait 等待实际回调结束；期间可查询 Default/Named、发布和请求。
+// 排空完成或超时取消后进入资源回收；资源栈默认总期限 20 秒，可通过 lifecycle.New 自定义。
+// 客户端 CloseTimeout 约束后续异步确认及连接关闭，日志最后关闭。
 //
 // 日志固定使用 rotatefile，format 必须显式设置为 text/json；默认启动目录下的 log 目录、每小时轮转、
 // 每个分流文件保留 48 个实际文件。config.Log 可配置 format、caller、dir 目录、names、rotate。
@@ -382,6 +395,6 @@
 //		})
 //	}
 //
-// StartWithConfig 要求显式预算至少 5s；Start/NewAppManager 默认仍为 20s。
-// 总预算不包含资源栈、Client.Close 和日志；这些仍由应用随后关闭，日志最后关闭。
+// StartWithConfig 要求显式预算至少 5s；Start/NewAppManager 默认仍为 30s。
+// 总预算不包含资源栈、Client.Close 和日志；这些由应用随后调用 lifecycle.Stack.Close 回收，默认整体 20 秒，日志最后关闭。
 package bootstrap

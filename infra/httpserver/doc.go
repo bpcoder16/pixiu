@@ -1,51 +1,37 @@
-// Package httpserver 提供独立 HTTP 服务端和限时关闭,不管理 WebSocket 连接。
+// Package httpserver 提供独立 HTTP 服务端、普通请求停收和实际排空，不管理 WebSocket 等已接管连接。
+// 默认请求头读取 5 秒、完整请求读取 10 秒、响应写入 15 秒、空闲连接 60 秒、请求头上限 64 KiB。
+// ReadTimeout/WriteTimeout 负值禁用对应网络期限；网络期限不替代业务 context 的执行期限。
 //
-// 零值配置面向普通 JSON API：请求头读取期限 5 秒，完整请求读取期限 10 秒，
-// 响应写入期限 15 秒，空闲连接期限 60 秒，请求头上限 64 KiB。
-// 上传、下载或流式服务可按需增大读写期限；ReadTimeout、WriteTimeout
-// 设为负值(例如 -1)可分别禁用对应超时，其他限制不允许负值。
-// 网络读写超时不代替业务 context 的执行期限，请求体大小应由 handler 单独限制。
-//
-// Run 和 Shutdown 均不接收外部 context。应用处理停机信号后主动调用 Shutdown，
-// 排空期限从首次调用开始，ShutdownTimeout 为零时默认 15 秒。
-// 实例内部 context 在排空完成或超时强制关闭连接后取消，不提前取消正在排空的请求。
-// HTTP 关闭超时后不额外等待 handler，应用记录错误并尽力清理资源后退出，退出码由应用决定。
-//
-// 以下示例需导入 net/http、os、os/signal、syscall 和
-// github.com/bpcoder16/pixiu/infra/httpserver：
+// 应用可通过 apprun 统一管理；独立使用时由调用方提供排空 context（需导入 context、errors、
+// net/http、os、os/signal、syscall、time 和 httpserver）：
 //
 //	server, err := httpserver.New(httpserver.Config{
 //		Addr: ":8888",
-//	}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-//		w.WriteHeader(http.StatusNoContent)
-//	}))
+//	}, http.NotFoundHandler())
 //	if err != nil {
 //		return err
 //	}
-//	stop := make(chan os.Signal, 1)
-//	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-//	defer signal.Stop(stop)
-//	served := make(chan error, 1)
-//	go func() {
-//		served <- server.Run()
-//	}()
+//	stop, release := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+//	defer release()
+//	ran := make(chan error, 1)
+//	go func() { ran <- server.Run() }()
+//	var runErr error
 //	select {
-//	case err := <-served:
-//		_ = server.Shutdown()
-//		return err
-//	case <-stop:
-//		shutdownErr := server.Shutdown()
-//		runErr := <-served
-//		if shutdownErr != nil {
-//			return shutdownErr
-//		}
-//		return runErr
+//	case runErr = <-ran:
+//	case <-stop.Done():
 //	}
+//	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+//	defer cancel()
+//	stopErr := server.Stop()
+//	waitErr := server.Wait(ctx)
+//	if waitErr != nil {
+//		server.Cancel()
+//	}
+//	return errors.Join(runErr, stopErr, waitErr)
 //
-// 第一版由 Run 按 Config.Addr 创建普通 TCP listener。
-// Gin Engine 等实现 http.Handler 的路由器可直接传给 New，再调用 Run。
-// Shutdown 是唯一关闭入口，允许重复或并发调用，共享首次关闭的期限和结果。
-// 超时会强制关闭普通连接，但不能强制终止忽略请求 context 的业务代码。
-// handler 直接交给标准库，停止接入及请求排空由 Shutdown 负责；未退出的 handler 可能与超时后的清理并发。
-// WebSocket 等已接管连接需独立关闭；日志由应用最后关闭。
+// Stop 封闭入口并异步排空，不等待 Handler。请求接纳与停收同步，停收后不再启动新业务 Handler。
+// Run 的监听退出不代表请求完成；Wait(ctx) 等待启动过程、实际 Handler 与连接收尾，期限仅控制等待。
+// 排空期间请求 context 保持有效；Cancel 先复用 Stop，再取消剩余请求并关闭普通连接，不强杀业务。
+// Stop/Cancel 可先于或并发于 Run，停收后禁止重启；重复 Stop 复用同一次排空。
+// 组件不设独立关闭计时。入口无论排空是否超时都进行有界资源回收，日志最后关闭，随后退出。
 package httpserver

@@ -1,8 +1,11 @@
 package bootstrap_test
 
+import "context"
+
 import (
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,13 +26,17 @@ func TestStartConstructionFailureClosesPreviousServices(t *testing.T) {
 					t.Error("构造未全部成功时不得启动服务")
 					return nil
 				},
-				Shutdown: func() error {
+				Stop: func() error {
 					events = append(events, "close:"+name)
 					if name == "second" {
 						return shutdownErr
 					}
 					return nil
 				},
+				Wait: func(context.Context) error {
+					return nil
+				},
+				Cancel: func() {},
 			}, nil
 		}
 	}
@@ -51,6 +58,70 @@ func TestStartConstructionFailureClosesPreviousServices(t *testing.T) {
 	}
 }
 
+func TestStartRollbackWaitFailureCancels(t *testing.T) {
+	constructErr := errors.New("construct failed")
+	waitErr := errors.New("wait failed")
+	for _, tt := range []struct {
+		name       string
+		factoryErr error
+		wantErr    error
+	}{
+		{
+			name:       "构造失败",
+			factoryErr: constructErr,
+			wantErr:    constructErr,
+		},
+		{
+			name:    "登记失败",
+			wantErr: apprun.ErrInvalidService,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var events []string
+			factory := func(name string, result error) bootstrap.ServiceFactory {
+				return func() (apprun.Service, error) {
+					return apprun.Service{
+						Name: name,
+						Run: func() error {
+							t.Error("启动失败时不得运行服务")
+							return nil
+						},
+						Stop: func() error {
+							events = append(events, "stop:"+name)
+							return nil
+						},
+						Wait: func(ctx context.Context) error {
+							if ctx.Err() != nil {
+								t.Error("测试要求在排空期限内返回")
+							}
+							events = append(events, "wait:"+name)
+							return result
+						},
+						Cancel: func() {
+							events = append(events, "cancel:"+name)
+						},
+					}, nil
+				}
+			}
+			err := bootstrap.Start(
+				factory("drained", nil),
+				factory("pending", waitErr),
+				func() (apprun.Service, error) {
+					return apprun.Service{}, tt.factoryErr
+				},
+			)
+			if !errors.Is(err, tt.wantErr) || !errors.Is(err, waitErr) {
+				t.Fatalf("未保留启动及排空错误: %v", err)
+			}
+			// 失败服务取消一次，继续回收其他服务；已确认排空的服务不取消。
+			want := []string{"stop:pending", "stop:drained", "wait:pending", "cancel:pending", "wait:drained"}
+			if !slices.Equal(events, want) {
+				t.Fatalf("启动失败回收顺序 = %v，预期 %v", events, want)
+			}
+		})
+	}
+}
+
 func TestStartRegistrationFailureClosesConstructedServices(t *testing.T) {
 	for _, reason := range []string{"duplicate", "missing-run", "missing-shutdown"} {
 		t.Run(reason, func(t *testing.T) {
@@ -63,10 +134,14 @@ func TestStartRegistrationFailureClosesConstructedServices(t *testing.T) {
 			rejected := apprun.Service{
 				Name: "rejected",
 				Run:  unexpectedRun,
-				Shutdown: func() error {
+				Stop: func() error {
 					closed = append(closed, "rejected")
 					return shutdownErr
 				},
+				Wait: func(context.Context) error {
+					return nil
+				},
+				Cancel: func() {},
 			}
 			wantErr := apprun.ErrInvalidService
 			wantClosed := []string{"rejected", "first"}
@@ -77,7 +152,7 @@ func TestStartRegistrationFailureClosesConstructedServices(t *testing.T) {
 			case "missing-run":
 				rejected.Run = nil
 			case "missing-shutdown":
-				rejected.Shutdown = nil
+				rejected.Stop = nil
 				wantClosed = []string{"first"}
 			}
 			err := bootstrap.Start(
@@ -85,10 +160,14 @@ func TestStartRegistrationFailureClosesConstructedServices(t *testing.T) {
 					return apprun.Service{
 						Name: "first",
 						Run:  unexpectedRun,
-						Shutdown: func() error {
+						Stop: func() error {
 							closed = append(closed, "first")
 							return nil
 						},
+						Wait: func(context.Context) error {
+							return nil
+						},
+						Cancel: func() {},
 					}, nil
 				},
 				func() (apprun.Service, error) {
@@ -102,7 +181,7 @@ func TestStartRegistrationFailureClosesConstructedServices(t *testing.T) {
 			if !errors.Is(err, wantErr) {
 				t.Fatalf("未保留登记错误: %v", err)
 			}
-			if rejected.Shutdown != nil && !errors.Is(err, shutdownErr) {
+			if rejected.Stop != nil && !errors.Is(err, shutdownErr) {
 				t.Fatalf("未保留登记失败服务的回收错误: %v", err)
 			}
 			if !slices.Equal(closed, wantClosed) {
@@ -121,10 +200,14 @@ func TestStartNilFactoryClosesPreviousServices(t *testing.T) {
 				t.Error("存在 nil 构造函数时不得启动服务")
 				return nil
 			},
-			Shutdown: func() error {
+			Stop: func() error {
 				closed = true
 				return nil
 			},
+			Wait: func(context.Context) error {
+				return nil
+			},
+			Cancel: func() {},
 		}, nil
 	}, nil)
 	if err == nil || !closed {
@@ -135,6 +218,7 @@ func TestStartNilFactoryClosesPreviousServices(t *testing.T) {
 func TestStartRunsAndShutsDownOnce(t *testing.T) {
 	runErr := errors.New("service stopped")
 	var constructed, closed []string
+	var mu sync.Mutex
 	secondStop := make(chan struct{})
 	factory := func(name string) bootstrap.ServiceFactory {
 		return func() (apprun.Service, error) {
@@ -151,21 +235,28 @@ func TestStartRunsAndShutsDownOnce(t *testing.T) {
 					<-secondStop
 					return nil
 				},
-				Shutdown: func() error {
+				Stop: func() error {
+					mu.Lock()
 					closed = append(closed, name)
+					mu.Unlock()
 					if name == "second" {
 						close(secondStop)
 					}
 					return nil
 				},
+				Wait: func(context.Context) error {
+					return nil
+				},
+				Cancel: func() {},
 			}, nil
 		}
 	}
 	if err := bootstrap.Start(factory("first"), factory("second")); !errors.Is(err, runErr) {
 		t.Fatalf("未保留服务运行错误: %v", err)
 	}
-	if !slices.Equal(closed, []string{"second", "first"}) {
-		t.Fatalf("服务应由管理器逆序关闭且不重复关闭: %v", closed)
+	slices.Sort(closed)
+	if !slices.Equal(closed, []string{"first", "second"}) {
+		t.Fatalf("服务应由管理器统一停收且不重复关闭: %v", closed)
 	}
 }
 

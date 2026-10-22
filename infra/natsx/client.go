@@ -74,13 +74,13 @@ type Client struct {
 	closeTimeout time.Duration
 	// handlerCtx 是消息回调的生命周期上下文；临时断连和重连不取消它。
 	handlerCtx context.Context
-	// cancelHandlers 在初始化失败、连接永久关闭或关闭流程结束时取消消息回调上下文。
+	// cancelHandlers 在初始化失败、连接永久关闭、消费排空或关闭流程结束时取消消息回调上下文。
 	cancelHandlers context.CancelFunc
 	// closedEvent 由 Pixiu 的连接关闭回调关闭，供 Close 等待。
 	closedEvent chan struct{}
-	// closing 标记关闭流程已开始，阻止新增订阅与消费句柄。
+	// closing 标记消费排空或关闭流程已开始，阻止新增订阅与消费句柄。
 	closing atomic.Bool
-	// publishClosed 在消费排空后或关闭流程结束时置位，阻止新增发布与请求。
+	// publishClosed 在 Close 排空消费后或关闭流程结束时置位，阻止新增发布与请求。
 	publishClosed atomic.Bool
 	// streamRegistrationStarted 保证每个 Client 仅尝试一次 Stream 注册，失败不重置。
 	streamRegistrationStarted atomic.Bool
@@ -89,17 +89,19 @@ type Client struct {
 	// coreRegistrationStarted 保证每个 Client 仅尝试一次 Core 消费注册，失败不重置。
 	coreRegistrationStarted atomic.Bool
 	// consumerMu 串行化 Core 和 JetStream 句柄的登记与关闭摘取，避免交错时遗漏。
-	consumerMu sync.Mutex
+	consumerMu       sync.Mutex
+	consumerStop     sync.Once
+	consumersDone    chan struct{}
+	consumerCanceled chan struct{}
+	consumerCancel   sync.Once
+	closeOnce        sync.Once
+	closeErr         error
 	// coreSubscriptions 保存启动期登记的 Core 广播和 Queue 订阅，供 Close 排空并等待回调结束。
 	coreSubscriptions []*nats.Subscription
-	// coreHandlers 跟踪已接纳的 Core 回调及结果日志；Add 在 consumerMu 下检查生命周期后执行。
+	// coreHandlers 跟踪 Core 注册日志、已接纳回调及结果日志；Add 在 consumerMu 下检查生命周期后执行。
 	coreHandlers sync.WaitGroup
 	// jetStreamConsumers 保存启动期创建的 JetStream worker 消费句柄，供 Close 排空并等待全部 handler 结束。
 	jetStreamConsumers []jetstream.ConsumeContext
-	// closeOnce 保证并发或重复调用 Close 时只执行一次关闭流程。
-	closeOnce sync.Once
-	// closeErr 保存首次关闭流程的结果，由 closeOnce 保证后续调用安全读取。
-	closeErr error
 }
 
 // New 在应用启动阶段建立连接并创建默认 JetStream 上下文；TLS 和其他认证方式通过官方选项配置。
@@ -153,10 +155,12 @@ func New(cfg Config, options ...nats.Option) (*Client, error) {
 		cfg.JetStream.PublishAsyncTimeout = 5 * time.Second
 	}
 	c := &Client{
-		name:           cfg.Name,
-		durationPrefix: downstreamType + "_" + cfg.Name,
-		closeTimeout:   cfg.CloseTimeout,
-		closedEvent:    make(chan struct{}),
+		name:             cfg.Name,
+		durationPrefix:   downstreamType + "_" + cfg.Name,
+		closeTimeout:     cfg.CloseTimeout,
+		closedEvent:      make(chan struct{}),
+		consumersDone:    make(chan struct{}),
+		consumerCanceled: make(chan struct{}),
 	}
 	if cfg.Namespace != "" {
 		c.namePrefix = cfg.Namespace + "_"
@@ -317,6 +321,7 @@ func (c *Client) JetStream() jetstream.JetStream { return c.js }
 // 整体超时后清理默认异步发布者，未完成的 future 以 ErrJetStreamPublisherClosed 结束。
 // 关闭完成或超时后取消消息处理 ctx；不强制终止未响应取消的业务函数。
 // 调用方应先停生产者，最后关闭日志；不得在消费回调中调用 Close。
+// 重复或并发调用复用同一次关闭结果。
 // 调用方须保持托管订阅固定；自行 Unsubscribe/Drain 后，不保证排空及等待在途回调。
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() { c.closeErr = c.close() })
@@ -329,53 +334,18 @@ func (c *Client) close() error {
 	defer timer.Stop()
 	defer c.cancelHandlers()
 	defer c.publishClosed.Store(true)
-	c.consumerMu.Lock()
-	c.closing.Store(true)
-	coreSubscriptions := c.coreSubscriptions
-	c.coreSubscriptions = nil
-	jetStreamConsumers := c.jetStreamConsumers
-	c.jetStreamConsumers = nil
-	c.consumerMu.Unlock()
-	// 单独排空业务 Core 订阅，保留请求响应与异步 PubAck 所需的内部订阅。
-	// 连接仍处于正常状态，回调首次发起 Request 也可以创建响应订阅。
-	for _, sub := range coreSubscriptions {
-		// 已停止的订阅或已关闭的连接无需再排空；完成状态由后续等待统一判断。
-		_ = sub.Drain()
-	}
-	for _, consumer := range jetStreamConsumers {
-		consumer.Drain()
-	}
-	for _, sub := range coreSubscriptions {
-		// 原生通知会补发当前关闭状态，兼容提前停止的订阅，且不占用用户关闭回调。
+	c.StopConsumers()
+	select {
+	case <-c.consumersDone:
+	case <-c.consumerCanceled:
+		// 排空超时后的显式取消允许资源回收接管连接，不再等待未响应取消的 Handler。
 		select {
-		case <-sub.StatusChanged(nats.SubscriptionClosed):
-		case <-c.closedEvent:
-			// 永久断连不发送订阅关闭状态，在循环后统一等待在途回调。
-		case <-timer.C:
+		case <-c.consumersDone:
+		default:
 			return c.forceClose()
 		}
-	}
-	if c.handlerCtx.Err() != nil {
-		done := make(chan struct{})
-		go func() {
-			// 与回调的取消检查及 Add 衔接，保证 Wait 开始后不再新增回调。
-			c.consumerMu.Lock()
-			c.consumerMu.Unlock()
-			c.coreHandlers.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-timer.C:
-			return c.forceClose()
-		}
-	}
-	for _, consumer := range jetStreamConsumers {
-		select {
-		case <-consumer.Closed():
-		case <-timer.C:
-			return c.forceClose()
-		}
+	case <-timer.C:
+		return c.forceClose()
 	}
 	c.publishClosed.Store(true)
 	select {
@@ -399,6 +369,72 @@ func (c *Client) close() error {
 		c.logState(logit.ErrorLevel, "close_error", "", err)
 	}
 	return nil
+}
+
+// StopConsumers 封闭消费注册，停止 Core 接收与 JetStream 拉取，异步排空已接收的消息。
+// 保留连接、发布和请求能力；可与资源 Close 并发，二者复用同一次消费停收。
+func (c *Client) StopConsumers() {
+	c.consumerStop.Do(func() {
+		c.consumerMu.Lock()
+		c.closing.Store(true)
+		core := c.coreSubscriptions
+		pull := c.jetStreamConsumers
+		c.coreSubscriptions = nil
+		c.jetStreamConsumers = nil
+		c.consumerMu.Unlock()
+		for _, sub := range core {
+			_ = sub.Drain()
+		}
+		for _, consumer := range pull {
+			consumer.Drain()
+		}
+		go func() {
+			for _, sub := range core {
+				select {
+				case <-sub.StatusChanged(nats.SubscriptionClosed):
+				case <-c.closedEvent:
+				}
+			}
+			// 连接关闭会封闭消息 context；与注册及回调的 Add 交接后才能安全 Wait。
+			c.consumerMu.Lock()
+			c.consumerMu.Unlock()
+			c.coreHandlers.Wait()
+			for _, consumer := range pull {
+				<-consumer.Closed()
+			}
+			close(c.consumersDone)
+		}()
+	})
+}
+
+// WaitConsumers 等待消费回调、确认和日志（含 Core 注册日志）完成；期限只控制等待，不自动取消业务。
+func (c *Client) WaitConsumers(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("natsx: nil wait context")
+	}
+	select {
+	case <-c.consumersDone:
+		c.cancelHandlers()
+		return nil
+	default:
+	}
+	select {
+	case <-c.consumersDone:
+		c.cancelHandlers()
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// CancelConsumers 先停收，再通知在途消费取消；不关闭共享连接。
+// Close 随后可关闭连接，不再等待无限运行的回调。
+func (c *Client) CancelConsumers() {
+	c.StopConsumers()
+	c.consumerCancel.Do(func() {
+		c.cancelHandlers()
+		close(c.consumerCanceled)
+	})
 }
 
 func (c *Client) forceClose() error {

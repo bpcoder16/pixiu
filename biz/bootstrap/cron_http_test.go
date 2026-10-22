@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,14 +15,17 @@ import (
 	"github.com/bpcoder16/pixiu/infra/cronx"
 )
 
-func TestCronMixedShutdownOrder(t *testing.T) {
+func TestCronMixedStopsHTTPBeforeCronDrains(t *testing.T) {
 	isolatedLog(t, func() {
 		initHTTPConfigDir(t)
 		writeHTTPConfig(t, "addr: 127.0.0.1:0\n")
-		writeCronConfig(t, "drainTimeout: 1s\nshutdownTimeout: 2s\njobs:\n  - name: job\n    every: 100ms\n")
+		writeCronConfig(t, "jobs:\n  - name: job\n    every: 100ms\n")
 		entered := make(chan struct{}, 1)
+		release := make(chan struct{})
+		finish := sync.OnceFunc(func() { close(release) })
+		defer finish()
 		var running atomic.Int32
-		scheduler, err := bootstrap.NewCronScheduler(cronx.NamedHandler{
+		cronService, err := bootstrap.NewCronService(cronx.NamedHandler{
 			Name: "job",
 			Handler: func(ctx context.Context) error {
 				running.Add(1)
@@ -30,7 +34,7 @@ func TestCronMixedShutdownOrder(t *testing.T) {
 				case entered <- struct{}{}:
 				default:
 				}
-				time.Sleep(80 * time.Millisecond)
+				<-release
 				if ctx.Err() != nil {
 					t.Error("正常排空不应取消任务")
 				}
@@ -40,17 +44,18 @@ func TestCronMixedShutdownOrder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer scheduler.Shutdown()
+		defer stopAndWait(cronService.Stop, cronService.Wait, cronService.Cancel)
 		service, err := bootstrap.NewHTTPService(http.NewServeMux())
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer service.Shutdown()
-		shutdown := service.Shutdown
-		service.Shutdown = func() error {
-			if running.Load() != 0 {
-				t.Error("必须先排空 Cron 再关 HTTP")
+		defer stopAndWait(service.Stop, service.Wait, service.Cancel)
+		shutdown := service.Stop
+		service.Stop = func() error {
+			if running.Load() == 0 {
+				t.Error("HTTP 停收不应等待 Cron 排空")
 			}
+			defer finish()
 			return shutdown()
 		}
 		manager, err := bootstrap.NewAppManager(5 * time.Second)
@@ -60,7 +65,7 @@ func TestCronMixedShutdownOrder(t *testing.T) {
 		if err := manager.Register(service); err != nil {
 			t.Fatal(err)
 		}
-		if err := manager.Register(bootstrap.CronService(scheduler)); err != nil {
+		if err := manager.Register(cronService); err != nil {
 			t.Fatal(err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -76,7 +81,7 @@ func TestCronMixedShutdownOrder(t *testing.T) {
 		if err := <-result; err != nil {
 			t.Fatal(err)
 		}
-		if err := scheduler.Run(); !errors.Is(err, cronx.ErrClosed) {
+		if err := cronService.Run(); err != nil {
 			t.Fatalf("Cron 未关闭: %v", err)
 		}
 	})
@@ -92,30 +97,34 @@ func TestCronMixedHTTPFailureClosesScheduler(t *testing.T) {
 		defer occupied.Close()
 		writeHTTPConfig(t, "addr: "+occupied.Addr().String()+"\n")
 		writeCronConfig(t, "{}\n")
-		var scheduler *cronx.Scheduler
+		var cronService apprun.Service
 		err = bootstrap.Start(
 			func() (apprun.Service, error) {
 				return bootstrap.NewHTTPService(http.NewServeMux())
 			},
 			func() (apprun.Service, error) {
 				var err error
-				scheduler, err = bootstrap.NewCronScheduler()
-				if err != nil {
-					return apprun.Service{}, err
-				}
-				return bootstrap.CronService(scheduler), nil
+				cronService, err = bootstrap.NewCronService()
+				return cronService, err
 			},
 		)
 		var listenErr *net.OpError
 		if !errors.As(err, &listenErr) {
 			t.Fatalf("应保留监听失败: %v", err)
 		}
-		if scheduler == nil {
+		if cronService.Run == nil {
 			t.Fatal("未构造 Cron 服务")
 		}
-		defer scheduler.Shutdown()
-		if err := scheduler.Run(); !errors.Is(err, cronx.ErrClosed) {
-			t.Fatalf("启动失败未回收 Cron: %v", err)
+		defer stopAndWait(cronService.Stop, cronService.Wait, cronService.Cancel)
+		result := make(chan error, 1)
+		go func() { result <- cronService.Run() }()
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatalf("启动失败未回收 Cron: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("启动失败后 Cron 仍可启动")
 		}
 	})
 }

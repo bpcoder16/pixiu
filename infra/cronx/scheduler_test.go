@@ -33,8 +33,7 @@ func runScheduler(t *testing.T, cfg Config, jobs ...Job) (*Scheduler, <-chan err
 	result := make(chan error, 1)
 	go func() { result <- s.Run() }()
 	t.Cleanup(func() {
-		_ = s.Shutdown()
-		s.Wait()
+		_ = stopAndWait(s.Stop, s.Wait, s.Cancel)
 	})
 	return s, result
 }
@@ -75,8 +74,6 @@ func TestConfiguration(t *testing.T) {
 		}},
 		{"timeout", func(_ *Config, j *Job) { j.Timeout = -1 }},
 		{"level", func(_ *Config, j *Job) { j.SuccessLevel = logit.WarnLevel }},
-		{"shutdown", func(c *Config, _ *Job) { c.ShutdownTimeout = -1 }},
-		{"drain", func(c *Config, _ *Job) { c.DrainTimeout = 30 * time.Second }},
 		{"locked-timeout", func(c *Config, _ *Job) {
 			c.Locker = lockerFunc(func(context.Context, string) (gocron.Lock, error) { return nil, errors.New("unused") })
 		}},
@@ -85,13 +82,13 @@ func TestConfiguration(t *testing.T) {
 			cfg, j := Config{}, job
 			tc.edit(&cfg, &j)
 			if s, err := New(cfg, j); err == nil {
-				_ = s.Shutdown()
+				_ = stopAndWait(s.Stop, s.Wait, s.Cancel)
 				t.Fatal("应拒绝无效配置")
 			}
 		})
 	}
 	if s, err := New(Config{}, job, job); err == nil {
-		_ = s.Shutdown()
+		_ = stopAndWait(s.Stop, s.Wait, s.Cancel)
 		t.Fatal("应拒绝重复任务")
 	}
 }
@@ -115,10 +112,9 @@ func TestMinimumInterval(t *testing.T) {
 				s, err := New(Config{}, job)
 				if s != nil {
 					t.Cleanup(func() {
-						if err := s.Shutdown(); err != nil {
+						if err := stopAndWait(s.Stop, s.Wait, s.Cancel); err != nil {
 							t.Error(err)
 						}
-						s.Wait()
 					})
 				}
 				if interval < 100*time.Millisecond {
@@ -230,7 +226,7 @@ func TestSchedulesAndContextIsolation(t *testing.T) {
 		}
 		return true
 	})
-	if err := s.Shutdown(); err != nil {
+	if err := stopAndWait(s.Stop, s.Wait, s.Cancel); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-result; err != nil {
@@ -265,9 +261,7 @@ func TestDrainAllowsCompletionAndUnlock(t *testing.T) {
 		}), nil
 	})
 	s, result := runScheduler(t, Config{
-		DrainTimeout:    time.Second,
-		ShutdownTimeout: 2 * time.Second,
-		Locker:          locker,
+		Locker: locker,
 	}, Job{
 		Name:    "job",
 		Every:   100 * time.Millisecond,
@@ -283,7 +277,7 @@ func TestDrainAllowsCompletionAndUnlock(t *testing.T) {
 	})
 	<-entered
 	stopped := make(chan error, 1)
-	go func() { stopped <- s.Shutdown() }()
+	go func() { stopped <- stopAndWait(s.Stop, s.Wait, s.Cancel) }()
 	time.Sleep(20 * time.Millisecond)
 	finishTask()
 	<-unlocking
@@ -301,98 +295,6 @@ func TestDrainAllowsCompletionAndUnlock(t *testing.T) {
 	}
 	if canceled.Load() {
 		t.Fatal("排空任务与解锁 context 不应被引擎取消")
-	}
-}
-
-func TestDefaultShutdownTimeouts(t *testing.T) {
-	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	finish := sync.OnceFunc(func() { close(release) })
-	defer finish()
-	s, _ := runScheduler(t, Config{}, Job{
-		Name:  "job",
-		Every: 100 * time.Millisecond,
-		Handler: func(ctx context.Context) error {
-			close(entered)
-			<-ctx.Done()
-			close(canceled)
-			<-release
-			return ctx.Err()
-		},
-	})
-	<-entered
-	started := time.Now()
-	closed := make(chan error, 1)
-	go func() { closed <- s.Shutdown() }()
-	// 使用真实默认期限，防止默认排空时间再次超过应用管理器的关闭预算。
-	select {
-	case <-canceled:
-		if elapsed := time.Since(started); elapsed < 9*time.Second {
-			t.Fatalf("默认自然排空应持续约 10s，实际 %s", elapsed)
-		}
-	case <-time.After(12 * time.Second):
-		t.Fatal("默认排空应在约 10s 后取消任务")
-	}
-	select {
-	case err := <-closed:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("未退出任务应使关闭超时: %v", err)
-		}
-		if elapsed := time.Since(started); elapsed < 14*time.Second {
-			t.Fatalf("默认总关闭应等待约 15s，实际 %s", elapsed)
-		}
-	case <-time.After(time.Until(started.Add(17 * time.Second))):
-		t.Fatal("默认总关闭应在约 15s 后返回")
-	}
-}
-
-func TestShutdownDeadlineWaitAndSingleton(t *testing.T) {
-	entered, release := make(chan struct{}), make(chan struct{})
-	finish := sync.OnceFunc(func() { close(release) })
-	defer finish()
-	var runs atomic.Int32
-	var returned atomic.Bool
-	s, result := runScheduler(t, Config{
-		DrainTimeout:    40 * time.Millisecond,
-		ShutdownTimeout: 120 * time.Millisecond,
-	}, Job{
-		Name:  "job",
-		Every: 100 * time.Millisecond,
-		Handler: func(ctx context.Context) error {
-			if runs.Add(1) == 1 {
-				close(entered)
-			}
-			defer returned.Store(true)
-			<-release
-			return ctx.Err()
-		},
-	})
-	<-entered
-	if err := s.Shutdown(); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("应限时返回: %v", err)
-	}
-	if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal(err)
-	}
-	if returned.Load() {
-		t.Fatal("不响应取消的任务仍在运行")
-	}
-	waited := make(chan struct{})
-	go func() {
-		s.Wait()
-		close(waited)
-	}()
-	select {
-	case <-waited:
-		t.Fatal("Wait 提前返回")
-	default:
-	}
-	finish()
-	<-waited
-	if !returned.Load() || runs.Load() != 1 {
-		t.Fatalf("任务应仅执行一次且完成返回: runs=%d returned=%v", runs.Load(), returned.Load())
-	}
-	if err := s.Shutdown(); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal("重复关闭应保留原结果")
 	}
 }
 
@@ -423,7 +325,7 @@ func TestLateLockDuringShutdownNeverRuns(t *testing.T) {
 	})
 	<-acquiring
 	result := make(chan error, 1)
-	go func() { result <- s.Shutdown() }()
+	go func() { result <- stopAndWait(s.Stop, s.Wait, s.Cancel) }()
 	waitFor(t, func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -469,7 +371,7 @@ func TestErrorsPanicAndTimeoutKeepSchedulerRunning(t *testing.T) {
 	}
 	finish()
 	waitFor(t, func() bool { return countResults(records(), "success") > 0 })
-	if err := s.Shutdown(); err != nil {
+	if err := stopAndWait(s.Stop, s.Wait, s.Cancel); err != nil {
 		t.Fatal(err)
 	}
 	for _, status := range []string{"error", "panic", "timeout"} {
@@ -496,13 +398,12 @@ func TestConcurrentCloseBeforeRun(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
-			if err := s.Shutdown(); err != nil {
+			if err := stopAndWait(s.Stop, s.Wait, s.Cancel); err != nil {
 				t.Error(err)
 			}
 		})
 	}
 	wg.Wait()
-	s.Wait()
 	if err := s.Run(); !errors.Is(err, ErrClosed) {
 		t.Fatalf("关闭后应拒绝启动: %v", err)
 	}
@@ -522,7 +423,7 @@ func TestRunShutdownRace(t *testing.T) {
 		}()
 		go func() {
 			<-start
-			closed <- s.Shutdown()
+			closed <- stopAndWait(s.Stop, s.Wait, s.Cancel)
 		}()
 		close(start)
 		select {
@@ -541,11 +442,47 @@ func TestRunShutdownRace(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("关闭后 Run 未返回")
 		}
-		s.Wait()
 	}
 }
 
-func TestShutdownDeadlineIncludesUnlock(t *testing.T) {
+type lockerFunc func(context.Context, string) (gocron.Lock, error)
+
+func (f lockerFunc) Lock(ctx context.Context, name string) (gocron.Lock, error) { return f(ctx, name) }
+
+type lockFunc func(context.Context) error
+
+func (f lockFunc) Unlock(ctx context.Context) error { return f(ctx) }
+
+func TestExplicitCancelAfterWaitDeadline(t *testing.T) {
+	entered := make(chan context.Context, 1)
+	release := make(chan struct{})
+	s, ran := runScheduler(t, Config{}, Job{Name: "blocked", Every: 100 * time.Millisecond, Handler: func(ctx context.Context) error { entered <- ctx; <-release; return nil }})
+	taskCtx := <-entered
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-ran; err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := s.Wait(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("未按期限返回: %v", err)
+	}
+	if taskCtx.Err() != nil {
+		t.Fatal("停收或等待提前取消了任务")
+	}
+	s.Cancel()
+	if taskCtx.Err() == nil {
+		t.Fatal("没有取消剩余任务")
+	}
+	close(release)
+	if err := s.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitDeadlineIncludesUnlock(t *testing.T) {
 	unlocking, release := make(chan struct{}), make(chan struct{})
 	finish := sync.OnceFunc(func() { close(release) })
 	defer finish()
@@ -556,38 +493,24 @@ func TestShutdownDeadlineIncludesUnlock(t *testing.T) {
 			return nil
 		}), nil
 	})
-	s, _ := runScheduler(t, Config{
-		Locker:          locker,
-		DrainTimeout:    40 * time.Millisecond,
-		ShutdownTimeout: 120 * time.Millisecond,
-	}, Job{
+	s, _ := runScheduler(t, Config{Locker: locker}, Job{
 		Name:    "job",
 		Every:   100 * time.Millisecond,
 		Timeout: time.Second,
 		Handler: func(context.Context) error { return nil },
 	})
 	<-unlocking
-	if err := s.Shutdown(); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("解锁未完成时必须按总预算返回超时: %v", err)
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
 	}
-	waited := make(chan struct{})
-	go func() {
-		s.Wait()
-		close(waited)
-	}()
-	select {
-	case <-waited:
-		t.Fatal("Handler 返回不能代表锁清理完成")
-	case <-time.After(20 * time.Millisecond):
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := s.Wait(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("解锁未结束，不应假报排空: %v", err)
 	}
+	s.Cancel()
 	finish()
-	<-waited
+	if err := s.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }
-
-type lockerFunc func(context.Context, string) (gocron.Lock, error)
-
-func (f lockerFunc) Lock(ctx context.Context, name string) (gocron.Lock, error) { return f(ctx, name) }
-
-type lockFunc func(context.Context) error
-
-func (f lockFunc) Unlock(ctx context.Context) error { return f(ctx) }

@@ -50,6 +50,10 @@ func TestNATSFromConfig(t *testing.T) {
 		name string
 		run  func(*testing.T)
 	}{
+		{name: "Service", run: testNewNATSConsumerService},
+		{name: "ServiceConstructionErrors", run: testNewNATSConsumerServiceConstructionErrors},
+		{name: "ServiceDirectCancel", run: testNewNATSConsumerServiceDirectCancel},
+		{name: "ServiceSlowRegistrationLog", run: testNewNATSConsumerServiceSlowRegistrationLog},
 		{name: "MissingClientBeforeEnvironment", run: testNATSFromConfigMissingClientBeforeEnvironment},
 		{name: "PublishConsumeAndReuse", run: testNATSFromConfigPublishConsumeAndReuse},
 		{name: "NamespaceIsolation", run: testNATSFromConfigNamespaceIsolation},
@@ -77,6 +81,8 @@ func startNATSTestServer(t *testing.T, jetStream bool) string {
 		StoreDir:  t.TempDir(),
 		NoLog:     true,
 		NoSigs:    true,
+		// 固定测试逻辑配额，容纳多个默认 5 GiB Stream，避免按本机剩余磁盘计算。
+		JetStreamMaxStore: 64 << 30,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +100,11 @@ func startNATSTestServer(t *testing.T, jetStream bool) string {
 
 func registrationClients(t *testing.T, enableJetStream bool, names ...string) []*natsx.Client {
 	t.Helper()
+	return registrationClientsWithCloseError(t, enableJetStream, nil, names...)
+}
+
+func registrationClientsWithCloseError(t *testing.T, enableJetStream bool, wantCloseErr error, names ...string) []*natsx.Client {
+	t.Helper()
 	if err := env.Init(env.Config{
 		AppName:       "nats-registration-test",
 		RunMode:       env.RunModeRelease,
@@ -105,7 +116,7 @@ func registrationClients(t *testing.T, enableJetStream bool, names ...string) []
 	}
 	url := startNATSTestServer(t, enableJetStream)
 	t.Cleanup(func() {
-		if err := natsx.CloseAll(); err != nil {
+		if err := natsx.CloseAll(); wantCloseErr == nil && err != nil || wantCloseErr != nil && !errors.Is(err, wantCloseErr) {
 			t.Error(err)
 		}
 	})

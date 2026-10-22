@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,25 +20,27 @@ var (
 	ErrInvalidService   = errors.New("apprun: invalid service")
 	ErrDuplicateService = errors.New("apprun: duplicate service name")
 	ErrUnexpectedExit   = errors.New("apprun: service exited before shutdown")
-	// ErrShutdownTimeout 表示总关闭期限耗尽；尚未结束的回调可能继续执行。
+	// ErrShutdownTimeout 表示统一停收与排空期限耗尽；尚未结束的回调可能继续执行。
 	ErrShutdownTimeout = errors.New("apprun: shutdown timeout")
 )
 
-const defaultShutdownTimeout = 20 * time.Second
+const defaultShutdownTimeout = 30 * time.Second
 
-// Service 描述一个常驻服务。两个回调均必填。
-// Run 必须持续运行至 Shutdown 请求停止或发生错误，正常关闭时返回 nil。
-// Run 不得只启动后台 goroutine 就返回；未发起关闭时返回 nil 会被视为 ErrUnexpectedExit。
-// Shutdown 必须允许与 Run 并发及先于 Run 执行，关闭后的 Run 不得重新启动服务。
+// Service 描述常驻服务，全部回调必填。Stop 只封闭入口并启动排空，Wait 等待实际工作结束。
+// Wait 返回 nil 才确认排空；错误或 panic 保留，管理器返回前仍会调用 Cancel 兜底。
+// Cancel 只发出协作取消通知，必须立即返回；超时不保证任意 Go 任务已经终止。
+// Stop/Cancel 可先于或并发于 Run，停收后 Run 不得重新启动。Run 不得只启动后台任务就返回。
 type Service struct {
-	Name     string
-	Run      func() error
-	Shutdown func() error
+	Name   string
+	Run    func() error
+	Stop   func() error
+	Wait   func(context.Context) error
+	Cancel func()
 }
 
-// Manager 并发运行常驻服务，按登记逆序关闭。零值可用，使用后不可复制。
+// Manager 并发运行常驻服务，统一停收并并行排空。零值可用，使用后不可复制。
 // 自定义关闭期限须通过 New 设置，创建后不可修改。
-// 依赖先登记、使用依赖的生产者后登记；登记成功的服务由本次 Run 负责关闭。
+// 登记顺序不代表启动依赖或停机顺序；登记成功的服务由本次 Run 负责停收。
 type Manager struct {
 	// shutdownTimeout 是全部服务共享的关闭期限，不包含 Run 返回后的资源清理时间。
 	shutdownTimeout time.Duration
@@ -49,7 +50,7 @@ type Manager struct {
 	started  bool
 }
 
-// New 创建管理器并固定总关闭期限；零值默认 20 秒，负值返回错误。
+// New 创建管理器并固定总关闭期限；零值默认 30 秒，负值返回错误。
 func New(shutdownTimeout time.Duration) (*Manager, error) {
 	if shutdownTimeout < 0 {
 		return nil, fmt.Errorf("apprun: negative shutdown timeout: %s", shutdownTimeout)
@@ -60,7 +61,7 @@ func New(shutdownTimeout time.Duration) (*Manager, error) {
 	return &Manager{shutdownTimeout: shutdownTimeout}, nil
 }
 
-// PanicError 保存运行或关闭回调的 panic；立即记录堆栈,并通过返回错误交给调用方。
+// PanicError 保存运行或关闭回调的 panic；保留堆栈并通过返回错误交给调用方。
 type PanicError struct {
 	Service   string
 	Operation string
@@ -72,6 +73,19 @@ func (e *PanicError) Error() string {
 	return fmt.Sprintf("apprun: service %q %s panic: %v", e.Service, e.Operation, e.Value)
 }
 
+// serviceError 延后生成错误文本，避免自定义 Error/Format 阻塞关闭控制协程。
+type serviceError struct {
+	name      string
+	operation string
+	err       error
+}
+
+func (e *serviceError) Error() string {
+	return fmt.Sprintf("apprun: service %q %s: %v", e.name, e.operation, e.err)
+}
+
+func (e *serviceError) Unwrap() error { return e.err }
+
 // Register 登记名称唯一的服务；运行开始后不能追加登记。
 func (m *Manager) Register(service Service) error {
 	m.mu.Lock()
@@ -79,8 +93,8 @@ func (m *Manager) Register(service Service) error {
 	if m.started {
 		return ErrStarted
 	}
-	if service.Name == "" || strings.TrimSpace(service.Name) != service.Name || service.Run == nil || service.Shutdown == nil {
-		return fmt.Errorf("%w: %q requires a name, Run and Shutdown", ErrInvalidService, service.Name)
+	if service.Name == "" || strings.TrimSpace(service.Name) != service.Name || service.Run == nil || service.Stop == nil || service.Wait == nil || service.Cancel == nil {
+		return fmt.Errorf("%w: %q requires a name, Run, Stop, Wait and Cancel", ErrInvalidService, service.Name)
 	}
 	for _, existing := range m.services {
 		if existing.Name == service.Name {
@@ -91,20 +105,24 @@ func (m *Manager) Register(service Service) error {
 	return nil
 }
 
-// Run 阻塞至 ctx 请求停机或任一服务退出，并完成逆序关闭与等待。
-// ctx 只通知管理器，不控制业务工作；取消本身不作为错误返回。
-// 预取消也会关闭已登记服务。全部关闭及退出等待共享总关闭期限，本方法不强制终止回调。
-// 总期限耗尽返回 ErrShutdownTimeout，停止发起后续关闭；未退出任务可能与调用方清理并发。
-// Shutdown 错误或 panic 均在剩余总关闭期限内等待 Run 返回，并保留原始错误。
-func (m *Manager) Run(ctx context.Context) error {
-	return m.run(ctx, nil)
-}
+// Run 等待 ctx 取消或任一服务退出，统一停收并在同一个期限内等待全部服务排空。
+// ctx 只通知管理器，不提前取消业务；预取消也会停收已登记服务，但不启动 Run。
+// 超时通知未完成服务 Cancel 并返回 ErrShutdownTimeout；入口随后有界回收资源并退出。
+func (m *Manager) Run(ctx context.Context) error { return m.run(ctx, nil) }
 
 type serviceRun struct {
 	service  Service
 	stopping atomic.Bool
 	done     chan struct{}
-	err      error // 写入后关闭 done；关闭协程只在收到 done 后读取。
+	drained  chan struct{}
+	err      error // 仅在 done 关闭后读取。
+}
+
+type shutdownResult struct {
+	name      string
+	operation string
+	err       error
+	finished  bool
 }
 
 func (m *Manager) run(ctx context.Context, onStop func()) error {
@@ -120,23 +138,22 @@ func (m *Manager) run(ctx context.Context, onStop func()) error {
 		m.mu.Unlock()
 		return ErrNoServices
 	}
-	shutdownTimeout := m.shutdownTimeout
-	if shutdownTimeout == 0 {
-		shutdownTimeout = defaultShutdownTimeout
+	timeout := m.shutdownTimeout
+	if timeout == 0 {
+		timeout = defaultShutdownTimeout
 	}
 	m.started = true
 	services := m.services
 	m.services = nil
 	m.mu.Unlock()
 
-	logit.Info(ctx, "AppRunStart", logit.Int("services", len(services)))
 	runs := make([]*serviceRun, len(services))
-	// 每个服务最多发送一次，即使已经进入关闭流程也不会卡住退出协程。
 	exited := make(chan struct{}, len(services))
 	for i, service := range services {
 		state := &serviceRun{
 			service: service,
 			done:    make(chan struct{}),
+			drained: make(chan struct{}),
 		}
 		runs[i] = state
 		if ctx.Err() != nil {
@@ -144,7 +161,7 @@ func (m *Manager) run(ctx context.Context, onStop func()) error {
 			continue
 		}
 		go func() {
-			err := call(ctx, service.Name, "run", service.Run)
+			err := call(service.Name, "run", service.Run)
 			if err == nil && !state.stopping.Load() {
 				err = ErrUnexpectedExit
 			}
@@ -153,104 +170,135 @@ func (m *Manager) run(ctx context.Context, onStop func()) error {
 			exited <- struct{}{}
 		}()
 	}
-
-	reason := "service_exit"
 	select {
 	case <-ctx.Done():
-		reason = context.Cause(ctx).Error()
 	case <-exited:
 	}
-	// 使用独立 context，避免停机通知的取消立即耗尽整个收尾期限。
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	drainCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	// 信号订阅须在阻塞收尾前释放，让后续中断恢复原有行为。
+	deadline, _ := drainCtx.Deadline()
 	if onStop != nil {
 		onStop()
 	}
-	logit.Info(ctx, "AppRunStopping", logit.Str("reason", reason))
-	var errs []error
-	for i, state := range slices.Backward(runs) {
-		if shutdownCtx.Err() != nil {
-			return shutdownTimedOut(ctx, runs[:i+1], "shutdown", nil, errs, nil)
-		}
-		started := time.Now()
+	// 先标记全部服务，再发停收，避免先停服务引起其他 Run 返回被误判为意外退出。
+	for _, state := range runs {
 		state.stopping.Store(true)
-		// 回调可能不返回；缓冲结果让总超时返回后的迟到回调也能完成。
-		shutdownDone := make(chan error, 1)
+	}
+	results := make(chan shutdownResult, 3*len(runs))
+	pending := make(map[string]string, len(runs))
+	for _, state := range runs {
+		pending[state.service.Name] = "stop"
 		go func() {
-			shutdownDone <- call(ctx, state.service.Name, "shutdown", state.service.Shutdown)
+			started := time.Now()
+			stopErr := call(state.service.Name, "stop", state.service.Stop)
+			results <- shutdownResult{
+				name:      state.service.Name,
+				operation: "stop",
+				err:       stopErr,
+			}
+			waitErr := call(state.service.Name, "wait", func() error { return state.service.Wait(drainCtx) })
+			results <- shutdownResult{
+				name:      state.service.Name,
+				operation: "wait",
+				err:       waitErr,
+			}
+			// Run 的返回和实际业务排空分别确认，不能用监听器退出代替 Handler 完成。
+			select {
+			case <-state.done:
+			case <-drainCtx.Done():
+				return
+			}
+			if drainCtx.Err() != nil {
+				return
+			}
+			logit.Info(ctx, "AppServiceStopped", logit.Str("service", state.service.Name), logit.Dur("duration", time.Since(started)), logit.Err(errors.Join(stopErr, waitErr, state.err)))
+			// 只发布期限内完成的结果，避免日志超时后的迟到结果掩盖真正的超时。
+			if !time.Now().Before(deadline) {
+				return
+			}
+			// Wait 失败不能证明业务已结束，返回前仍需发出取消通知。
+			if waitErr == nil {
+				close(state.drained)
+			}
+			results <- shutdownResult{
+				name:     state.service.Name,
+				finished: true,
+			}
 		}()
-		var shutdownErr error
-		select {
-		case shutdownErr = <-shutdownDone:
-		case <-shutdownCtx.Done():
-			return shutdownTimedOut(ctx, runs[:i+1], "shutdown", nil, errs, shutdownDone)
+	}
+	var errs []error
+	remaining := len(runs)
+	collect := func(result shutdownResult) {
+		if result.err != nil {
+			errs = append(errs, &serviceError{
+				name:      result.name,
+				operation: result.operation,
+				err:       result.err,
+			})
 		}
-		// Shutdown 返回不代表 Run 已经完成；先等待当前生产者，再释放后续依赖。
-		select {
-		case <-state.done:
-		case <-shutdownCtx.Done():
-			return shutdownTimedOut(ctx, runs[:i+1], "run", shutdownErr, errs, nil)
+		// 只由收集协程根据已发布的结果更新进度，避免读取回调中的未同步状态。
+		switch result.operation {
+		case "stop":
+			pending[result.name] = "wait"
+		case "wait":
+			pending[result.name] = "run"
 		}
-		for _, result := range []struct {
-			operation string
-			err       error
-		}{
-			{operation: "run", err: state.err},
-			{operation: "shutdown", err: shutdownErr},
-		} {
-			if result.err != nil {
-				errs = append(errs, fmt.Errorf("apprun: service %q %s: %w", state.service.Name, result.operation, result.err))
+		if result.finished {
+			delete(pending, result.name)
+			remaining--
+		}
+	}
+	for remaining > 0 && drainCtx.Err() == nil {
+		select {
+		case result := <-results:
+			collect(result)
+		case <-drainCtx.Done():
+		}
+	}
+	// 只读取已经发布的结果，迟到发送由缓冲承接，不延长退出期限。
+	for len(results) > 0 {
+		collect(<-results)
+	}
+	// 计时器可能在结果入队后、收集完成前到期；已全部完成时不再追加超时错误。
+	if remaining > 0 && drainCtx.Err() != nil {
+		errs = append(errs, ErrShutdownTimeout, drainCtx.Err())
+		for _, state := range runs {
+			if operation, ok := pending[state.service.Name]; ok {
+				errs = append(errs, fmt.Errorf("apprun: service %q %s: %w", state.service.Name, operation, drainCtx.Err()))
 			}
 		}
-		serviceErr := errors.Join(state.err, shutdownErr)
-		level := logit.InfoLevel
-		if serviceErr != nil {
-			level = logit.ErrorLevel
+	}
+	for _, state := range runs {
+		select {
+		case <-state.drained:
+			continue
+		default:
 		}
-		logit.Output(ctx, level, 0, "AppServiceShutdown",
-			logit.Str("service", state.service.Name),
-			logit.Dur("duration", time.Since(started)),
-			logit.Err(serviceErr),
-		)
+		// 超时或 Wait 失败均需取消兜底；panic 转为错误，继续取消其余组件。
+		if err := call(state.service.Name, "cancel", func() error {
+			state.service.Cancel()
+			return nil
+		}); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	err := errors.Join(errs...)
-	logit.Info(ctx, "AppRunStopped", logit.Err(err))
-	return err
-}
-
-func shutdownTimedOut(ctx context.Context, pending []*serviceRun, operation string, shutdownErr error, errs []error, shutdownDone <-chan error) error {
-	// 超时与关闭结果可能同时就绪；只收集已到达的结果，不延长关闭期限。
-	select {
-	case shutdownErr = <-shutdownDone:
-	default:
-	}
-	errs = appendCompletedRunErrors(errs, pending)
-	state := pending[len(pending)-1]
-	if shutdownErr != nil {
-		errs = append(errs, fmt.Errorf("apprun: service %q shutdown: %w", state.service.Name, shutdownErr))
-	}
-	errs = append(errs, fmt.Errorf("%w: service %q %s: %w", ErrShutdownTimeout, state.service.Name, operation, context.DeadlineExceeded))
-	err := errors.Join(errs...)
-	logit.Error(ctx, "AppRunShutdownTimeout", logit.Err(err))
-	return err
-}
-
-func appendCompletedRunErrors(errs []error, pending []*serviceRun) []error {
-	// 提前返回时仍保留已发布的 Run 错误；不等待未退出回调，也不读取其错误字段。
-	for _, state := range pending {
+	for _, state := range runs {
 		select {
 		case <-state.done:
 			if state.err != nil {
-				errs = append(errs, fmt.Errorf("apprun: service %q run: %w", state.service.Name, state.err))
+				errs = append(errs, &serviceError{
+					name:      state.service.Name,
+					operation: "run",
+					err:       state.err,
+				})
 			}
 		default:
 		}
 	}
-	return errs
+	return errors.Join(errs...)
 }
 
-func call(ctx context.Context, name, operation string, fn func() error) (err error) {
+func call(name, operation string, fn func() error) (err error) {
 	defer func() {
 		if value := recover(); value != nil {
 			panicErr := &PanicError{
@@ -260,8 +308,6 @@ func call(ctx context.Context, name, operation string, fn func() error) (err err
 				Stack:     debug.Stack(),
 			}
 			err = panicErr
-			// 在任何后续等待之前输出,避免收尾阻塞掩盖最初的 panic。
-			logit.Error(ctx, "AppServicePanic", logit.Err(panicErr), logit.Str("stack", string(panicErr.Stack)))
 		}
 	}()
 	return fn()

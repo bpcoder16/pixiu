@@ -18,6 +18,7 @@ var baseInitStarted bool
 // 服务停止后，共享资源按 NATS、Elasticsearch、Redis、MySQL、阿里云 ES、OSS、日志的顺序关闭；未声明的组件跳过。
 // 成功返回后再创建和保存模块 Logger；重复调用或初始化失败后重试会 panic。
 // resources 由应用创建为空栈并负责关闭，调用方须提前登记关闭 defer。
+// NATS 消费者由 Start 排空后，才回收资源栈中的客户端；服务排空超时先取消任务，再执行有界资源栈回收。
 func MustBaseInit(config *appconfig.AppConfig, resources *lifecycle.Stack) {
 	mustBaseInit(config, resources, true)
 }

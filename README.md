@@ -129,7 +129,7 @@ func main() {
 
 | 包 | 能力 | 主要依赖 |
 | --- | --- | --- |
-| [`infra/apprun`](infra/apprun/doc.go) | 常驻服务运行监督、逆序关闭、显式 SIGINT/SIGTERM 接入 | 标准库、logit |
+| [`infra/apprun`](infra/apprun/doc.go) | 常驻服务监督、统一停收和限时排空、显式 SIGINT/SIGTERM 接入 | 标准库、logit |
 | [`infra/cronx`](infra/cronx/doc.go) | 六字段 Cron、固定/随机间隔、防重入、任务日志与两阶段关闭 | gocron v2、robfig/cron v3、logit；可注入 gocron.Locker |
 | [`infra/configx`](infra/configx/doc.go) | YAML / TOML / JSON 结构体配置加载、全局命名获取与零值兜底 | Viper |
 | [`infra/env`](infra/env/doc.go) | 通用应用环境、IP 校验与补齐、一次初始化与全局读取 | 标准库、netx |
@@ -177,15 +177,15 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 
 `appconfig.MustLoadAppConfig` 使用 `configx.Parse`，支持 YAML / TOML / JSON，拒绝未知字段和弱类型转换；配置只返回给调用方，环境由 `env.Init` 一次性发布。应用配置文件所在目录作为 `env.ConfigDirPath()`，供 bootstrap 查找实例配置。加载配置不会初始化日志或修改 `time.Local`；`bootstrap.MustBaseInit` 在日志创建前应用环境时区，再依次初始化日志、OSS、阿里云 ES、MySQL、Redis、Elasticsearch 和 NATS，共享客户端仅初始化已声明的实例。
 
-服务及外部生产者停止后，共享资源按登记逆序关闭：NATS → Elasticsearch → Redis → MySQL → 阿里云 ES → OSS → 日志。未声明的组件跳过；初始化失败时只回收已登记资源。该顺序按组件类别描述，不保证同一组件内多个命名实例的关闭顺序。`MustBaseInitWithoutLogit` 跳过日志初始化及关闭登记，自管日志仍由应用最后关闭。
+HTTP、Cron 和 NATS 统一停收，共享默认 30 秒并行排空；超时取消剩余任务。正常和超时路径都执行资源回收，lifecycle.Stack 默认整体 20 秒，可用 `lifecycle.New(timeout)` 设置；到期停止发起后续关闭，入口退出。资源逆序回收，日志最后关闭；同一模块的多命名实例不保证关闭顺序。初始化前登记收尾 defer，初始化失败同样有界回收。
 
-初始化完成后，应用可调用 `bootstrap.NewAppManager()` 创建默认总关闭期限为 20 秒的管理器，也可传入不小于 5 秒的自定义时长，传入 0 仍使用默认值。`bootstrap.NewHTTPService(handler)` 从 `env.ConfigDirPath()` 下严格加载 `http.yaml` 并返回可注册的 `apprun.Service`，HTTP 关闭期限默认 15 秒。应用显式调用 `manager.Register(service)` 和 `manager.RunSignals()`，管理器返回后再关闭共享资源栈。
+初始化完成后可调用 bootstrap.NewAppManager() 创建默认 30 秒管理器，也可传入不小于 5 秒的自定义时长。NewHTTPService(handler) 严格读取 http.yaml，并适配 Run/Stop/Wait/Cancel。登记后调用 RunSignals，返回后关闭资源栈。
 
-常见启动流程可直接将服务构造函数传给 `bootstrap.Start(factories...)`，由其按顺序构造、登记服务，再接管 SIGINT / SIGTERM。构造或登记失败时逆序回收已构造服务；运行期总关闭期限默认 20 秒。需要显式配置期限时使用 `StartWithConfig`，其中 `StartConfig.ShutdownTimeout` 不得小于 5 秒；共享资源栈与日志的关闭仍由应用在返回后执行。
+常见启动流程直接使用 bootstrap.Start(factories...)，按顺序构造和登记，再接管 SIGINT/SIGTERM。构造失败逆序清理已构造服务；运行后统一停收并共享默认 30 秒。StartWithConfig 的 ShutdownTimeout 自定义服务预算，资源栈由应用单独持有。
 
-`bootstrap.NewCronScheduler(handlers...)` 从独立的 [cron.yaml](biz/bootstrap/conf.example/cron.yaml) 读取调度，按名称绑定 `cronx.NamedHandler`，也可使用 `cronx.MustNewHandlerRegistry(handlers...).Handlers()...` 提供声明；`CronService` 适配现有 Manager。启用 lock 段时直接组合命名 Redis 与 gocron-redis-lock，设置租期和自动续租，不扩展 lockx。任务超时只取消 context，实际返回后才解锁；失租不会自动取消业务，不保证集群每周期只执行一次。
+`bootstrap.NewCronService(handlers...)` 内部调用 `NewCronScheduler`，从独立的 [cron.yaml](biz/bootstrap/conf.example/cron.yaml) 读取调度，按名称绑定 `cronx.NamedHandler`，返回供 Manager 使用的服务和构造错误。也可使用 `cronx.MustNewHandlerRegistry(handlers...).Handlers()...` 提供声明；需要直接操作调度器时保留 `bootstrap.NewCronScheduler(handlers...)` 用法。启用 lock 段时直接组合命名 Redis 与 gocron-redis-lock，设置租期和自动续租，不扩展 lockx。任务超时只取消 context，实际返回后才解锁；失租不会自动取消业务，不保证集群每周期只执行一次。
 
-默认 Cron 总关闭预算为 15 秒，前 10 秒自然排空，默认管理器的 20 秒可覆盖独立 Cron。混合运行先登记 HTTP、再登记 Cron，关闭先 Cron 后 HTTP，再释放客户端，日志最后关闭。包级调用方式见 [bootstrap 文档](biz/bootstrap/doc.go)；[pixiu-demo](https://github.com/bpcoder16/pixiu-demo) 已提供通过 `Start` 组合 Gin HTTP 与 Cron 的运行示例，以及 NATS 消息收发和应用装配示例。
+HTTP、Cron 不再保留独立关闭计时器；http.yaml 的 shutdownTimeout 以及 cron.yaml 的 shutdownTimeout、drainTimeout 须删除，业务任务自身 timeout 保留。服务登记顺序不决定停收顺序。示例见 [bootstrap 文档](biz/bootstrap/doc.go) 与 [pixiu-demo](https://github.com/bpcoder16/pixiu-demo)。
 
 ### 规划中的能力
 
@@ -263,7 +263,7 @@ package main
 
 import (
 	"errors"
-	"fmt"
+	"log"
 	"net/http"
 	"os"
 
@@ -274,8 +274,7 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	if run() != nil {
 		os.Exit(1)
 	}
 }
@@ -284,6 +283,13 @@ func run() (runErr error) {
 	cfg := appconfig.MustLoadAppConfig("./conf/app.yaml")
 	var resources lifecycle.Stack
 	defer func() {
+		if runErr != nil {
+			failure := runErr
+			_ = resources.Register(func() error {
+				log.Printf("server exit: %v", failure)
+				return nil
+			})
+		}
 		runErr = errors.Join(runErr, resources.Close())
 	}()
 	bootstrap.MustBaseInit(cfg, &resources)
@@ -300,7 +306,7 @@ func run() (runErr error) {
 
 </details>
 
-`NewHTTPService` 构造时不监听端口；`Start` 统一构造、登记并运行服务，在收到 SIGINT / SIGTERM 时关闭。运行后的服务由内部管理器关闭，无需重复登记到资源栈。HTTP 排空默认 15 秒，管理器总关闭期限默认 20 秒；超时后可能仍有未退出的 handler，应用需处理返回错误并尽力清理后退出。共享资源清理时间不计入管理器总期限。
+NewHTTPService 构造不监听，Start 接管服务与信号；Stop 统一封闭入口，Wait 共享 30 秒，超时 Cancel。返回后无论是否排空超时都执行资源栈 Close，默认整体最多等待 20 秒。库不退出进程，应用 main 在有界收尾后退出。
 
 通过 bootstrap 初始化后，业务日志默认写入 `<dir>/<appName>/biz/` 下的 `debug.log`、`info.log`、`wf.log`，分别对应 Debug、Info 和 Warn / Error / Fatal；命名 Logger 增加 `<name>.` 文件前缀。`dir` 默认 `./log`，相对应用启动目录解析；release 输出 Info 及以上，debug/test 输出 Debug 及以上。
 
@@ -377,17 +383,17 @@ func main() {
 
 </details>
 
-各组件独立选择默认实例，`Default()` 与 `Named(默认名称)` 返回同一客户端。共享组件由 bootstrap 各登记一次 `CloseAll`，业务无需重复登记单个客户端关闭；应用退出前先停止并等待业务任务，再关闭资源栈。配置或初始化失败会 panic，提前登记的 defer 负责回收已创建资源；初始化只在启动阶段串行执行，失败后不支持重试。
+各组件独立选择默认实例，`Default()` 与 `Named(默认名称)` 返回同一客户端。共享组件由 bootstrap 各登记一次 `CloseAll`，业务无需重复登记单个客户端关闭。初始化失败会 panic，提前登记的 defer 负责回收已创建资源；初始化只在启动阶段串行执行，失败后不支持重试。
 
 此示例只展示初始化；常驻 HTTP 应用还需接入上面的服务管理器。`MustRegisterNATS` 声明实例，`MustBaseInit` 只完成连接初始化，不会自动准备 Stream 或启动消费。
 
-需要消费时，应用先通过 `natsx.MustNewJetStreamHandlerRegistry` / `MustNewCoreHandlerRegistry` 登记处理函数，在迁移及回调依赖就绪后调用 `bootstrap.RegisterNATSFromConfig("events", jsHandlers, coreHandlers)`。它读取独立的 `conf/nats-register.events.yaml`，按 Handler 名称绑定函数，并在内部创建 `context.Background()`，依次注册 Stream、JetStream 消费者和 Core 消费者，不设置整体注册期限；模板见 [NATS 消费注册配置](biz/bootstrap/conf.example/nats-register.example.yaml)，调用样例见 [bootstrap 文档](biz/bootstrap/doc.go)。包级具名函数默认保留原始大小写，闭包、方法值及泛型函数须显式命名，配置中的 Handler 引用须完全一致。
+需要消费时，通过 natsx.MustNewJetStreamHandlerRegistry / MustNewCoreHandlerRegistry 登记 Handler，在 Start 工厂中直接返回 `bootstrap.NewNATSConsumerService(instanceName, jetStreamHandlers, coreHandlers)`。该函数内部调用 NewNATSConsumer 读取消费配置并绑定 Handler，返回服务和构造错误；需要直接操作消费组件时仍可使用 NewNATSConsumer。Run 注册，Stop 停收，Wait 等待回调与确认，Cancel 协作取消。与 HTTP/Cron 共用默认 30 秒，登记顺序不表示启动或停机依赖。排空期间保留连接及发布能力，随后由资源栈关闭。模板见 [NATS 消费配置](biz/bootstrap/conf.example/nats-register.example.yaml)；具名函数默认保留原始大小写，闭包、方法值、泛型函数须显式命名。
 
 注册文件中的 `streamDefaults.replicas` 始终必填且为正整数，即使清单为空。每个客户端的三类注册入口各只允许调用一次，通过入口检查后，空清单或失败也占用次数；配置装配不能与手动注册混用，失败后应中止启动并关闭客户端，不在同一实例上重试。JetStream 处理函数完成本条业务后返回，由组件根据返回结果确认或重投，业务不自行 ACK / NAK / Term，仍需保证幂等。
 
 可选 `namespace` 配置在连接文件 `nats.events.yaml`，注册文件不接受该字段。非空值仅允许 ASCII 字母、数字、`_`、`-`；例如 `test1` 会将主题 `orders.created` 映射为 `test1.orders.created`，将 Stream `ORDERS` 映射为 `test1_ORDERS`，Durable、Core 名称及非空 Queue 也添加 `test1_`。注册与发布 / Request 均填写原始名称或主题，Handler 名称不变；回调主题已含前缀，原生 `Conn()` / `JetStream()` 不自动添加前缀。修改 namespace 不会迁移或删除旧资源，完整边界见 [`natsx` 包文档](infra/natsx/doc.go)。
 
-消费者在启动时保存客户端引用，排空期间不再查询 `Default` / `Named`。先停止并等待外部生产者，再由资源栈排空 NATS，随后关闭数据库等依赖，日志最后关闭。
+NATS 消费者可在启动时保存客户端引用，也可在消费排空期间查询 `Default` / `Named` 并继续发布。关闭完成后查询仍按原约定 panic；其他客户端的关闭与查询行为不变。先停止并等待外部生产者，再由资源栈排空 NATS，随后关闭数据库等依赖，日志最后关闭。
 
 OSS 文件必填 `region`、`bucket`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`requestTimeout` 默认 60s，`slowThreshold` 默认 500ms，`logRequests` 默认关闭。初始化不联网校验 Bucket 或权限，业务通过 `ossx.Default()` / `Named(name)` 取得固定 Bucket 的实例。
 
@@ -425,8 +431,7 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	if run() != nil {
 		os.Exit(1)
 	}
 }
@@ -515,7 +520,7 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -594,8 +599,7 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	if run() != nil {
 		os.Exit(1)
 	}
 }
@@ -660,8 +664,7 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	if run() != nil {
 		os.Exit(1)
 	}
 }

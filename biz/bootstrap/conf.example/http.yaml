@@ -19,7 +19,4 @@ idleTimeout: "60s"
 # 请求体大小由 handler 单独限制。
 maxHeaderBytes: 65536
 
-# 从首次 Shutdown 开始计算的 HTTP 排空期限；零值默认 15s，负值无效。
-# 应用总关闭期限及部署平台终止宽限期需为 HTTP 排空和其他资源清理预留足够时间。
-# 超时后强制关闭普通连接，不额外等待 handler；WebSocket 等接管连接需独立关闭。
-shutdownTimeout: "15s"
+# 服务排空由管理器统一提供期限（默认 30s），此处仅配置网络读写限制。

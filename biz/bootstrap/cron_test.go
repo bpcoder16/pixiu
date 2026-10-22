@@ -35,6 +35,8 @@ func TestCronConfigurationAndBinding(t *testing.T) {
 		}
 		for _, content := range []string{
 			"unknown: true\n",
+			"shutdownTimeout: 15s\n",
+			"drainTimeout: 10s\n",
 			"jobs:\n  - name: missing\n    every: 1s\n",
 			"jobs:\n  - name: job\n    every: 1s\n    typo: true\n",
 			"jobs:\n  - name: job\n    every: 0s\n    cron: '* * * * * *'\n",
@@ -50,7 +52,7 @@ func TestCronConfigurationAndBinding(t *testing.T) {
 			writeCronConfig(t, content)
 			s, err := bootstrap.NewCronScheduler(handler)
 			if err == nil {
-				_ = s.Shutdown()
+				_ = stopAndWait(s.Stop, s.Wait, s.Cancel)
 				t.Fatalf("无效配置被接受: %s", content)
 			}
 			if !strings.Contains(err.Error(), "cron.yaml") {
@@ -63,7 +65,7 @@ func TestCronConfigurationAndBinding(t *testing.T) {
 			Handler: handler.Handler,
 		}}} {
 			if s, err := bootstrap.NewCronScheduler(handlers...); err == nil {
-				_ = s.Shutdown()
+				_ = stopAndWait(s.Stop, s.Wait, s.Cancel)
 				t.Fatal("应拒绝非法 Handler 声明")
 			}
 		}
@@ -89,10 +91,9 @@ func TestCronRegistryCaseSensitiveBinding(t *testing.T) {
 				writeCronConfig(t, fmt.Sprintf("jobs:\n  - name: %s\n    every: 1s\n", name))
 				s, err := bootstrap.NewCronScheduler(registry.Handlers()...)
 				if s != nil {
-					if closeErr := s.Shutdown(); closeErr != nil {
+					if closeErr := stopAndWait(s.Stop, s.Wait, s.Cancel); closeErr != nil {
 						t.Fatal(closeErr)
 					}
-					s.Wait()
 				}
 				if name == "RegistryHeartbeat" {
 					if err != nil {
@@ -129,10 +130,9 @@ func TestCronMinimumInterval(t *testing.T) {
 				})
 				if s != nil {
 					t.Cleanup(func() {
-						if err := s.Shutdown(); err != nil {
+						if err := stopAndWait(s.Stop, s.Wait, s.Cancel); err != nil {
 							t.Error(err)
 						}
-						s.Wait()
 					})
 				}
 				if tc.wantErr {
@@ -163,12 +163,29 @@ func TestCronLockedTimeoutValidatedByScheduler(t *testing.T) {
 				Handler: func(context.Context) error { return nil },
 			})
 			if err == nil {
-				_ = s.Shutdown()
+				_ = stopAndWait(s.Stop, s.Wait, s.Cancel)
 				t.Fatalf("启用锁时应拒绝 timeout=%s", timeout)
 			}
 			if !strings.Contains(err.Error(), "cron.yaml") || !strings.Contains(err.Error(), "cronx: job \"job\": timeout") {
 				t.Fatalf("超时校验应来自 cronx 并保留配置路径，实际: %v", err)
 			}
+		}
+	})
+}
+
+func TestNewCronServicePreservesConstructionErrors(t *testing.T) {
+	isolatedLog(t, func() {
+		initHTTPConfigDir(t)
+		service, err := bootstrap.NewCronService()
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("应保留配置文件错误链: %v", err)
+		}
+		if service.Name != "" || service.Run != nil || service.Stop != nil || service.Wait != nil || service.Cancel != nil {
+			t.Fatal("构造失败应返回空服务")
+		}
+		writeCronConfig(t, "jobs:\n  - name: missing\n    every: 1s\n")
+		if _, err := bootstrap.NewCronService(); err == nil || !strings.Contains(err.Error(), "unknown Cron handler") {
+			t.Fatalf("应返回任务绑定错误: %v", err)
 		}
 	})
 }
@@ -189,7 +206,7 @@ func TestCronStandaloneDoesNotNeedHTTPAndShutdownBeforeRun(t *testing.T) {
 				return nil
 			},
 		}
-		s, err := bootstrap.NewCronScheduler(handler, cronx.NamedHandler{
+		service, err := bootstrap.NewCronService(handler, cronx.NamedHandler{
 			Name: "unused",
 			Handler: func(context.Context) error {
 				unused.Store(true)
@@ -199,8 +216,7 @@ func TestCronStandaloneDoesNotNeedHTTPAndShutdownBeforeRun(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		service := bootstrap.CronService(s)
-		defer s.Shutdown()
+		defer stopAndWait(service.Stop, service.Wait, service.Cancel)
 		result := make(chan error, 1)
 		go func() { result <- service.Run() }()
 		for range 3 {
@@ -210,22 +226,20 @@ func TestCronStandaloneDoesNotNeedHTTPAndShutdownBeforeRun(t *testing.T) {
 				t.Fatal("Cron 未独立执行")
 			}
 		}
-		if err := service.Shutdown(); err != nil {
+		if err := stopAndWait(service.Stop, service.Wait, service.Cancel); err != nil {
 			t.Fatal(err)
 		}
 		if err := <-result; err != nil {
 			t.Fatal(err)
 		}
-		s.Wait()
 		if unused.Load() {
 			t.Fatal("代码中注册但未配置的任务不应执行")
 		}
-		another, err := bootstrap.NewCronScheduler(handler)
+		service, err = bootstrap.NewCronService(handler)
 		if err != nil {
 			t.Fatal(err)
 		}
-		service = bootstrap.CronService(another)
-		if err := service.Shutdown(); err != nil {
+		if err := stopAndWait(service.Stop, service.Wait, service.Cancel); err != nil {
 			t.Fatal(err)
 		}
 		if err := service.Run(); err != nil {
@@ -239,7 +253,7 @@ func TestCronAllJobsCommentedOut(t *testing.T) {
 		initHTTPConfigDir(t)
 		writeCronConfig(t, "jobs:\n  # - name: job\n  #   every: 100ms\n")
 		var called atomic.Bool
-		s, err := bootstrap.NewCronScheduler(cronx.NamedHandler{
+		service, err := bootstrap.NewCronService(cronx.NamedHandler{
 			Name: "job",
 			Handler: func(context.Context) error {
 				called.Store(true)
@@ -250,10 +264,8 @@ func TestCronAllJobsCommentedOut(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() {
-			_ = s.Shutdown()
-			s.Wait()
+			_ = stopAndWait(service.Stop, service.Wait, service.Cancel)
 		}()
-		service := bootstrap.CronService(s)
 		result := make(chan error, 1)
 		go func() { result <- service.Run() }()
 		select {
@@ -261,13 +273,12 @@ func TestCronAllJobsCommentedOut(t *testing.T) {
 			t.Fatalf("零任务调度器不应自行退出: %v", err)
 		case <-time.After(30 * time.Millisecond):
 		}
-		if err := service.Shutdown(); err != nil {
+		if err := stopAndWait(service.Stop, service.Wait, service.Cancel); err != nil {
 			t.Fatal(err)
 		}
 		if err := <-result; err != nil {
 			t.Fatal(err)
 		}
-		s.Wait()
 		if called.Load() {
 			t.Fatal("已注释的任务不应执行")
 		}

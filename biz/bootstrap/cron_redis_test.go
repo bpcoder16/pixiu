@@ -52,7 +52,7 @@ func TestCronRedisLeaseAndDrain(t *testing.T) {
 		client := redisx.Named("cron-lock").Client()
 		prefix := "pixiu:cron:test:" + logit.NewLogID() + ":"
 		defer client.Del(context.Background(), prefix+"job")
-		writeCronConfig(t, fmt.Sprintf("shutdownTimeout: 2s\ndrainTimeout: 1s\nlock:\n  redisName: cron-lock\n  keyPrefix: %q\n  ttl: 400ms\n  renewInterval: 80ms\njobs:\n  - name: job\n    every: 100ms\n    timeout: 5s\n", prefix))
+		writeCronConfig(t, fmt.Sprintf("lock:\n  redisName: cron-lock\n  keyPrefix: %q\n  ttl: 400ms\n  renewInterval: 80ms\njobs:\n  - name: job\n    every: 100ms\n    timeout: 5s\n", prefix))
 		entered, release := make(chan struct{}), make(chan struct{})
 		var releaseOnce sync.Once
 		finish := func() { releaseOnce.Do(func() { close(release) }) }
@@ -77,8 +77,7 @@ func TestCronRedisLeaseAndDrain(t *testing.T) {
 		defer func() {
 			finish()
 			for _, s := range schedulers {
-				_ = s.Shutdown()
-				s.Wait()
+				_ = stopAndWait(s.Stop, s.Wait, s.Cancel)
 			}
 		}()
 		results := make(chan error, 2)
@@ -112,7 +111,7 @@ func TestCronRedisLeaseAndDrain(t *testing.T) {
 		}
 		closed := make(chan error, 2)
 		for _, s := range schedulers {
-			go func() { closed <- s.Shutdown() }()
+			go func() { closed <- stopAndWait(s.Stop, s.Wait, s.Cancel) }()
 		}
 		time.Sleep(60 * time.Millisecond)
 		finish()

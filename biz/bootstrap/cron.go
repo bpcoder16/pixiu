@@ -18,11 +18,9 @@ import (
 )
 
 type cronConfig struct {
-	LoggerName      string          `mapstructure:"loggerName"`
-	ShutdownTimeout time.Duration   `mapstructure:"shutdownTimeout"`
-	DrainTimeout    time.Duration   `mapstructure:"drainTimeout"`
-	Lock            *cronLockConfig `mapstructure:"lock"`
-	Jobs            []cronJobConfig `mapstructure:"jobs"`
+	LoggerName string          `mapstructure:"loggerName"`
+	Lock       *cronLockConfig `mapstructure:"lock"`
+	Jobs       []cronJobConfig `mapstructure:"jobs"`
 }
 
 type cronJobConfig struct {
@@ -50,7 +48,7 @@ type cronLockConfig struct {
 // NewCronScheduler 严格读取 cron.yaml，绑定 Handler 并借用已初始化的命名 Redis。
 // 只启用 jobs 中列出的任务；允许多注册 Handler，配置引用未注册的名称会报错。
 // 注释或删除某个 job 后重启即可停用；全部注释时允许零任务运行。
-// 构造不执行业务；返回后由调用方管理，通常通过 CronService 交给运行管理器。
+// 构造不执行业务；返回后由调用方管理，需要服务装配时可直接调用 NewCronService。
 func NewCronScheduler(handlers ...cronx.NamedHandler) (*cronx.Scheduler, error) {
 	path := filepath.Join(env.ConfigDirPath(), "cron.yaml")
 	cfg, err := configx.Parse[cronConfig](path)
@@ -62,10 +60,8 @@ func NewCronScheduler(handlers ...cronx.NamedHandler) (*cronx.Scheduler, error) 
 		return nil, fmt.Errorf("bootstrap: Cron config %q: %w", path, err)
 	}
 	schedulerConfig := cronx.Config{
-		Location:        env.TimeLocation(),
-		LoggerName:      cfg.LoggerName,
-		ShutdownTimeout: cfg.ShutdownTimeout,
-		DrainTimeout:    cfg.DrainTimeout,
+		Location:   env.TimeLocation(),
+		LoggerName: cfg.LoggerName,
 	}
 	if cfg.Lock != nil {
 		schedulerConfig.Locker, err = cfg.Lock.locker()
@@ -180,11 +176,12 @@ func cronRedis(name string) (client *redisx.Client, err error) {
 	return redisx.Named(name), nil
 }
 
-// CronService 适配成功构造的 Scheduler；nil 参数属于调用错误并立即 panic。
+// NewCronService 调用 NewCronScheduler 读取配置并构造名为 cron 的服务，构造错误原样返回。
 // 只转换关闭早于 Run 的 ErrClosed，保留实际运行和排空错误。
-func CronService(s *cronx.Scheduler) apprun.Service {
-	if s == nil {
-		panic("bootstrap: nil Cron scheduler")
+func NewCronService(handlers ...cronx.NamedHandler) (apprun.Service, error) {
+	s, err := NewCronScheduler(handlers...)
+	if err != nil {
+		return apprun.Service{}, err
 	}
 	return apprun.Service{
 		Name: "cron",
@@ -195,6 +192,8 @@ func CronService(s *cronx.Scheduler) apprun.Service {
 			}
 			return err
 		},
-		Shutdown: s.Shutdown,
-	}
+		Stop:   s.Stop,
+		Wait:   s.Wait,
+		Cancel: s.Cancel,
+	}, nil
 }

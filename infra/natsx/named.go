@@ -36,8 +36,7 @@ func Default() *Client {
 }
 
 // CloseAll 排空并关闭全部默认及命名客户端，每个实例只关闭一次，重复调用返回同一次结果。
-// 调用前停止并等待外部生产者；托管订阅和 worker 由 Client.Close 排空。
-// 回调须使用启动时持有的客户端，排空期间不能再查询 Default/Named；其依赖须晚于 NATS 关闭。
+// 调用前须统一停收并完成排空，或显式 CancelConsumers 放弃剩余消费；资源回收阶段不再获取客户端。
 // 多实例关闭顺序不固定，各自使用独立的 CloseTimeout，不支持关闭期跨实例依赖。
 func CloseAll() error {
 	return namedClients.CloseAll()

@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -14,11 +15,11 @@ type ServiceFactory func() (apprun.Service, error)
 
 // Start 按顺序构造、登记服务，全部成功后接管 SIGINT/SIGTERM 并阻塞至运行和关闭结束。
 // 构造或登记失败时停止后续构造，逆序回收已构造服务并合并错误；nil 构造函数返回错误。
-// 运行后由管理器逆序关闭，不重复回收；运行期总关闭预算默认 20 秒，不含构造及启动前失败回收。
+// 运行后由管理器统一停收并排空，不重复回收；运行期总关闭预算默认 30 秒，不含构造及启动前失败回收。
 // 自定义关闭预算使用 StartWithConfig；自定义运行 context 使用 NewAppManager 自行装配。
 // 应用只应有一个信号所有者。
 func Start(factories ...ServiceFactory) error {
-	return startServices(20*time.Second, factories...)
+	return startServices(30*time.Second, factories...)
 }
 
 // StartConfig 显式配置运行期总关闭预算，不包含构造、资源栈和日志关闭。
@@ -41,9 +42,26 @@ func startServices(timeout time.Duration, factories ...ServiceFactory) (err erro
 	}
 	services := make([]apprun.Service, 0, len(factories))
 	defer func() {
+		if len(services) == 0 {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		// 构造失败也先通知全部已构造服务停收，再共享一个期限收尾。
 		for _, service := range slices.Backward(services) {
-			if service.Shutdown != nil {
-				err = errors.Join(err, service.Shutdown())
+			if service.Stop != nil {
+				err = errors.Join(err, service.Stop())
+			}
+		}
+		for _, service := range slices.Backward(services) {
+			var waitErr error
+			if service.Wait != nil {
+				waitErr = service.Wait(ctx)
+				err = errors.Join(err, waitErr)
+			}
+			// Wait 失败不能确认业务已结束，与管理器一样发出取消兜底。
+			if (waitErr != nil || ctx.Err() != nil) && service.Cancel != nil {
+				service.Cancel()
 			}
 		}
 	}()
@@ -67,7 +85,7 @@ func startServices(timeout time.Duration, factories ...ServiceFactory) (err erro
 }
 
 // NewAppManager 创建由调用方持有的服务管理器，不注册服务或订阅信号。
-// 可省略关闭期限或传入 0，沿用 apprun 默认的 20 秒；最多传入一个期限，正值不得小于 5 秒。
+// 可省略关闭期限或传入 0，沿用 apprun 默认的 30 秒；最多传入一个期限，正值不得小于 5 秒。
 func NewAppManager(shutdownTimeout ...time.Duration) (*apprun.Manager, error) {
 	if len(shutdownTimeout) > 1 {
 		return nil, fmt.Errorf("bootstrap: expected at most one app shutdown timeout")

@@ -143,7 +143,7 @@ func TestNATSClientValidationRunsDuringInitialization(t *testing.T) {
 					t.Fatal(err)
 				}
 				if _, err := natsx.NewNamed(natsx.Config{Name: "probe"}); err == nil || !strings.Contains(err.Error(), "clients closed") {
-					t.Fatalf("客户端参数校验失败后应执行已登记的 CloseAll: %v", err)
+					t.Fatalf("初始化失败后，资源栈仍应完成 NATS 关闭: %v", err)
 				}
 			})
 		})

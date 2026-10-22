@@ -40,10 +40,14 @@ func TestNewAppManagerCustomTimeout(t *testing.T) {
 	if err := manager.Register(apprun.Service{
 		Name: "blocked",
 		Run:  func() error { return nil },
-		Shutdown: func() error {
+		Stop: func() error {
 			<-release
 			return nil
 		},
+		Wait: func(context.Context) error {
+			return nil
+		},
+		Cancel: func() {},
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -25,8 +25,7 @@ func TestHTTPShutdownIsBoundedByManagerTimeout(t *testing.T) {
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	server, err := httpserver.New(httpserver.Config{
-		Addr:            addr,
-		ShutdownTimeout: time.Second,
+		Addr: addr,
 	}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" {
 			w.WriteHeader(http.StatusNoContent)
@@ -42,16 +41,18 @@ func TestHTTPShutdownIsBoundedByManagerTimeout(t *testing.T) {
 	}
 	defer func() {
 		unblock()
-		_ = server.Shutdown()
+		_ = server.Stop()
 	}()
 	manager, err := apprun.New(80 * time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.Register(apprun.Service{
-		Name:     "http",
-		Run:      server.Run,
-		Shutdown: server.Shutdown,
+		Name:   "http",
+		Run:    server.Run,
+		Stop:   server.Stop,
+		Wait:   server.Wait,
+		Cancel: server.Cancel,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +86,7 @@ func TestHTTPShutdownIsBoundedByManagerTimeout(t *testing.T) {
 	default:
 	}
 	unblock()
-	if err := receive(t, requestDone); err != nil {
-		t.Fatalf("总期限不应强制中断 HTTP 排空: %v", err)
+	if err := receive(t, requestDone); err == nil {
+		t.Fatal("总期限到达后应关闭未完成请求的连接")
 	}
 }

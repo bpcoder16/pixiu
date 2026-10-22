@@ -1,60 +1,45 @@
-// Package apprun 提供实例式常驻服务管理，监督运行并按登记逆序关闭。
-// 只依赖标准库和 logit，不认识具体 HTTP、cron、NATS 或任务池类型。
-// 设计见 docs/apprun-design.md。
+// Package apprun 提供实例式常驻服务监督、统一停收和并行排空，依赖标准库与 logit。
+// 设计见 docs/apprun-design.md。Manager 零值默认 30 秒，New 可设置整个停收与排空期限。
+// Stop 只封闭入口，Wait(ctx) 等待实际工作与收尾，Cancel 必须立即发出取消通知并返回。
+// 全部回调必填，停收可先于 Run；未停收时 Run 返回 nil 视为 ErrUnexpectedExit。
 //
-// Manager 零值可用。应用先创建全部依赖，再登记服务；依赖先登记、生产者后登记。
-// Run 并发执行回调，ctx 只通知管理器停机，不传给业务请求。服务退出或 ctx 取消后，
-// 总期限内逐个调用 Shutdown，并等该服务 Run 返回，才关闭下一个服务。管理器只允许运行一次。
-// 总关闭期限仅通过 New 设置，创建后不可修改；零值默认 20 秒，负值在创建时返回错误。
-// 全部关闭回调和退出等待共享此期限。
-// 未发起该服务关闭时 Run 返回 nil 视为 ErrUnexpectedExit；真实错误汇总保留原始错误链。
-// 预取消不启动 Run，但仍在总期限内逆序关闭已登记服务。回调 panic 转为带堆栈的 PanicError。
+// 以 HTTP 为例（需导入 context、errors、net/http、time、apprun 和 httpserver）：
 //
-// 应用可将现有 HTTP 服务交给管理器（需导入 errors、net/http，
-// 以及 github.com/bpcoder16/pixiu/infra/apprun 和 infra/httpserver）：
-//
-//	manager, err := apprun.New(0) // 使用默认 20 秒总关闭期限。
-//	if err != nil {
-//		return err
-//	}
 //	server, err := httpserver.New(httpserver.Config{
 //		Addr: ":8888",
 //	}, http.NotFoundHandler())
 //	if err != nil {
 //		return err
 //	}
+//	var manager apprun.Manager
 //	if err := manager.Register(apprun.Service{
 //		Name: "http",
 //		Run: func() error {
 //			err := server.Run()
-//			// 处理收到停机请求时，Run 尚未进入 HTTP 启动代码的竞争。
 //			if errors.Is(err, httpserver.ErrClosed) {
 //				return nil
 //			}
 //			return err
 //		},
-//		Shutdown: server.Shutdown,
+//		Stop: server.Stop,
+//		Wait: server.Wait,
+//		Cancel: server.Cancel,
 //	}); err != nil {
-//		return errors.Join(err, server.Shutdown())
+//		_ = server.Stop()
+//		server.Cancel()
+//		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+//		defer cancel()
+//		return errors.Join(err, server.Wait(ctx))
 //	}
 //	return manager.RunSignals()
 //
-// Run 不安装信号处理；RunSignals 显式订阅 SIGINT/SIGTERM，首次停机后立即取消订阅，
-// 无其他订阅者且原来使用默认处理时，后续中断恢复直接退出。应用只使用一个信号所有者。
-// SIGKILL 和 SIGSTOP 无法捕获；SIGHUP、SIGQUIT 保持原行为。包不会调用 os.Exit。
-//
-// 回调须支持 Shutdown 先于或并发于 Run，正常关闭状态错误由上层适配为 nil。
-// 不得在回调中等待 Manager.Run，不得使用 runtime.Goexit 或 testing.T.Fatal。
-// 回调自己启动的 goroutine 不受管理。Shutdown panic 会立即记录堆栈，并与普通关闭错误
-// 一样在剩余总关闭期限内等待 Run 返回，再继续回收依赖；超时时同时保留 PanicError。
-//
-// 总期限从进入停机流程开始计算，不限制正常运行时间，也不包含应用资源清理时间。
-// 总期限耗尽返回 ErrShutdownTimeout，并停止发起后续关闭；已执行的回调可能继续运行。
-// 超时分支非阻塞地收集已到达的 Shutdown 结果，不等待迟到结果。
-// 此错误不代表服务已经停止；应用若继续清理资源，须接受未退出任务与清理并发，随后终止进程。
-// 本包不强制终止 goroutine。HTTP 适配直接调用 Shutdown，HTTP 关闭超时后不再等待 handler，
-// 继续尽力清理并退出。Run 返回不能证明组件未等待的业务回调已退出。
-// 正常退出先等待服务，再释放客户端，最后关闭日志；应用负责资源清理及最终进程期限。
-// 已交给管理器的服务不重复登记到 lifecycle.Stack；资源栈继续负责其他资源。
-// 启动 Run 不等于服务 ready；首版不提供就绪依赖、自动重启或运行期追加服务。
+// Run 的 context 只通知停机，不提前取消业务。收到信号、取消或服务退出后，向全部服务发起 Stop，
+// 并行等待 Wait 与 Run；同一截止时间从停机开始计算，不逐组件重置。已接收的队列工作属于存量。
+// 错误与 panic 保留；超时返回 ErrShutdownTimeout 并取消未完成服务，不再等待业务响应。
+// Wait 返回错误或 panic 时按未确认排空处理，返回前 Cancel 兜底；超时错误包含未完成服务名与关闭阶段。
+// 无论是否超时，入口随后调用资源栈回收；lifecycle.Stack 默认整体 20 秒，可通过 New 自定义。
+// 资源回收超时须立即退出进程；本包不接管资源栈或调用 os.Exit，不能强杀 goroutine。
+// 登记顺序不提供服务就绪或停机依赖保证；已停收的业务消费者不保证接收在途任务发出的新请求。
+// RunSignals 订阅 SIGINT/SIGTERM，首次停机后恢复原信号行为；应用只应有一个信号所有者。
+// SIGKILL/SIGSTOP 不可捕获，SIGHUP/SIGQUIT 保持原行为。回调不得同步等待 Manager.Run 或使用 runtime.Goexit。
 package apprun

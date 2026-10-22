@@ -16,7 +16,7 @@
 // 可交给 bootstrap.NewCronScheduler 或自行绑定调度。
 // 登记与快照读取可并发，首次使用后不得复制；后续登记不影响已构造的调度器。
 //
-// 独立构造并运行（需导入 context、log、time 及本包）：
+// 独立构造并运行（需导入 context、errors、time 及本包）：
 //
 //	scheduler, err := cronx.New(cronx.Config{}, cronx.Job{
 //		Name:    "heartbeat",
@@ -29,13 +29,18 @@
 //	if err != nil {
 //		return err
 //	}
-//	go func() {
-//		time.Sleep(3 * time.Second)
-//		if err := scheduler.Shutdown(); err != nil {
-//			log.Printf("close cron: %v", err)
-//		}
-//	}()
-//	return scheduler.Run()
+//	runDone := make(chan error, 1)
+//	go func() { runDone <- scheduler.Run() }()
+//	time.Sleep(3 * time.Second)
+//	stopErr := scheduler.Stop()
+//	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+//	defer cancel()
+//	waitErr := scheduler.Wait(ctx)
+//	if waitErr != nil {
+//		scheduler.Cancel()
+//		return errors.Join(stopErr, waitErr)
+//	}
+//	return errors.Join(stopErr, <-runDone)
 //
 // Job 的 Cron、Every、RandomEvery 恰好选一个；Cron 为秒起始的六字段，不接受
 // 内嵌时区或描述符。Location 默认 Asia/Shanghai，通过 time.LoadLocation 加载，
@@ -54,12 +59,11 @@
 // 租约有效时提供同名任务互斥，不保证每个时间点集群只执行一次；各节点独立调度。
 // Redis 插件失租不会通知或取消 Handler，关键业务仍须幂等和数据端约束。
 //
-// New 不执行业务，但会创建引擎内部 goroutine，构造后必须 Shutdown。
-// Run 阻塞到有界关闭结束，只能启动一次；Shutdown 支持先于 Run、重复和并发调用。
-// 默认关闭总预算 15s，前 10s 自然排空，再取消业务并在剩余时间等待返回和解锁。
-// 启动和关闭日志均纳入收尾等待；慢 Writer 不延长 Shutdown 总预算或阻止 Run 返回。
-// 超时后任务或日志写入可能仍进行；Wait 不发起关闭、无等待上限，等待实际工作及日志写完。
-// 先关闭服务，再关闭 Redis 等共享客户端，最后关闭日志；有界超时退出不保证完整排空。
-// 使用 biz/bootstrap 可从独立 cron.yaml 构造并通过 CronService 交给 apprun，
-// 默认管理器预算 20s 可覆盖独立 Cron；混合运行时总预算须覆盖各组件关闭期限。
+// New 不执行业务，但会创建引擎 goroutine，构造后须 Stop 并 Wait(ctx)。
+// Run 阻塞到停收，Stop 封闭新任务和获锁入口；Wait 等待任务、锁操作及日志实际结束。
+// 业务 context 独立于引擎关闭通知，仅业务自身期限或显式 Cancel 才取消尚在排空的任务。
+// Cancel 先停收再协作取消剩余任务，也可直接调用；随后仍可通过 Wait 确认实际收尾。
+// 组件没有独立排空计时，托管运行与其他服务共享 apprun 默认 30 秒期限。
+// 超时后调用 Cancel，入口继续回收共享资源，资源栈默认整体 20 秒，日志最后关闭。
+// 取消不能强杀业务，也不提前解锁。构造方式与当前 API 示例见上文；文件装配由 biz/bootstrap 提供。
 package cronx

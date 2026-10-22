@@ -14,8 +14,8 @@ import (
 
 // NewHTTPService 从 env.ConfigDirPath() 下严格读取 http.yaml 并构造名为 http 的服务。
 // 调用前须初始化 env；监听在 Run 时才启动。
-// 调用方负责注册；注册失败时调用返回服务的 Shutdown 清理。
-// HTTP 关闭期限由配置指定，零值默认 15 秒，超时后不额外等待 handler。
+// 调用方负责注册；注册失败时通过 Stop、Wait 与 Cancel 清理。
+// HTTP 排空期限由管理器统一提供，组件不设置独立关闭期限。
 func NewHTTPService(handler http.Handler) (apprun.Service, error) {
 	configFile := filepath.Join(env.ConfigDirPath(), "http.yaml")
 	config, err := configx.Parse[httpserver.Config](configFile)
@@ -36,6 +36,8 @@ func NewHTTPService(handler http.Handler) (apprun.Service, error) {
 			}
 			return runErr
 		},
-		Shutdown: server.Shutdown,
+		Stop:   server.Stop,
+		Wait:   server.Wait,
+		Cancel: server.Cancel,
 	}, nil
 }

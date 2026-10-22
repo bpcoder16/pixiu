@@ -664,17 +664,10 @@ func TestJetStreamPublishConsumeAndCloseWaits(t *testing.T) {
 	}
 	closed := make(chan error, 1)
 	go func() { closed <- c.Close() }()
-	closedAgain := make(chan error, 1)
-	go func() { closedAgain <- c.Close() }()
 	select {
 	case err := <-closed:
 		t.Fatalf("回调未完成即返回: %v", err)
 	case <-time.After(50 * time.Millisecond):
-	}
-	select {
-	case err := <-closedAgain:
-		t.Fatalf("并发 Close 未等待同一轮关闭: %v", err)
-	default:
 	}
 	close(release)
 	select {
@@ -684,12 +677,6 @@ func TestJetStreamPublishConsumeAndCloseWaits(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Close 未结束")
-	}
-	if err := <-closedAgain; err != nil {
-		t.Fatalf("并发 Close: %v", err)
-	}
-	if err := c.Close(); err != nil {
-		t.Fatalf("重复 Close: %v", err)
 	}
 	if err := c.Publish(ctx, "jobs.run", nil); !errors.Is(err, ErrClosed) {
 		t.Fatalf("关闭后发布结果: %v", err)

@@ -1,12 +1,7 @@
 # 显式调用 NewCronScheduler 才读取本文件；不依赖 HTTP/Gin。
 # 命名 Logger 未注册时回退到默认 Logger；需要独立文件时在 app.yaml 的 log.names 中声明 cron。
 loggerName: "cron"
-# 整个关闭流程的总预算，包含自然排空和取消后的收尾；零值或省略时默认 15s。
-# 到期仍未结束则返回超时错误，不会强制终止任务。
-shutdownTimeout: "15s"
-# 停止接收新任务后，等待已有任务自然完成的时间；到期取消任务 context，再用剩余预算等待收尾。
-# 零值或省略时取 shutdownTimeout 的 2/3（默认 10s）；须小于总预算，两者不相加。
-drainTimeout: "10s"
+# 服务统一停收并共享 30s 排空期限；到期取消剩余任务。
 
 # 启用分布式锁时取消注释，并在 MustBaseInit 前声明 Redis 实例。
 # 所有节点使用相同 Redis、DB、前缀及稳定任务名。

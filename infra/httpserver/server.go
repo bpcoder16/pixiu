@@ -17,7 +17,7 @@ var (
 	ErrStarted = errors.New("httpserver: already started")
 )
 
-// Config 配置监听地址、网络期限和关闭期限,零值使用普通 API 默认配置。
+// Config 配置监听地址和网络期限,零值使用普通 API 默认配置。
 // 仅 ReadTimeout、WriteTimeout 允许负值,表示不设上限。
 type Config struct {
 	// Addr 是 Run 使用的监听地址,空值默认使用 :8888。
@@ -32,29 +32,29 @@ type Config struct {
 	IdleTimeout time.Duration `mapstructure:"idleTimeout"`
 	// MaxHeaderBytes 限制请求行与请求头的总字节数,零值默认使用 64 KiB,不限制请求体。
 	MaxHeaderBytes int `mapstructure:"maxHeaderBytes"`
-	// ShutdownTimeout 限制首次 Shutdown 触发后的排空期限,零值默认使用 15 秒。
-	ShutdownTimeout time.Duration `mapstructure:"shutdownTimeout"`
 }
 
 // Server 独立管理普通 HTTP 连接;不管理 hijacked 连接。
 type Server struct {
 	// config 保存已填入默认值的配置,构造完成后不再修改。
 	config Config
-	// http 承载请求处理、连接管理和限时排空,由本实例控制其生命周期。
+	// http 承载请求处理、连接管理和排空,由本实例控制其生命周期。
 	http *http.Server
-	// ctx 只控制内部生命周期和关闭通知,不作为请求的父 context。
+	// ctx 是业务请求的父 context，仅在显式 Cancel 或实际排空结束时取消。
 	ctx context.Context
-	// cancel 在正常排空或超时强制关闭连接后调用。
+	// cancel 通知在途请求停止；不能强杀忽略取消的 Handler。
 	cancel context.CancelFunc
 
-	// mu 保护 started、closing 和 closeErr,协调并发启动与关闭。
+	// mu 保护 started、closing 和启动/请求工作登记,协调并发启动与关闭。
 	mu sync.Mutex
 	// started 在监听成功并通过状态校验后置为 true,不再重置,保证实例只启动一次。
 	started bool
-	// closing 在首次 Shutdown 时置为 true,阻止后续启动,并让其他关闭调用等待同一次结果。
+	// closing 在 Stop 时封闭新请求及后续启动。
 	closing bool
-	// closeErr 保存最终关闭结果,在取消内部 ctx 前写入,供 Run 和重复 Shutdown 返回。
+	// closeErr 在 done 关闭前发布，仅由 Wait 读取。
 	closeErr error
+	done     chan struct{}
+	work     sync.WaitGroup
 }
 
 // New 校验配置并构造实例,不启动监听。
@@ -62,7 +62,7 @@ func New(cfg Config, handler http.Handler) (*Server, error) {
 	if handler == nil {
 		return nil, errors.New("httpserver: nil handler")
 	}
-	if cfg.ReadHeaderTimeout < 0 || cfg.IdleTimeout < 0 || cfg.ShutdownTimeout < 0 || cfg.MaxHeaderBytes < 0 {
+	if cfg.ReadHeaderTimeout < 0 || cfg.IdleTimeout < 0 || cfg.MaxHeaderBytes < 0 {
 		return nil, errors.New("httpserver: negative limit or timeout")
 	}
 	if cfg.Addr == "" {
@@ -83,11 +83,8 @@ func New(cfg Config, handler http.Handler) (*Server, error) {
 	if cfg.MaxHeaderBytes == 0 {
 		cfg.MaxHeaderBytes = 64 << 10
 	}
-	if cfg.ShutdownTimeout == 0 {
-		cfg.ShutdownTimeout = 15 * time.Second
-	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{
+	s := &Server{
 		config: cfg,
 		http: &http.Server{
 			Addr:              cfg.Addr,
@@ -98,9 +95,25 @@ func New(cfg Config, handler http.Handler) (*Server, error) {
 			IdleTimeout:       cfg.IdleTimeout,
 			MaxHeaderBytes:    cfg.MaxHeaderBytes,
 		},
+		done:   make(chan struct{}),
 		ctx:    ctx,
 		cancel: cancel,
-	}, nil
+	}
+	// 接纳与停收使用同一把门，Wait 开始后不再增加工作计数。
+	s.http.BaseContext = func(net.Listener) context.Context { return ctx }
+	s.http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		if s.closing {
+			s.mu.Unlock()
+			http.Error(w, "server stopping", http.StatusServiceUnavailable)
+			return
+		}
+		s.work.Add(1)
+		s.mu.Unlock()
+		defer s.work.Done()
+		handler.ServeHTTP(w, r)
+	})
+	return s, nil
 }
 
 func (s *Server) start() error {
@@ -121,25 +134,27 @@ func (s *Server) start() error {
 func (s *Server) serve(listener net.Listener) error {
 	err := s.http.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
-		// 标准库 Serve 在排空开始时返回,这里继续等待最终关闭结果。
-		<-s.ctx.Done()
-		return s.shutdownResult()
+		return nil
 	}
 	return err
 }
 
-// Run 监听配置地址并阻塞运行,由另一个 goroutine 调用 Shutdown 发起关闭。
+// Run 监听配置地址并阻塞运行,由 Stop 发起停收，Wait 等待业务排空。
 func (s *Server) Run() error {
 	// 先返回已确定的生命周期错误,避免被监听错误掩盖;监听后仍需检查并发状态变更。
 	s.mu.Lock()
-	closing, started := s.closing, s.started
-	s.mu.Unlock()
-	if closing {
+	if s.closing {
+		s.mu.Unlock()
 		return ErrClosed
 	}
-	if started {
+	if s.started {
+		s.mu.Unlock()
 		return ErrStarted
 	}
+	// 监听前登记，覆盖启动日志和 Serve 交接；后登记的 listener 清理先于 Done 执行。
+	s.work.Add(1)
+	s.mu.Unlock()
+	defer s.work.Done()
 	ln, err := net.Listen("tcp", s.config.Addr)
 	if err != nil {
 		return fmt.Errorf("httpserver: listen: %w", err)
@@ -157,44 +172,47 @@ func (s *Server) Run() error {
 	return s.serve(ln)
 }
 
-// Shutdown 是唯一关闭入口,停止接入并按 ShutdownTimeout 限时排空。
-// 超时后强制关闭普通连接;重复或并发调用共享同一次期限和关闭结果。
-// 超时后不额外等待尚未返回的 handler,应用尽力清理资源后退出。
-func (s *Server) Shutdown() error {
-	if !s.beginClose() {
-		<-s.ctx.Done()
-		return s.shutdownResult()
-	}
-	ctx, cancel := context.WithTimeout(s.ctx, s.config.ShutdownTimeout)
-	defer cancel()
-	err := s.http.Shutdown(ctx)
-	if err != nil {
-		err = errors.Join(err, s.http.Close())
-	}
-	s.finishClose(err)
-	return err
-}
-
-func (s *Server) beginClose() bool {
+// Stop 封闭普通请求入口并启动排空，不等待已有 Handler；可先于 Run 调用。
+func (s *Server) Stop() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closing {
-		return false
+		s.mu.Unlock()
+		return nil
 	}
 	s.closing = true
-	return true
+	s.mu.Unlock()
+	go func() {
+		// 只由外部 Wait 的 context 限制等待，不在这里另起组件计时器。
+		err := s.http.Shutdown(context.Background())
+		s.work.Wait()
+		s.closeErr = err
+		s.cancel()
+		close(s.done)
+	}()
+	return nil
 }
 
-func (s *Server) finishClose(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.closeErr = err
-	// 先保存结果再唤醒等待方,正常关闭不会把 context.Canceled 当成错误返回。
+// Wait 等待启动过程、连接排空以及实际 Handler 返回，ctx 到期只结束本次等待。
+func (s *Server) Wait(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("httpserver: nil wait context")
+	}
+	select {
+	case <-s.done:
+		return s.closeErr
+	default:
+	}
+	select {
+	case <-s.done:
+		return s.closeErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Cancel 先复用 Stop，再通知剩余请求取消并关闭普通连接；不管理 hijacked 连接。
+func (s *Server) Cancel() {
+	_ = s.Stop()
 	s.cancel()
-}
-
-func (s *Server) shutdownResult() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closeErr
+	_ = s.http.Close()
 }

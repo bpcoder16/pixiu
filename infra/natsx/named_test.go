@@ -116,7 +116,7 @@ func TestNamedClientRegistryChecksBeforeClientConfig(t *testing.T) {
 	}
 }
 
-func TestCloseAllDrainsWithHeldClientBeforeDependencies(t *testing.T) {
+func TestDrainConsumersWithLookupBeforeResourceClose(t *testing.T) {
 	isolatedNamedClients(t)
 	client, err := NewDefault(Config{Name: "events", URLs: []string{startServer(t)}})
 	if err != nil {
@@ -153,7 +153,7 @@ func TestCloseAllDrainsWithHeldClientBeforeDependencies(t *testing.T) {
 				finished <- err
 				return err
 			}
-			err := client.Publish(ctx, "completed", nil)
+			err := Default().Publish(ctx, "completed", nil)
 			finished <- err
 			return err
 		},
@@ -169,7 +169,11 @@ func TestCloseAllDrainsWithHeldClientBeforeDependencies(t *testing.T) {
 		t.Fatal("消费回调未启动")
 	}
 	closed := make(chan error, 1)
-	go func() { closed <- resources.Close() }()
+	go func() {
+		client.StopConsumers()
+		_ = client.WaitConsumers(context.Background())
+		closed <- nil
+	}()
 	deadline := time.After(3 * time.Second)
 	for !client.closing.Load() {
 		select {
@@ -178,18 +182,23 @@ func TestCloseAllDrainsWithHeldClientBeforeDependencies(t *testing.T) {
 		case <-time.After(time.Millisecond):
 		}
 	}
-	requireNamedPanic(t, func() { Default() })
+	if Default() != client || Named("events") != client {
+		t.Fatal("排空期间查询应返回原客户端")
+	}
 	release <- struct{}{}
 	if err := <-finished; err != nil {
 		t.Fatalf("排空中的回调不能完成: %v", err)
 	}
 	select {
 	case err := <-closed:
-		if err != nil || !dependencyClosed.Load() || !client.Conn().IsClosed() {
+		if err != nil || dependencyClosed.Load() || client.Conn().IsClosed() {
 			t.Fatalf("资源关闭失败: %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("关闭未完成")
+	}
+	if err := resources.Close(); err != nil || !dependencyClosed.Load() || !client.Conn().IsClosed() {
+		t.Fatalf("消费排空后资源栈应回收客户端及依赖: %v", err)
 	}
 }
 

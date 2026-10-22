@@ -46,16 +46,11 @@ type Config struct {
 	// Location 为 nil 时加载 Asia/Shanghai，失败则返回构造错误；非 nil 时保留对象的完整规则。
 	Location   *time.Location
 	LoggerName string
-	// DrainTimeout 为零时使用总关闭期限的 2/3，默认 10 秒。
-	DrainTimeout time.Duration
-	// ShutdownTimeout 为零时默认 15 秒，与 HTTP 一致。
-	ShutdownTimeout time.Duration
-	Locker          gocron.Locker
+	Locker     gocron.Locker
 }
 
 // Scheduler 由 New 创建，使用后不可复制；一个实例只运行一次。
 type Scheduler struct {
-	config Config
 	engine gocron.Scheduler
 	jobs   []Job
 	ctx    context.Context
@@ -67,30 +62,14 @@ type Scheduler struct {
 	closing  bool
 	work     sync.WaitGroup
 	closeErr error
-	// closeDone 在有界关闭结束并发布 closeErr 后关闭，供 Run 和重复 Shutdown 等待。
-	closeDone chan struct{}
-	// actualDone 在引擎停止且任务、锁操作和启动日志全部结束后关闭，供实际排空等待。
-	actualDone chan struct{}
-	// shutdownLogged 在关闭日志写入结束后关闭；Shutdown 按剩余预算等待，Wait 等到实际结束。
-	shutdownLogged chan struct{}
-	// engineStopped 在收到引擎停止回调时关闭，供关闭流程在等待 work 前确认引擎停止调度。
+	// closeDone 在停收时关闭，让 Run 退出；actualDone 等待任务、解锁及日志实际结束。
+	closeDone     chan struct{}
+	actualDone    chan struct{}
 	engineStopped chan struct{}
 }
 
 // New 校验并复制全部任务，不执行业务；引擎构造会创建内部 goroutine。
 func New(cfg Config, jobs ...Job) (*Scheduler, error) {
-	if cfg.ShutdownTimeout < 0 || cfg.DrainTimeout < 0 {
-		return nil, errors.New("cronx: negative shutdownTimeout or drainTimeout")
-	}
-	if cfg.ShutdownTimeout == 0 {
-		cfg.ShutdownTimeout = 15 * time.Second
-	}
-	if cfg.DrainTimeout == 0 {
-		cfg.DrainTimeout = cfg.ShutdownTimeout / 3 * 2
-	}
-	if cfg.DrainTimeout <= 0 || cfg.DrainTimeout >= cfg.ShutdownTimeout {
-		return nil, errors.New("cronx: drainTimeout must be positive and less than shutdownTimeout")
-	}
 	if cfg.Location == nil {
 		location, err := time.LoadLocation("Asia/Shanghai")
 		if err != nil {
@@ -99,12 +78,10 @@ func New(cfg Config, jobs ...Job) (*Scheduler, error) {
 		cfg.Location = location
 	}
 	s := &Scheduler{
-		config:         cfg,
-		jobs:           make([]Job, 0, len(jobs)),
-		closeDone:      make(chan struct{}),
-		actualDone:     make(chan struct{}),
-		shutdownLogged: make(chan struct{}),
-		engineStopped:  make(chan struct{}),
+		jobs:          make([]Job, 0, len(jobs)),
+		closeDone:     make(chan struct{}),
+		actualDone:    make(chan struct{}),
+		engineStopped: make(chan struct{}),
 	}
 	definitions := make([]gocron.JobDefinition, len(jobs))
 	names := make(map[string]struct{}, len(jobs))
@@ -123,7 +100,6 @@ func New(cfg Config, jobs ...Job) (*Scheduler, error) {
 	s.ctx, s.cancel = context.WithCancel(logit.WithLoggerName(context.Background(), cfg.LoggerName))
 	options := []gocron.SchedulerOption{
 		gocron.WithLocation(cfg.Location),
-		gocron.WithStopTimeout(cfg.ShutdownTimeout),
 		gocron.WithSchedulerMonitor(engineLifecycle{stopped: s.engineStopped}),
 	}
 	if cfg.Locker != nil {
@@ -148,9 +124,9 @@ func New(cfg Config, jobs ...Job) (*Scheduler, error) {
 		}
 		_, err = engine.NewJob(definitions[i], gocron.NewTask(func() { s.execute(job) }), jobOptions...)
 		if err != nil {
-			closeErr := s.Shutdown()
-			s.Wait()
-			return nil, errors.Join(fmt.Errorf("cronx: register job %q: %w", job.Name, err), closeErr)
+			s.Cancel()
+			_ = s.Wait(context.Background())
+			return nil, fmt.Errorf("cronx: register job %q: %w", job.Name, err)
 		}
 	}
 	return s, nil
@@ -203,7 +179,7 @@ func prepareJob(job *Job, locked bool) (gocron.JobDefinition, error) {
 	return definition, nil
 }
 
-// Run 启动调度并阻塞到 Shutdown 的有界关闭结束；任务错误不会结束服务。
+// Run 启动调度并阻塞到停收；实际任务结束由 Wait 确认。
 func (s *Scheduler) Run() error {
 	s.mu.Lock()
 	if s.closing {
@@ -215,7 +191,7 @@ func (s *Scheduler) Run() error {
 		return ErrStarted
 	}
 	s.started = true
-	// 与 Shutdown 串行完成启动交接，避免关闭后的引擎又被迟到的 Start 启动。
+	// 与 Stop 串行完成启动交接，避免关闭后的引擎又被迟到的 Start 启动。
 	s.engine.Start()
 	// 启动日志纳入实际工作；独立写入使慢 Writer 不阻止 Run 按关闭预算返回。
 	s.work.Add(1)
@@ -225,7 +201,7 @@ func (s *Scheduler) Run() error {
 		logit.Info(s.ctx, "CronStart", logit.Int("jobs", len(s.jobs)))
 	}()
 	<-s.closeDone
-	return s.closeErr
+	return nil
 }
 
 func (s *Scheduler) admit() bool {
@@ -238,73 +214,52 @@ func (s *Scheduler) admit() bool {
 	return true
 }
 
-// Shutdown 立即停收，先自然排空，再取消业务；全部阶段共用首次调用的总预算。
-// 超时不能强杀 Handler，重复调用返回同一次结果，不重新计时。
-func (s *Scheduler) Shutdown() error {
+// Stop 立即封闭任务与获锁入口，并异步停止引擎；不取消业务 context。
+func (s *Scheduler) Stop() error {
 	s.mu.Lock()
 	if s.closing {
 		s.mu.Unlock()
-		<-s.closeDone
-		return s.closeErr
+		return nil
 	}
 	s.closing = true
-	started := time.Now()
+	close(s.closeDone)
 	s.mu.Unlock()
-
-	ctx, cancel := context.WithDeadline(context.Background(), started.Add(s.config.ShutdownTimeout))
-	defer cancel()
-	drain := time.NewTimer(time.Until(started.Add(s.config.DrainTimeout)))
-	defer drain.Stop()
-	// 引擎返回超时不代表它已停止派发，更不代表业务与锁已经结束。
-	// actualDone 只在引擎停止通知和实际工作计数都完成后关闭，供 Wait 使用。
-	var engineErr error
 	go func() {
-		engineErr = s.engine.ShutdownWithContext(ctx)
+		err := s.engine.ShutdownWithContext(context.Background())
 		<-s.engineStopped
 		s.work.Wait()
+		// 引擎自身等待超时不能代表业务失败；实际任务与解锁计数已在这里完成。
+		if errors.Is(err, gocron.ErrStopJobsTimedOut) {
+			err = nil
+		}
+		s.closeErr = err
+		logit.Info(s.ctx, "CronStopped", logit.Err(err))
+		s.cancel()
 		close(s.actualDone)
 	}()
-	var err error
-	select {
-	case <-s.actualDone:
-		err = engineErr
-	case <-drain.C:
-		s.cancel()
-		select {
-		case <-s.actualDone:
-			err = engineErr
-		case <-ctx.Done():
-			err = ctx.Err()
-		}
-	case <-ctx.Done():
-		err = ctx.Err()
-	}
-	s.cancel()
-	// 写入使用排空结果快照，避免日志与下面发布的最终关闭错误并发读写。
-	// 慢 Writer 仍由 Wait 等待，但不能绕过 Shutdown 剩余的总预算。
-	go func(drainErr error) {
-		defer close(s.shutdownLogged)
-		if drainErr != nil {
-			logit.Error(s.ctx, "CronShutdown", logit.Err(drainErr), logit.Dur("duration", time.Since(started)))
-		} else {
-			logit.Info(s.ctx, "CronShutdown", logit.Dur("duration", time.Since(started)))
-		}
-	}(err)
-	select {
-	case <-s.shutdownLogged:
-	case <-ctx.Done():
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
-		err = errors.Join(err, ctxErr)
-	}
-	s.closeErr = err
-	close(s.closeDone)
-	return err
+	return nil
 }
 
-// Wait 不发起关闭，无限等待实际工作和日志收尾；忽略取消的任务或阻塞的 Writer 可能永不结束。
-func (s *Scheduler) Wait() {
-	<-s.closeDone
-	<-s.actualDone
-	<-s.shutdownLogged
+// Wait 等待引擎、业务、锁及日志实际收尾；ctx 到期不代替业务完成，也不自动取消业务。
+func (s *Scheduler) Wait(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("cronx: nil wait context")
+	}
+	select {
+	case <-s.actualDone:
+		return s.closeErr
+	default:
+	}
+	select {
+	case <-s.actualDone:
+		return s.closeErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Cancel 先停收，再协作取消剩余业务；任务实际返回前仍不释放执行位置或锁。
+func (s *Scheduler) Cancel() {
+	_ = s.Stop()
+	s.cancel()
 }
