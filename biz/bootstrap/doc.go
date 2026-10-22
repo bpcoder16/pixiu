@@ -320,9 +320,12 @@
 // Conn()/JetStream() 原生入口不添加前缀；旧注册文件中的 namespace 须移至连接文件，否则严格解析报错。
 // 修改 namespace 后使用新的资源名称，旧 Stream/Durable 不自动迁移或删除。
 // 包级具名函数可直接传入构造器，自动名称保留大小写；方法值、闭包、泛型函数必须显式命名。
-// streamDefaults.replicas 始终必填，解码后必须为正整数，即使没有 Stream。
+// streamDefaults.replicas 可省略或为 null，沿用当前实例初始化时 nats.<name>.yaml 中 urls 的条目数。
+// streamDefaults 整体省略、null 或空对象同样回退；显式 replicas 解码后必须为正整数，0 或负数报错。
+// 自动计数不去重、不计入自动发现节点、不重读连接文件；直接创建命名客户端时采用 natsx.Config.URLs 的数量。
+// urls 仅列种子地址、使用代理入口或需要不同副本策略时应显式配置；最终全局值即使没有 Stream 也校验。
 // 逐项 replicas 解码后非 nil 且大于零时覆盖，否则继承；解码及数字转换沿用 configx。
-// 逐项 replicas 不得超过 streamDefaults.replicas，超限时在注册任何资源前返回错误。
+// 逐项 replicas 不得超过显式或自动推导的全局值，超限时在注册任何资源前返回错误。
 // Stream maxBytes、retention、maxAge、duplicates 可选，省略或 null 沿用 Default（当前为 -1、limits、90 天、2 分钟）。
 // maxBytes 使用整数字节数，例如 104857600 表示 100 MiB；0 或 -1 不设 Stream 容量上限，仍受账户及服务端配额限制。
 // 数字解码沿用 configx，不接受带单位字符串；范围及配额校验交给服务端。

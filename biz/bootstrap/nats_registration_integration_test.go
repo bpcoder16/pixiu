@@ -16,6 +16,7 @@ import (
 
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/infra/natsx"
+	"github.com/bpcoder16/pixiu/lifecycle"
 	"github.com/bpcoder16/pixiu/logit"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -56,6 +57,7 @@ func TestNATSFromConfig(t *testing.T) {
 		{name: "PublishConsumeAndReuse", run: testNATSFromConfigPublishConsumeAndReuse},
 		{name: "NamespaceIsolation", run: testNATSFromConfigNamespaceIsolation},
 		{name: "PreflightAndErrors", run: testNATSFromConfigPreflightAndErrors},
+		{name: "ReplicaDefaults", run: testNATSFromConfigReplicaDefaults},
 		{name: "DuplicateStreams", run: testNATSFromConfigDuplicateStreams},
 		{name: "StreamValidation", run: testNATSFromConfigStreamValidation},
 		{name: "StreamOptions", run: testNATSFromConfigStreamOptions},
@@ -397,6 +399,87 @@ func testNATSFromConfigNamespaceIsolation(t *testing.T) {
 			if counts[subject] != count {
 				t.Fatalf("环境隔离、主题过滤或广播/队列语义错误: %v", counts)
 			}
+		}
+	})
+}
+
+func testNATSFromConfigReplicaDefaults(t *testing.T) {
+	isolatedNATS(t, func() {
+		url := registrationClients(t, true, "seed")[0].Conn().ConnectedUrl()
+		cases := []struct {
+			name         string
+			defaults     string
+			urlCount     int
+			streamOption string
+			want         int
+			wantErr      string
+		}{
+			{name: "omitted", urlCount: 1, want: 1},
+			{name: "omitted-replicas", defaults: "streamDefaults: {}\n", urlCount: 3, want: 3},
+			{name: "null-defaults", defaults: "streamDefaults: null\n", urlCount: 3, want: 3},
+			{name: "null-replicas", defaults: "streamDefaults: {replicas: null}\n", urlCount: 3, want: 3},
+			{name: "explicit-lower", defaults: "streamDefaults: {replicas: 1}\n", urlCount: 3, want: 1},
+			{name: "explicit-higher", defaults: "streamDefaults: {replicas: 3}\n", urlCount: 1, want: 3},
+			{name: "stream-override", urlCount: 3, streamOption: "    replicas: 1\n", want: 1},
+			{name: "stream-over-limit", urlCount: 1, streamOption: "    replicas: 2\n", wantErr: "replicas 2 must not exceed streamDefaults.replicas 1"},
+			{name: "zero", defaults: "streamDefaults: {replicas: 0}\n", urlCount: 3, wantErr: "streamDefaults.replicas must be a positive integer"},
+			{name: "negative", defaults: "streamDefaults: {replicas: -1}\n", urlCount: 3, wantErr: "streamDefaults.replicas must be a positive integer"},
+		}
+		for _, tc := range cases {
+			// 重复地址刻意指向同一测试服务端，验证计数来自原始配置而非真实节点数。
+			content := "urls:\n" + strings.Repeat("  - "+url+"\n", tc.urlCount)
+			if err := os.WriteFile(natsInstances.configPath(tc.name), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			natsInstances.mustRegister(tc.name, false)
+		}
+		var resources lifecycle.Stack
+		t.Cleanup(func() {
+			if err := resources.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		if err := natsInstances.initialize(&resources); err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				client := natsx.Named(tc.name)
+				// 初始化后修改文件及运行时连接池，不应改变注册时采用的初始 URL 数量。
+				if err := os.WriteFile(natsInstances.configPath(tc.name), []byte("urls: []\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := client.Conn().SetServerPool([]string{url}); err != nil {
+					t.Fatal(err)
+				}
+				writeNATSRegistration(t, tc.name, tc.defaults+"streams:\n  - name: EVENTS\n    subjects: [events]\n"+tc.streamOption)
+				consumer, err := newNATSConsumer(tc.name, nil, nil)
+				if tc.wantErr != "" {
+					if err == nil || !strings.Contains(err.Error(), tc.wantErr) || !strings.Contains(err.Error(), "nats-register."+tc.name+".yaml") {
+						t.Fatalf("副本数预检错误应包含配置路径和原因: %v", err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(consumer.cancelRegistration)
+				if got := consumer.batch.streams[0].Replicas; got != tc.want {
+					t.Fatalf("副本数应优先使用显式配置，否则采用当前实例的初始 URL 数量: got %d, want %d", got, tc.want)
+				}
+				if tc.want == 1 {
+					if err := consumer.register(context.Background()); err != nil {
+						t.Fatal(err)
+					}
+					stream, err := client.JetStream().Stream(context.Background(), "EVENTS")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got := stream.CachedInfo().Config.Replicas; got != tc.want {
+						t.Fatalf("最终副本数应传至服务端: got %d, want %d", got, tc.want)
+					}
+				}
+			})
 		}
 	})
 }

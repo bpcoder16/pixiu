@@ -24,7 +24,8 @@ import (
 // Stream subjects 列表在配置层必填；消费者在 streams[].consumers 中声明并继承父级 name，不支持仅引用外部 Stream。
 // 三个入口各调用一次，空清单也占用次数，不能与手动注册混用。
 // 各入口分阶段预检，后序校验失败时前序资源或消费可能已启动。
-// nil 注册表视为空表，未引用的 Handler 不启动；全局 streamDefaults.replicas 始终必填且为正整数。
+// nil 注册表视为空表，未引用的 Handler 不启动；全局 streamDefaults.replicas 显式配置时必须为正整数。
+// 全局 replicas 省略或 null 时使用当前客户端初始化时的 URL 条目数，不计入自动发现的节点。
 // namespace 来自 nats.<instanceName>.yaml 的客户端初始化配置，本文件不接受该字段。
 // 配置填写原始名称和主题，前缀统一由 Client 的注册及发送入口添加；Handler 名称不变。
 // 逐项 Stream 的 replicas 不得超过全局值，超限时在注册任何资源前返回错误。
@@ -78,7 +79,8 @@ func newNATSConsumer(instanceName string, jetStreamHandlers *natsx.JetStreamHand
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", location, err)
 	}
-	batch, err := cfg.bind(jetStreamHandlers, coreHandlers)
+	// 使用初始化时的原始地址配置，避免重读文件或运行时发现节点改变副本策略。
+	batch, err := cfg.bind(len(client.Conn().Opts.Servers), jetStreamHandlers, coreHandlers)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", location, err)
 	}
@@ -160,7 +162,7 @@ func (c *natsConsumer) register(ctx context.Context) error {
 
 type natsRegistrationConfig struct {
 	StreamDefaults struct {
-		Replicas int `mapstructure:"replicas"`
+		Replicas *int `mapstructure:"replicas"`
 	} `mapstructure:"streamDefaults"`
 	Streams       []natsStreamRegistration `mapstructure:"streams"`
 	CoreConsumers []natsCoreRegistration   `mapstructure:"coreConsumers"`
@@ -205,8 +207,11 @@ type natsRegistrations struct {
 	coreConsumers      []natsx.CoreConsumer
 }
 
-func (cfg *natsRegistrationConfig) bind(jsRegistry *natsx.JetStreamHandlerRegistry, coreRegistry *natsx.CoreHandlerRegistry) (*natsRegistrations, error) {
-	replicas := cfg.StreamDefaults.Replicas
+func (cfg *natsRegistrationConfig) bind(urlCount int, jsRegistry *natsx.JetStreamHandlerRegistry, coreRegistry *natsx.CoreHandlerRegistry) (*natsRegistrations, error) {
+	replicas := urlCount
+	if cfg.StreamDefaults.Replicas != nil {
+		replicas = *cfg.StreamDefaults.Replicas
+	}
 	if replicas <= 0 {
 		return nil, errors.New("streamDefaults.replicas must be a positive integer")
 	}

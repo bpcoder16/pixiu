@@ -5,8 +5,12 @@
 # 例如 namespace 为 test1 时，名称及非空 queue 添加 test1_，主题添加 test1.。
 # Handler 名称不变，回调主题保留前缀；修改 namespace 不迁移或删除旧 Stream/Durable。
 
-streamDefaults:
-  replicas: 1  # 始终必填且为正整数，作为逐项副本数上限，即使没有 Stream 或每项均有覆盖值；单节点使用 1，服务端继续校验范围与集群条件。
+# streamDefaults 或 replicas 省略/null 时，使用对应实例初始化时的 urls 条目数；按需取消注释覆盖。
+# 最终全局值作为逐项副本数上限，即使没有 Stream 也校验。
+# 自动计数不去重、不计入自动发现节点、不裁剪上限；仅适合 urls 完整且不重复列出同一 JetStream 集群节点的部署。
+# 仅列种子地址、使用代理入口或需要不同副本策略时应显式配置；副本数最大为 5，通常选 1、3、5，服务端校验范围与集群条件。
+# streamDefaults:
+#   replicas: 1  # 显式值必须为正整数，0 或负数报错。
 
 streams:  # 可省略、设为 null 或 []；每项必须声明 subjects，统一创建或校验 Stream。
   - name: "ORDERS"
@@ -14,7 +18,7 @@ streams:  # 可省略、设为 null 或 []；每项必须声明 subjects，统�
       - "orders.>"
     # 以下五项均可省略或设为 null，按需取消注释覆盖。
     # 各项默认值见行内注释。
-    # replicas: 1          # 默认沿用 streamDefaults.replicas，不得超过全局值；0 或负数也沿用全局值，解码及数字转换沿用 configx。
+    # replicas: 1          # 默认沿用显式或自动推导的全局副本数，不得超过全局值；0 或负数也沿用全局值，解码及数字转换沿用 configx。
     # maxBytes: -1         # 整数字节数，默认沿用 natsx Default 的 -1；0 或 -1 不设 Stream 容量上限，仍受账户及服务端配额限制；100 MiB 为 104857600，不接受带单位字符串。
     # retention: "limits"  # 默认沿用 natsx Default 的 limits；可选 limits、interest、workqueue。
     # maxAge: "2160h"      # 默认沿用 natsx Default；消息最大年龄，0 表示不限制年龄；支持 Go 时长单位，不支持 d，范围由服务端校验。

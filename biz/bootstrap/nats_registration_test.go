@@ -81,7 +81,7 @@ streams:
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := cfg.bind(natsx.MustNewJetStreamHandlerRegistry(registrationTask), nil)
+	batch, err := cfg.bind(1, natsx.MustNewJetStreamHandlerRegistry(registrationTask), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ streams:
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = cfg.bind(natsx.MustNewJetStreamHandlerRegistry(registrationTask), nil)
+	_, err = cfg.bind(1, natsx.MustNewJetStreamHandlerRegistry(registrationTask), nil)
 	if err == nil || !strings.Contains(err.Error(), `streams[0].consumers[1] "ORDERS"/"audit"`) {
 		t.Fatalf("未知 Handler 应定位到嵌套声明: %v", err)
 	}
@@ -157,8 +157,8 @@ func TestNATSRegistrationExampleOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	optional := regexp.MustCompile(`(?m)^( *)# ( *)(replicas|maxBytes|retention|maxAge|duplicates|ackWait|maxDeliver|maxAckPending|consume|workers|maxMessages|retryDelay):`)
-	if got := len(optional.FindAll(content, -1)); got != 12 {
+	optional := regexp.MustCompile(`(?m)^( *)# ( *)(streamDefaults|replicas|maxBytes|retention|maxAge|duplicates|ackWait|maxDeliver|maxAckPending|consume|workers|maxMessages|retryDelay):`)
+	if got := len(optional.FindAll(content, -1)); got != 14 {
 		t.Fatalf("模板应保留全部可选参数的注释示例，实际 %d 项", got)
 	}
 	js := natsx.MustNewJetStreamHandlerRegistry()
@@ -173,15 +173,17 @@ func TestNATSRegistrationExampleOptions(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			source := string(content)
+			wantReplicas := 3
 			if uncomment {
 				// 只去掉注释标记，保留原缩进，验证用户可直接取消注释使用。
 				source = optional.ReplaceAllString(source, "${1}${2}${3}:")
+				wantReplicas = 1
 			}
 			cfg, err := parseNATSRegistration(t, source)
 			if err != nil {
 				t.Fatal(err)
 			}
-			batch, err := cfg.bind(js, core)
+			batch, err := cfg.bind(3, js, core)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,9 +192,9 @@ func TestNATSRegistrationExampleOptions(t *testing.T) {
 			}
 			consumer := batch.jetStreamConsumers[0]
 			consumer.Handler = nil
-			if !reflect.DeepEqual(batch.streams[0], natsx.DefaultStreamConfig("ORDERS", 1, "orders.>")) ||
+			if !reflect.DeepEqual(batch.streams[0], natsx.DefaultStreamConfig("ORDERS", wantReplicas, "orders.>")) ||
 				!reflect.DeepEqual(consumer, natsx.DefaultJetStreamConsumer("ORDERS", "order-created-worker", nil, "orders.created")) {
-				t.Fatalf("模板取消默认值注释后配置应保持一致: stream=%+v, consumer=%+v", batch.streams[0], consumer)
+				t.Fatalf("模板应默认推导副本数、取消注释后显式覆盖，其他默认值保持一致: stream=%+v, consumer=%+v", batch.streams[0], consumer)
 			}
 		})
 	}
@@ -204,6 +206,7 @@ func TestNATSRegistrationDefaultsAndOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	batch, err := cfg.bind(
+		1,
 		natsx.MustNewJetStreamHandlerRegistry(registrationTask),
 		natsx.MustNewCoreHandlerRegistry(registrationCore),
 	)
@@ -286,6 +289,7 @@ func TestNATSRegistrationMaxBytes(t *testing.T) {
 				t.Fatal(err)
 			}
 			batch, err := cfg.bind(
+				1,
 				natsx.MustNewJetStreamHandlerRegistry(registrationTask),
 				natsx.MustNewCoreHandlerRegistry(registrationCore),
 			)
@@ -325,6 +329,7 @@ func TestNATSRegistrationPreservesEmptyAndInvalidFields(t *testing.T) {
 			cfg.CoreConsumers[0].Subject = value
 			cfg.CoreConsumers[1].Queue = value
 			batch, err := cfg.bind(
+				1,
 				natsx.MustNewJetStreamHandlerRegistry(registrationTask),
 				natsx.MustNewCoreHandlerRegistry(registrationCore),
 			)
@@ -347,6 +352,7 @@ func TestNATSRegistrationPreservesEmptyAndInvalidFields(t *testing.T) {
 			}
 			cfg.Streams[0].Consumers[0].FilterSubjects = nil
 			batch, err = cfg.bind(
+				1,
 				natsx.MustNewJetStreamHandlerRegistry(registrationTask),
 				natsx.MustNewCoreHandlerRegistry(registrationCore),
 			)
@@ -457,6 +463,7 @@ func TestNATSRegistrationJetStreamOptions(t *testing.T) {
 				t.Fatal(err)
 			}
 			batch, err := cfg.bind(
+				1,
 				natsx.MustNewJetStreamHandlerRegistry(registrationTask),
 				natsx.MustNewCoreHandlerRegistry(registrationCore),
 			)
@@ -544,6 +551,7 @@ func TestNATSRegistrationPreservesSubjectDecoding(t *testing.T) {
 		t.Fatal(err)
 	}
 	batch, err := cfg.bind(
+		1,
 		natsx.MustNewJetStreamHandlerRegistry(registrationTask),
 		natsx.MustNewCoreHandlerRegistry(registrationCore),
 	)
@@ -593,6 +601,7 @@ func TestNATSRegistrationOptionalReplicas(t *testing.T) {
 				t.Fatal(err)
 			}
 			batch, err := cfg.bind(
+				1,
 				natsx.MustNewJetStreamHandlerRegistry(registrationTask),
 				natsx.MustNewCoreHandlerRegistry(registrationCore),
 			)
@@ -642,6 +651,7 @@ func TestNATSRegistrationQueueSubscribers(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err = cfg.bind(
+				1,
 				natsx.MustNewJetStreamHandlerRegistry(registrationTask),
 				natsx.MustNewCoreHandlerRegistry(registrationCore),
 			)
@@ -664,13 +674,10 @@ func TestNATSRegistrationRejectsInvalidConfig(t *testing.T) {
 		content string
 		want    string
 	}{
-		{name: "missing-default", content: "streams: []", want: "streamDefaults.replicas"},
-		{name: "null-default", content: "streamDefaults: {replicas: null}", want: "streamDefaults.replicas"},
 		{name: "zero-default", content: "streamDefaults: {replicas: 0}", want: "streamDefaults.replicas"},
 		{name: "negative-default", content: "streamDefaults: {replicas: -1}", want: "streamDefaults.replicas"},
 		{name: "string-default", content: "streamDefaults: {replicas: '3'}", want: "streamDefaults.replicas"},
 		{name: "bool-default", content: "streamDefaults: {replicas: true}", want: "streamDefaults.replicas"},
-		{name: "override-still-requires-default", content: "streams: [{name: A, replicas: 1, subjects: [a]}]", want: "streamDefaults.replicas"},
 		{name: "invalid-default-with-overrides", content: "streamDefaults: {replicas: 0}\nstreams: [{name: A, replicas: 1, subjects: [a]}]", want: "streamDefaults.replicas"},
 		{name: "string-override", content: strings.Replace(registrationYAML, "replicas: 1", "replicas: '1'", 1), want: "streams[1]"},
 		{
@@ -755,6 +762,7 @@ func TestNATSRegistrationRejectsInvalidConfig(t *testing.T) {
 			cfg, err := parseNATSRegistration(t, tc.content)
 			if err == nil {
 				_, err = cfg.bind(
+					1,
 					natsx.MustNewJetStreamHandlerRegistry(registrationTask),
 					natsx.MustNewCoreHandlerRegistry(registrationCore),
 				)
@@ -766,14 +774,51 @@ func TestNATSRegistrationRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestNATSRegistrationEmpty(t *testing.T) {
-	cfg, err := parseNATSRegistration(t, "streamDefaults: {replicas: 1}")
+func TestNATSRegistrationInferredReplicas(t *testing.T) {
+	cfg, err := parseNATSRegistration(t, `
+streams:
+  - name: EVENTS
+    subjects: [events]
+  - name: TEMP
+    subjects: [temp]
+    replicas: 1
+`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := cfg.bind(nil, nil)
-	if err != nil || len(batch.streams)+len(batch.jetStreamConsumers)+len(batch.coreConsumers) != 0 {
-		t.Fatalf("带全局默认的空清单应合法: %+v, %v", batch, err)
+	for _, urlCount := range []int{0, 3, 1, 6} {
+		batch, err := cfg.bind(urlCount, nil, nil)
+		if urlCount == 0 {
+			if err == nil || !strings.Contains(err.Error(), "streamDefaults.replicas") {
+				t.Fatalf("不能从空 URL 列表推导副本数: %v", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if batch.streams[0].Replicas != urlCount || batch.streams[1].Replicas != 1 {
+			t.Fatalf("全局副本数应随本次 URL 数量推导且保留逐项覆盖，不裁剪服务端上限: %+v", batch.streams)
+		}
+	}
+}
+
+func TestNATSRegistrationEmpty(t *testing.T) {
+	for _, content := range []string{
+		"",
+		"streamDefaults: null",
+		"streamDefaults: {}",
+		"streamDefaults: {replicas: null}",
+		"streamDefaults: {replicas: 1}",
+	} {
+		cfg, err := parseNATSRegistration(t, content)
+		if err != nil {
+			t.Fatal(err)
+		}
+		batch, err := cfg.bind(1, nil, nil)
+		if err != nil || len(batch.streams)+len(batch.jetStreamConsumers)+len(batch.coreConsumers) != 0 {
+			t.Fatalf("显式或自动推导全局副本数的空清单应合法: config=%q, batch=%+v, err=%v", content, batch, err)
+		}
 	}
 }
 
@@ -791,6 +836,7 @@ func TestNATSRegistrationRejectsReplicaContainersAndUnknownNulls(t *testing.T) {
 				cfg, err := parseNATSRegistration(t, content)
 				if err == nil {
 					_, err = cfg.bind(
+						1,
 						natsx.MustNewJetStreamHandlerRegistry(registrationTask),
 						natsx.MustNewCoreHandlerRegistry(registrationCore),
 					)
@@ -811,6 +857,7 @@ func TestNATSRegistrationRejectsReplicaContainersAndUnknownNulls(t *testing.T) {
 		cfg, err := parseNATSRegistration(t, content)
 		if err == nil {
 			_, err = cfg.bind(
+				1,
 				natsx.MustNewJetStreamHandlerRegistry(registrationTask),
 				natsx.MustNewCoreHandlerRegistry(registrationCore),
 			)
