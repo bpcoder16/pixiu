@@ -8,7 +8,7 @@
 streamDefaults:
   replicas: 1  # 始终必填且为正整数，作为逐项副本数上限，即使没有 Stream 或每项均有覆盖值；单节点使用 1，服务端继续校验范围与集群条件。
 
-streams:  # 可省略或设为 []。
+streams:  # 可省略、设为 null 或 []；每项必须声明 subjects，统一创建或校验 Stream。
   - name: "ORDERS"
     subjects:
       - "orders.>"
@@ -20,20 +20,19 @@ streams:  # 可省略或设为 []。
     # maxAge: "2160h"      # 默认沿用 natsx Default；消息最大年龄，0 表示不限制年龄；支持 Go 时长单位，不支持 d，范围由服务端校验。
     # duplicates: "2m"     # 默认沿用 natsx Default；消息 ID 去重窗口，0 由服务端确定，不代表关闭去重；范围由服务端校验，maxAge 大于 0 时不得超过它。
 
-jetStreamConsumers:  # 可省略或设为 []。
-  - stream: "ORDERS"
-    durable: "order-created-worker"
-    filterSubjects:  # 省略或为空时消费整个 Stream。
-      - "orders.created"
-    handler: "HandleOrderCreated"  # 须由应用的 JetStreamHandlerRegistry 登记。
-    # 以下六项均可省略或设为 null，沿用 natsx Default；注释中列出当前默认值。
-    # ackWait: "60s"       # ACK 等待时间，必须大于 0；应覆盖预取等待和业务处理时间，支持 Go 时长单位。
-    # maxDeliver: 5        # 最大投递次数，包含首次；范围由服务端校验。
-    # maxAckPending: 1000  # 同一 Durable 下所有实例合计的未确认消息数上限。
-    # consume:
-    #   workers: 1         # 本地并发数，不得为负；0 按 1 处理，Handler 须支持并发。
-    #   maxMessages: 0     # SDK 预取上限，不得为负；0 为有效 workers 的两倍，不含处理中的消息。
-    # retryDelay: "0s"     # 失败重投延迟，不得为负；0 等待 ackWait 超时，正值发送延迟 NAK，支持 Go 时长单位。
+    consumers:  # 可省略、设为 null 或 []；每个消费者自动使用当前 Stream 的 name，可配置多个。
+      - durable: "order-created-worker"
+        filterSubjects:  # 省略或为空时消费整个 Stream。
+          - "orders.created"
+        handler: "HandleOrderCreated"  # 须由应用的 JetStreamHandlerRegistry 登记。
+        # 以下六项均可省略或设为 null，沿用 natsx Default；注释中列出当前默认值。
+        # ackWait: "60s"       # ACK 等待时间，必须大于 0；应覆盖预取等待和业务处理时间，支持 Go 时长单位。
+        # maxDeliver: 5        # 最大投递次数，包含首次；范围由服务端校验。
+        # maxAckPending: 1000  # 同一 Durable 下所有实例合计的未确认消息数上限。
+        # consume:
+        #   workers: 1         # 本地并发数，不得为负；0 按 1 处理，Handler 须支持并发。
+        #   maxMessages: 0     # SDK 预取上限，不得为负；0 为有效 workers 的两倍，不含处理中的消息。
+        # retryDelay: "0s"     # 失败重投延迟，不得为负；0 等待 ackWait 超时，正值发送延迟 NAK，支持 Go 时长单位。
 
 coreConsumers:  # 可省略或设为 []。
   - name: "config-refresh"
@@ -45,6 +44,7 @@ coreConsumers:  # 可省略或设为 []。
     subscribers: 4  # 仅在 queue 非空时控制订阅数，此时必填且大于 1；当前 Client 按此数量建订阅，Handler 须支持并发；广播始终只有一个订阅。
     handler: "HandleNotification"  # 须由应用的 CoreHandlerRegistry 登记。
 
+# 消费者只在所属 Stream 的 consumers 下声明；不接受旧顶层 jetStreamConsumers 或消费者的 stream 字段。
 # 未引用的 Handler 不启动。
 # 除上述字段外全部沿用 natsx 的 Default，不支持 enabled、热更新或完整 SDK 配置。
 # 删除声明后重启不删除远端 Stream/Durable；同配置复用，冲突报错，不自动更新。

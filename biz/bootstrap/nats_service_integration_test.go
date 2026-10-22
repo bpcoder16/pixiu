@@ -231,7 +231,7 @@ func testNewNATSConsumerService(t *testing.T) {
 				config := "streamDefaults: {replicas: 1}\ncoreConsumers:\n  - name: work\n    subject: work\n    handler: work\n"
 				if mode == "partial_start" {
 					// JetStream 已启动，再由 Core 的通用参数校验触发启动失败。
-					config = "streamDefaults: {replicas: 1}\nstreams:\n  - name: EVENTS\n    subjects: [events]\njetStreamConsumers:\n  - stream: EVENTS\n    durable: worker\n    handler: task\ncoreConsumers:\n  - name: work\n    subject: ''\n    handler: work\n"
+					config = "streamDefaults: {replicas: 1}\nstreams:\n  - name: EVENTS\n    subjects: [events]\n    consumers:\n      - durable: worker\n        handler: task\ncoreConsumers:\n  - name: work\n    subject: ''\n    handler: work\n"
 				}
 				writeNATSRegistration(t, "service", config)
 				jsHandlers := &natsx.JetStreamHandlerRegistry{}

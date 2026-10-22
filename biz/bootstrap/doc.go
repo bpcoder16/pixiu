@@ -306,11 +306,15 @@
 // 注册 context 可由 Stop 取消，不设置整体注册期限；资源请求与 Core Flush 沿用 SDK 默认行为。
 // Client 关闭状态在配置预检后交给 natsx 注册入口校验；长期 Handler 使用独立消息 context。
 // 文件可使用 conf.example/nats-register.example.yaml，保留示例已登记的 Handler 对应项。
+// JetStream 消费者配置在 streams[].consumers，自动继承父级 name；可配置多个消费者或只声明 Stream。
+// 每项 Stream 必须声明 subjects，统一创建或校验；不支持仅引用外部 Stream。
+// 旧顶层 jetStreamConsumers 和消费者的 stream 字段须移除，否则严格解析报错。
+// 消费者的可选参数注释同样位于 consumers 项内，按需取消注释即可使用。
 // 注册文件不接受 namespace；该值统一来自 nats.<name>.yaml 的客户端配置。
 // 例如 namespace: test1 时，Stream 名称及引用 ORDERS 变为 test1_ORDERS，Durable worker 变为 test1_worker；
 // Core name、非空 queue 同样添加 test1_；subjects、filterSubjects、Core subject 添加 test1.。
 // 通配主题 orders.> 变为 test1.orders.>；空 queue 保持广播，空过滤列表仍消费整个 Stream。
-// 配置填写原始名称，Handler 引用不加前缀；外部 Stream 引用同样映射到带前缀的名称。
+// 配置填写原始名称，Handler 引用不加前缀；消费者继承的 Stream 名称由注册入口添加一次前缀。
 // 发布和 Request 同样传入原始主题，例如 orders.created；Client 自动发送到 test1.orders.created。
 // 回调、日志和原生返回值保留前缀；Request 回复用 Msg.Respond，不改写回复 inbox。
 // Conn()/JetStream() 原生入口不添加前缀；旧注册文件中的 namespace 须移至连接文件，否则严格解析报错。

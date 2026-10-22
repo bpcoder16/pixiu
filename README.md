@@ -387,7 +387,7 @@ func main() {
 
 此示例只展示初始化；常驻 HTTP 应用还需接入上面的服务管理器。`MustRegisterNATS` 声明实例，`MustBaseInit` 只完成连接初始化，不会自动准备 Stream 或启动消费。
 
-需要消费时，通过 natsx.MustNewJetStreamHandlerRegistry / MustNewCoreHandlerRegistry 登记 Handler，在 Start 工厂中直接返回 `bootstrap.NewNATSConsumerService(instanceName, jetStreamHandlers, coreHandlers)`。该函数读取消费配置并绑定 Handler，返回服务和构造错误。Run 注册，Stop 停收，Wait 等待回调与确认，Cancel 协作取消。与 HTTP/Cron 共用默认 30 秒，登记顺序不表示启动或停机依赖。排空期间保留连接及发布能力，随后由资源栈关闭。模板见 [NATS 消费配置](biz/bootstrap/conf.example/nats-register.example.yaml)；具名函数默认保留原始大小写，闭包、方法值、泛型函数须显式命名。
+需要消费时，通过 natsx.MustNewJetStreamHandlerRegistry / MustNewCoreHandlerRegistry 登记 Handler，在 Start 工厂中直接返回 `bootstrap.NewNATSConsumerService(instanceName, jetStreamHandlers, coreHandlers)`。该函数读取消费配置并绑定 Handler，返回服务和构造错误。Run 注册，Stop 停收，Wait 等待回调与确认，Cancel 协作取消。与 HTTP/Cron 共用默认 30 秒，登记顺序不表示启动或停机依赖。排空期间保留连接及发布能力，随后由资源栈关闭。JetStream 消费者放在 `streams[].consumers`，自动继承父级 name；每项 Stream 必须声明 subjects，统一创建或校验。旧顶层 jetStreamConsumers、消费者的 stream 字段及仅引用外部 Stream 的配置方式已移除。可选参数继续以注释展示，随消费者嵌套，按需取消注释。模板见 [NATS 消费配置](biz/bootstrap/conf.example/nats-register.example.yaml)；具名函数默认保留原始大小写，闭包、方法值、泛型函数须显式命名。
 
 注册文件中的 `streamDefaults.replicas` 始终必填且为正整数，即使清单为空。每个客户端的三类注册入口各只允许调用一次，通过入口检查后，空清单或失败也占用次数；配置装配不能与手动注册混用，失败后应中止启动并关闭客户端，不在同一实例上重试。JetStream 处理函数完成本条业务后返回，由组件根据返回结果确认或重投，业务不自行 ACK / NAK / Term，仍需保证幂等。
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -24,14 +25,13 @@ streamDefaults:
 streams:
   - name: ORDERS
     subjects: [orders.>]
+    consumers:
+      - durable: worker
+        filterSubjects: [orders.created]
+        handler: registrationTask
   - name: TEMP
     replicas: 1
     subjects: [temp.>]
-jetStreamConsumers:
-  - stream: ORDERS
-    durable: worker
-    filterSubjects: [orders.created]
-    handler: registrationTask
 coreConsumers:
   - name: broadcast
     subject: updates
@@ -50,6 +50,152 @@ func parseNATSRegistration(t *testing.T, content string) (*natsRegistrationConfi
 		t.Fatal(err)
 	}
 	return configx.Parse[natsRegistrationConfig](path)
+}
+
+func TestNATSRegistrationNestedConsumers(t *testing.T) {
+	cfg, err := parseNATSRegistration(t, `
+streamDefaults: {replicas: 1}
+streams:
+  - name: ORDERS
+    subjects: [orders.>]
+    consumers:
+      - durable: worker
+        handler: registrationTask
+        filterSubjects: [orders.created]
+      - durable: audit
+        handler: registrationTask
+  - name: OTHER
+    subjects: [other.>]
+    consumers:
+      - durable: worker
+        handler: registrationTask
+  - name: EMPTY
+    subjects: [empty.>]
+    consumers: []
+  - name: NULL_CONSUMERS
+    subjects: [null.>]
+    consumers: null
+  - name: OMITTED
+    subjects: [omitted.>]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := cfg.bind(natsx.MustNewJetStreamHandlerRegistry(registrationTask), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.streams) != 5 || len(batch.jetStreamConsumers) != 3 {
+		t.Fatalf("应保留无消费者的 Stream，并展开全部嵌套消费者: %+v", batch)
+	}
+	want := []natsx.JetStreamConsumer{
+		natsx.DefaultJetStreamConsumer("ORDERS", "worker", nil, "orders.created"),
+		natsx.DefaultJetStreamConsumer("ORDERS", "audit", nil),
+		natsx.DefaultJetStreamConsumer("OTHER", "worker", nil),
+	}
+	for i, consumer := range batch.jetStreamConsumers {
+		if consumer.Handler == nil {
+			t.Fatalf("消费者 %d 未绑定 Handler", i)
+		}
+		consumer.Handler = nil
+		if !reflect.DeepEqual(consumer, want[i]) {
+			t.Fatalf("消费者应按声明顺序继承所属 Stream 和默认配置: got %+v, want %+v", consumer, want[i])
+		}
+	}
+}
+
+func TestNATSRegistrationRejectsLegacyConsumers(t *testing.T) {
+	for _, value := range []string{"null", "[]", "[{stream: EXTERNAL, durable: worker, handler: registrationTask}]"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := parseNATSRegistration(t, "streamDefaults: {replicas: 1}\njetStreamConsumers: "+value)
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), "jetstreamconsumers") {
+				t.Fatalf("旧顶层清单即使为空也须拒绝: %v", err)
+			}
+		})
+	}
+	for _, value := range []string{"null", "OTHER"} {
+		t.Run("stream-"+value, func(t *testing.T) {
+			_, err := parseNATSRegistration(t, `
+streamDefaults: {replicas: 1}
+streams:
+  - name: ORDERS
+    subjects: [orders.>]
+    consumers:
+      - durable: worker
+        handler: registrationTask
+        stream: `+value)
+			if err == nil || !strings.Contains(err.Error(), "streams[0].consumers[0]") || !strings.Contains(err.Error(), "invalid keys: stream") {
+				t.Fatalf("消费者不得覆盖所属 Stream: %v", err)
+			}
+		})
+	}
+}
+
+func TestNATSRegistrationNestedHandlerLocation(t *testing.T) {
+	cfg, err := parseNATSRegistration(t, `
+streamDefaults: {replicas: 1}
+streams:
+  - name: ORDERS
+    subjects: [orders.>]
+    consumers:
+      - durable: worker
+        handler: registrationTask
+      - durable: audit
+        handler: missing
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cfg.bind(natsx.MustNewJetStreamHandlerRegistry(registrationTask), nil)
+	if err == nil || !strings.Contains(err.Error(), `streams[0].consumers[1] "ORDERS"/"audit"`) {
+		t.Fatalf("未知 Handler 应定位到嵌套声明: %v", err)
+	}
+}
+
+func TestNATSRegistrationExampleOptions(t *testing.T) {
+	content, err := os.ReadFile("conf.example/nats-register.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	optional := regexp.MustCompile(`(?m)^( *)# ( *)(replicas|maxBytes|retention|maxAge|duplicates|ackWait|maxDeliver|maxAckPending|consume|workers|maxMessages|retryDelay):`)
+	if got := len(optional.FindAll(content, -1)); got != 12 {
+		t.Fatalf("模板应保留全部可选参数的注释示例，实际 %d 项", got)
+	}
+	js := natsx.MustNewJetStreamHandlerRegistry()
+	js.MustRegister(registrationTask, "HandleOrderCreated")
+	core := natsx.MustNewCoreHandlerRegistry()
+	core.MustRegister(registrationCore, "HandleConfigRefresh")
+	core.MustRegister(registrationCore, "HandleNotification")
+	for _, uncomment := range []bool{false, true} {
+		name := "defaults"
+		if uncomment {
+			name = "uncommented-options"
+		}
+		t.Run(name, func(t *testing.T) {
+			source := string(content)
+			if uncomment {
+				// 只去掉注释标记，保留原缩进，验证用户可直接取消注释使用。
+				source = optional.ReplaceAllString(source, "${1}${2}${3}:")
+			}
+			cfg, err := parseNATSRegistration(t, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			batch, err := cfg.bind(js, core)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(batch.streams) != 1 || len(batch.jetStreamConsumers) != 1 || len(batch.coreConsumers) != 2 {
+				t.Fatalf("模板应完整绑定 Stream 和两类消费者: %+v", batch)
+			}
+			consumer := batch.jetStreamConsumers[0]
+			consumer.Handler = nil
+			if !reflect.DeepEqual(batch.streams[0], natsx.DefaultStreamConfig("ORDERS", 1, "orders.>")) ||
+				!reflect.DeepEqual(consumer, natsx.DefaultJetStreamConsumer("ORDERS", "order-created-worker", nil, "orders.created")) {
+				t.Fatalf("模板取消默认值注释后配置应保持一致: stream=%+v, consumer=%+v", batch.streams[0], consumer)
+			}
+		})
+	}
 }
 
 func TestNATSRegistrationDefaultsAndOverrides(t *testing.T) {
@@ -173,9 +319,8 @@ func TestNATSRegistrationPreservesEmptyAndInvalidFields(t *testing.T) {
 			}
 			cfg.Streams[0].Name = value
 			cfg.Streams[0].Subjects = []string{value}
-			cfg.JetStreamConsumers[0].Stream = value
-			cfg.JetStreamConsumers[0].Durable = value
-			cfg.JetStreamConsumers[0].FilterSubjects = []string{value}
+			cfg.Streams[0].Consumers[0].Durable = value
+			cfg.Streams[0].Consumers[0].FilterSubjects = []string{value}
 			cfg.CoreConsumers[0].Name = value
 			cfg.CoreConsumers[0].Subject = value
 			cfg.CoreConsumers[1].Queue = value
@@ -200,7 +345,7 @@ func TestNATSRegistrationPreservesEmptyAndInvalidFields(t *testing.T) {
 					t.Fatalf("空字段和首尾空白应保留原值，交给原注册入口校验: got %q, want %q", got, value)
 				}
 			}
-			cfg.JetStreamConsumers[0].FilterSubjects = nil
+			cfg.Streams[0].Consumers[0].FilterSubjects = nil
 			batch, err = cfg.bind(
 				natsx.MustNewJetStreamHandlerRegistry(registrationTask),
 				natsx.MustNewCoreHandlerRegistry(registrationCore),
@@ -220,33 +365,33 @@ func TestNATSRegistrationJetStreamOptions(t *testing.T) {
 	}{
 		{
 			name: "null",
-			options: `    ackWait: null
-    maxDeliver: null
-    maxAckPending: null
-    consume: null
-    retryDelay: null
+			options: `        ackWait: null
+        maxDeliver: null
+        maxAckPending: null
+        consume: null
+        retryDelay: null
 `,
 		},
 		{
 			name: "null-consume-fields",
-			options: `    consume:
-      workers: null
-      maxMessages: null
+			options: `        consume:
+          workers: null
+          maxMessages: null
 `,
 		},
 		{
 			name:    "empty-consume",
-			options: "    consume: {}\n",
+			options: "        consume: {}\n",
 		},
 		{
 			name: "overrides",
-			options: `    ackWait: 45s
-    maxDeliver: 7
-    maxAckPending: 200
-    consume:
-      workers: 4
-      maxMessages: 16
-    retryDelay: 250ms
+			options: `        ackWait: 45s
+        maxDeliver: 7
+        maxAckPending: 200
+        consume:
+          workers: 4
+          maxMessages: 16
+        retryDelay: 250ms
 `,
 			want: func(consumer *natsx.JetStreamConsumer) {
 				consumer.Config.AckWait = 45 * time.Second
@@ -259,8 +404,8 @@ func TestNATSRegistrationJetStreamOptions(t *testing.T) {
 		},
 		{
 			name: "workers-only",
-			options: `    consume:
-      workers: 3
+			options: `        consume:
+          workers: 3
 `,
 			want: func(consumer *natsx.JetStreamConsumer) {
 				consumer.Consume.Workers = 3
@@ -268,8 +413,8 @@ func TestNATSRegistrationJetStreamOptions(t *testing.T) {
 		},
 		{
 			name: "max-messages-only",
-			options: `    consume:
-      maxMessages: 8
+			options: `        consume:
+          maxMessages: 8
 `,
 			want: func(consumer *natsx.JetStreamConsumer) {
 				consumer.Consume.MaxMessages = 8
@@ -277,13 +422,13 @@ func TestNATSRegistrationJetStreamOptions(t *testing.T) {
 		},
 		{
 			name: "explicit-zero",
-			options: `    ackWait: 0
-    maxDeliver: 0
-    maxAckPending: 0
-    consume:
-      workers: 0
-      maxMessages: 0
-    retryDelay: 0
+			options: `        ackWait: 0
+        maxDeliver: 0
+        maxAckPending: 0
+        consume:
+          workers: 0
+          maxMessages: 0
+        retryDelay: 0
 `,
 			want: func(consumer *natsx.JetStreamConsumer) {
 				consumer.Config.AckWait = 0
@@ -296,8 +441,8 @@ func TestNATSRegistrationJetStreamOptions(t *testing.T) {
 		},
 		{
 			name: "unlimited",
-			options: `    maxDeliver: -1
-    maxAckPending: -1
+			options: `        maxDeliver: -1
+        maxAckPending: -1
 `,
 			want: func(consumer *natsx.JetStreamConsumer) {
 				consumer.Config.MaxDeliver = -1
@@ -306,7 +451,7 @@ func TestNATSRegistrationJetStreamOptions(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			content := strings.Replace(registrationYAML, "    handler: registrationTask\n", "    handler: registrationTask\n"+tc.options, 1)
+			content := strings.Replace(registrationYAML, "        handler: registrationTask\n", "        handler: registrationTask\n"+tc.options, 1)
 			cfg, err := parseNATSRegistration(t, content)
 			if err != nil {
 				t.Fatal(err)
@@ -342,47 +487,47 @@ func TestNATSRegistrationRejectsInvalidJetStreamOptions(t *testing.T) {
 	}{
 		{
 			name:    "invalid-ack-wait",
-			options: "    ackWait: 1d\n",
+			options: "        ackWait: 1d\n",
 			want:    "ackWait",
 		},
 		{
 			name:    "invalid-retry-delay",
-			options: "    retryDelay: later\n",
+			options: "        retryDelay: later\n",
 			want:    "retryDelay",
 		},
 		{
 			name:    "string-max-deliver",
-			options: "    maxDeliver: '5'\n",
+			options: "        maxDeliver: '5'\n",
 			want:    "maxDeliver",
 		},
 		{
 			name:    "map-max-ack-pending",
-			options: "    maxAckPending: {}\n",
+			options: "        maxAckPending: {}\n",
 			want:    "maxAckPending",
 		},
 		{
 			name:    "scalar-consume",
-			options: "    consume: invalid\n",
+			options: "        consume: invalid\n",
 			want:    "consume",
 		},
 		{
 			name:    "string-workers",
-			options: "    consume:\n      workers: '2'\n",
+			options: "        consume:\n          workers: '2'\n",
 			want:    "workers",
 		},
 		{
 			name:    "bool-max-messages",
-			options: "    consume:\n      maxMessages: true\n",
+			options: "        consume:\n          maxMessages: true\n",
 			want:    "maxMessages",
 		},
 		{
 			name:    "unknown-null-consume-field",
-			options: "    consume:\n      unknown: null\n",
+			options: "        consume:\n          unknown: null\n",
 			want:    "unknown",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			content := strings.Replace(registrationYAML, "    handler: registrationTask\n", "    handler: registrationTask\n"+tc.options, 1)
+			content := strings.Replace(registrationYAML, "        handler: registrationTask\n", "        handler: registrationTask\n"+tc.options, 1)
 			_, err := parseNATSRegistration(t, content)
 			if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tc.want)) {
 				t.Fatalf("应拒绝非法消费配置并包含 %q，实际: %v", tc.want, err)
@@ -545,7 +690,7 @@ func TestNATSRegistrationRejectsInvalidConfig(t *testing.T) {
 			content: strings.Replace(registrationYAML, "subjects: [orders.>]", "subjects: [orders.>]\n    maxBytes: true", 1),
 			want:    "maxBytes",
 		},
-		{name: "runtime-option", content: strings.Replace(registrationYAML, "durable: worker", "durable: worker\n    workers: 2", 1), want: "workers"},
+		{name: "runtime-option", content: strings.Replace(registrationYAML, "durable: worker", "durable: worker\n        workers: 2", 1), want: "workers"},
 		{
 			name:    "unknown-retention",
 			content: strings.Replace(registrationYAML, "subjects: [orders.>]", "subjects: [orders.>]\n    retention: unknown", 1),
@@ -582,7 +727,7 @@ func TestNATSRegistrationRejectsInvalidConfig(t *testing.T) {
 			content: strings.Replace(registrationYAML, "    subjects: [orders.>]\n", "", 1),
 			want:    "subjects",
 		},
-		{name: "duplicate-yaml-key", content: registrationYAML + "\njetStreamConsumers:\n  - stream: ORDERS\n    durable: worker\n    handler: registrationTask", want: "already defined"},
+		{name: "duplicate-yaml-key", content: registrationYAML + "\nstreams: []", want: "already defined"},
 		{name: "wrong-kind", content: strings.Replace(registrationYAML, "handler: registrationTask", "handler: registrationCore", 1), want: "unknown JetStream handler"},
 		{name: "unknown-core", content: strings.Replace(registrationYAML, "handler: registrationCore", "handler: missing", 1), want: "unknown Core handler"},
 		{
@@ -621,7 +766,7 @@ func TestNATSRegistrationRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestNATSRegistrationEmptyAndExternalStream(t *testing.T) {
+func TestNATSRegistrationEmpty(t *testing.T) {
 	cfg, err := parseNATSRegistration(t, "streamDefaults: {replicas: 1}")
 	if err != nil {
 		t.Fatal(err)
@@ -629,26 +774,6 @@ func TestNATSRegistrationEmptyAndExternalStream(t *testing.T) {
 	batch, err := cfg.bind(nil, nil)
 	if err != nil || len(batch.streams)+len(batch.jetStreamConsumers)+len(batch.coreConsumers) != 0 {
 		t.Fatalf("带全局默认的空清单应合法: %+v, %v", batch, err)
-	}
-	cfg, err = parseNATSRegistration(t, `
-streamDefaults: {replicas: 1}
-jetStreamConsumers:
-  - stream: EXTERNAL
-    durable: worker
-    handler: registrationTask
-  - stream: OTHER
-    durable: worker
-    handler: registrationTask
-`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	batch, err = cfg.bind(natsx.MustNewJetStreamHandlerRegistry(registrationTask), nil)
-	if err != nil || len(batch.jetStreamConsumers) != 2 {
-		t.Fatalf("应允许外部 Stream 及不同 Stream 的同名 Durable: %+v, %v", batch, err)
-	}
-	if len(batch.jetStreamConsumers[0].Config.FilterSubjects) != 0 {
-		t.Fatal("省略过滤条件应消费整个 Stream")
 	}
 }
 
@@ -680,7 +805,7 @@ func TestNATSRegistrationRejectsReplicaContainersAndUnknownNulls(t *testing.T) {
 		registrationYAML + "\nunknown: null",
 		strings.Replace(registrationYAML, "replicas: 3", "replicas: 3\n  unknown: null", 1),
 		strings.Replace(registrationYAML, "replicas: 1", "replicas: 1\n    unknown: null", 1),
-		strings.Replace(registrationYAML, "durable: worker", "durable: worker\n    unknown: null", 1),
+		strings.Replace(registrationYAML, "durable: worker", "durable: worker\n        unknown: null", 1),
 		strings.Replace(registrationYAML, "name: queue", "name: queue\n    unknown: null", 1),
 	} {
 		cfg, err := parseNATSRegistration(t, content)

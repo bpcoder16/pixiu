@@ -27,10 +27,9 @@ streamDefaults: {replicas: 1}
 streams:
   - name: EVENTS
     subjects: [events]
-jetStreamConsumers:
-  - stream: EVENTS
-    durable: worker
-    handler: task
+    consumers:
+      - durable: worker
+        handler: task
 coreConsumers:
   - name: broadcast
     subject: updates
@@ -274,7 +273,7 @@ func testNATSFromConfigNamespaceIsolation(t *testing.T) {
 		}
 		received := make(chan receivedMessage, 32)
 		content := strings.Replace(natsRegistrationTemplate, "subjects: [events]", "subjects: [events.>]", 1)
-		content = strings.Replace(content, "durable: worker", "durable: worker\n    filterSubjects: [events.created]", 1)
+		content = strings.Replace(content, "durable: worker", "durable: worker\n        filterSubjects: [events.created]", 1)
 		content = strings.Replace(content, "subject: updates", "subject: updates.*", 1)
 		// 两个环境使用相同声明；同一环境的两个实例继续复用 Stream、Durable 和 Queue。
 		for _, instance := range []struct {
@@ -422,11 +421,11 @@ func testNATSFromConfigPreflightAndErrors(t *testing.T) {
 				t.Fatalf("副本配置校验失败前不应创建 Stream: %v", err)
 			}
 		}
-		for _, option := range []string{"ackWait: 1d", "retryDelay: later", "consume:\n      unknown: null"} {
-			content := strings.Replace(natsRegistrationTemplate, "    handler: task", "    handler: task\n    "+option, 1)
+		for _, option := range []string{"ackWait: 1d", "retryDelay: later", "consume:\n          unknown: null"} {
+			content := strings.Replace(natsRegistrationTemplate, "        handler: task", "        handler: task\n        "+option, 1)
 			writeNATSRegistration(t, "demo", content)
 			err := registerNATSForTest(t, "demo", js, nil)
-			if err == nil || !strings.Contains(err.Error(), "jetStreamConsumers[0]") || !strings.Contains(err.Error(), "nats-register.demo.yaml") {
+			if err == nil || !strings.Contains(err.Error(), "streams[0].consumers[0]") || !strings.Contains(err.Error(), "nats-register.demo.yaml") {
 				t.Fatalf("消费配置解码错误应带路径及位置: %v", err)
 			}
 			if _, err := client.JetStream().Stream(ctx, "EVENTS"); !errors.Is(err, jetstream.ErrStreamNotFound) {
@@ -747,27 +746,25 @@ streamDefaults: {replicas: 1}
 streams:
   - name: EVENTS
     subjects: [events]
-jetStreamConsumers:
-  - stream: EVENTS
-    durable: worker
-    handler: task
-    ackWait: 30s
-    maxDeliver: 3
-    maxAckPending: 12
-    consume:
-      workers: 2
-      maxMessages: 1
-    retryDelay: 100ms
-  - stream: EVENTS
-    durable: defaults
-    handler: noop
-    ackWait: null
-    maxDeliver: null
-    maxAckPending: null
-    consume:
-      workers: null
-      maxMessages: null
-    retryDelay: null
+    consumers:
+      - durable: worker
+        handler: task
+        ackWait: 30s
+        maxDeliver: 3
+        maxAckPending: 12
+        consume:
+          workers: 2
+          maxMessages: 1
+        retryDelay: 100ms
+      - durable: defaults
+        handler: noop
+        ackWait: null
+        maxDeliver: null
+        maxAckPending: null
+        consume:
+          workers: null
+          maxMessages: null
+        retryDelay: null
 `)
 		if err := registerNATSForTest(t, "demo", handlers, nil); err != nil {
 			t.Fatal(err)
@@ -841,31 +838,31 @@ func testNATSFromConfigJetStreamConsumerValidation(t *testing.T) {
 		{
 			name:        "zero-ack-wait",
 			durable:     "second",
-			extraConfig: "    ackWait: 0\n",
+			extraConfig: "        ackWait: 0\n",
 			want:        "requires AckWait or BackOff",
 		},
 		{
 			name:        "negative-ack-wait",
 			durable:     "second",
-			extraConfig: "    ackWait: -1s\n",
+			extraConfig: "        ackWait: -1s\n",
 			want:        "requires AckWait or BackOff",
 		},
 		{
 			name:        "negative-workers",
 			durable:     "second",
-			extraConfig: "    consume:\n      workers: -1\n",
+			extraConfig: "        consume:\n          workers: -1\n",
 			want:        "negative consumption parameter",
 		},
 		{
 			name:        "negative-max-messages",
 			durable:     "second",
-			extraConfig: "    consume:\n      maxMessages: -1\n",
+			extraConfig: "        consume:\n          maxMessages: -1\n",
 			want:        "negative consumption parameter",
 		},
 		{
 			name:        "negative-retry-delay",
 			durable:     "second",
-			extraConfig: "    retryDelay: -1ms\n",
+			extraConfig: "        retryDelay: -1ms\n",
 			want:        "negative consumption parameter",
 		},
 	} {
@@ -879,13 +876,11 @@ streamDefaults: {replicas: 1}
 streams:
   - name: EVENTS
     subjects: [events]
-jetStreamConsumers:
-  - stream: EVENTS
-    durable: first
-    handler: task
-  - stream: EVENTS
-    durable: '`+test.durable+`'
-    handler: task
+    consumers:
+      - durable: first
+        handler: task
+      - durable: '`+test.durable+`'
+        handler: task
 `+test.extraConfig)
 				handlers := natsx.MustNewJetStreamHandlerRegistry()
 				handlers.MustRegister(func(context.Context, jetstream.Msg) error { return nil }, "task")
@@ -1066,7 +1061,7 @@ func testNATSFromConfigRemoteConflictsAndPartialCleanup(t *testing.T) {
 							t.Fatal(err)
 						}
 					} else {
-						content = strings.Replace(content, "streams:\n  - name: EVENTS\n    subjects: [events]", "streams: []", 1)
+						content = strings.Replace(content, "    subjects: [events]\n", "", 1)
 					}
 				case "partial-core":
 					// SDK 拒绝包含内部空白的主题；前一个 Core 订阅及 JetStream worker 已建立。
@@ -1084,8 +1079,11 @@ func testNATSFromConfigRemoteConflictsAndPartialCleanup(t *testing.T) {
 						t.Fatalf("未保留 Consumer 冲突: %v", err)
 					}
 				case "external-stream":
-					if err != nil {
-						t.Fatalf("引用已有外部 Stream 应成功: %v", err)
+					if err == nil || !strings.Contains(err.Error(), `streams[0] "EVENTS" requires nonempty subjects`) {
+						t.Fatalf("即使远端 Stream 已存在，也必须完整声明: %v", err)
+					}
+					if _, err := client.JetStream().Consumer(ctx, "EVENTS", "worker"); !errors.Is(err, jetstream.ErrConsumerNotFound) {
+						t.Fatalf("配置预检失败不得创建 Consumer: %v", err)
 					}
 				case "partial-core":
 					if err == nil || !strings.Contains(err.Error(), "register Core consumers") {
