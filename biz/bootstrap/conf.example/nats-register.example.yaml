@@ -6,54 +6,45 @@
 # Handler 名称不变，回调主题保留前缀；修改 namespace 不迁移或删除旧 Stream/Durable。
 
 streamDefaults:
-  # 始终必填且为正整数，同时作为逐项副本数的上限，即使没有 Stream 或每个 Stream 均有覆盖值。
-  # 单节点使用 1；服务端继续校验副本数范围与集群条件。
-  replicas: 1
+  replicas: 1  # 始终必填且为正整数，作为逐项副本数上限，即使没有 Stream 或每项均有覆盖值；单节点使用 1，服务端继续校验范围与集群条件。
 
-streams:
+streams:  # 可省略或设为 []。
   - name: "ORDERS"
     subjects:
       - "orders.>"
     # 以下五项均可省略或设为 null，按需取消注释覆盖。
-    # replicas 沿用 streamDefaults.replicas；其余四项沿用 natsx Default，注释中列出当前默认值。
-    # replicas: 1          # 不得超过全局值；0 或负数也沿用全局值，解码及数字转换沿用 configx。
-    # maxBytes: -1         # 整数字节数，默认 -1；0 或 -1 不设 Stream 容量上限，仍受账户及服务端配额限制；100 MiB 为 104857600，不接受带单位字符串。
-    # retention: "limits"  # 可选 limits、interest、workqueue。
-    # maxAge: "2160h"      # 消息最大年龄；0 表示不限制年龄。支持 Go 时长单位，不支持 d。
-    # duplicates: "2m"     # 消息 ID 去重窗口；0 由服务端确定，不代表关闭去重。
-    # 时长范围由服务端校验；maxAge 大于 0 时，去重窗口不得超过它。
+    # 各项默认值见行内注释。
+    # replicas: 1          # 默认沿用 streamDefaults.replicas，不得超过全局值；0 或负数也沿用全局值，解码及数字转换沿用 configx。
+    # maxBytes: -1         # 整数字节数，默认沿用 natsx Default 的 -1；0 或 -1 不设 Stream 容量上限，仍受账户及服务端配额限制；100 MiB 为 104857600，不接受带单位字符串。
+    # retention: "limits"  # 默认沿用 natsx Default 的 limits；可选 limits、interest、workqueue。
+    # maxAge: "2160h"      # 默认沿用 natsx Default；消息最大年龄，0 表示不限制年龄；支持 Go 时长单位，不支持 d，范围由服务端校验。
+    # duplicates: "2m"     # 默认沿用 natsx Default；消息 ID 去重窗口，0 由服务端确定，不代表关闭去重；范围由服务端校验，maxAge 大于 0 时不得超过它。
 
-# 下面的 Handler 须由应用的 JetStreamHandlerRegistry 登记。
-jetStreamConsumers:
+jetStreamConsumers:  # 可省略或设为 []。
   - stream: "ORDERS"
     durable: "order-created-worker"
-    filterSubjects:
+    filterSubjects:  # 省略或为空时消费整个 Stream。
       - "orders.created"
-    handler: "HandleOrderCreated"
+    handler: "HandleOrderCreated"  # 须由应用的 JetStreamHandlerRegistry 登记。
     # 以下六项均可省略或设为 null，沿用 natsx Default；注释中列出当前默认值。
-    # ackWait: "60s"       # ACK 等待时间，必须大于 0；应覆盖预取等待和业务处理时间。
+    # ackWait: "60s"       # ACK 等待时间，必须大于 0；应覆盖预取等待和业务处理时间，支持 Go 时长单位。
     # maxDeliver: 5        # 最大投递次数，包含首次；范围由服务端校验。
     # maxAckPending: 1000  # 同一 Durable 下所有实例合计的未确认消息数上限。
     # consume:
-    #   workers: 1         # 本地并发数；0 按 1 处理，Handler 须支持并发。
-    #   maxMessages: 0     # SDK 预取上限；0 为有效 workers 的两倍，不含处理中的消息。
-    # retryDelay: "0s"     # 失败重投延迟；0 等待 ackWait 超时，正值发送延迟 NAK。
-    # ackWait、retryDelay 支持 Go 时长单位；workers、maxMessages、retryDelay 不得为负。
+    #   workers: 1         # 本地并发数，不得为负；0 按 1 处理，Handler 须支持并发。
+    #   maxMessages: 0     # SDK 预取上限，不得为负；0 为有效 workers 的两倍，不含处理中的消息。
+    # retryDelay: "0s"     # 失败重投延迟，不得为负；0 等待 ackWait 超时，正值发送延迟 NAK，支持 Go 时长单位。
 
-# 下面的 Handler 须由应用的 CoreHandlerRegistry 登记。
-coreConsumers:
+coreConsumers:  # 可省略或设为 []。
   - name: "config-refresh"
     subject: "config.refresh"
-    handler: "HandleConfigRefresh"
+    handler: "HandleConfigRefresh"  # 须由应用的 CoreHandlerRegistry 登记。
   - name: "notification-worker"
     subject: "notifications.send"
-    queue: "notification-workers"
-    # queue 非空时必须配置且大于 1；当前 Client 按此数量建订阅，Handler 须支持并发。
-    subscribers: 4
-    handler: "HandleNotification"
+    queue: "notification-workers"  # 省略或为空时广播。
+    subscribers: 4  # 仅在 queue 非空时控制订阅数，此时必填且大于 1；当前 Client 按此数量建订阅，Handler 须支持并发；广播始终只有一个订阅。
+    handler: "HandleNotification"  # 须由应用的 CoreHandlerRegistry 登记。
 
-# 三份清单均可省略或设为 []；未引用的 Handler 不启动。
-# filterSubjects 省略或为空时消费整个 Stream；queue 省略或为空时广播。
-# subscribers 仅在 queue 非空时控制订阅数，广播始终只有一个订阅。
+# 未引用的 Handler 不启动。
 # 除上述字段外全部沿用 natsx 的 Default，不支持 enabled、热更新或完整 SDK 配置。
 # 删除声明后重启不删除远端 Stream/Durable；同配置复用，冲突报错，不自动更新。
