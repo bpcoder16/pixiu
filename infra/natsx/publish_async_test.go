@@ -97,11 +97,13 @@ func TestPublishJetStreamAsyncOwnershipTraceAndDedup(t *testing.T) {
 }
 
 func TestPublishJetStreamAsyncCloseWaitsForError(t *testing.T) {
-	buf := captureLogs(t)
+	defaultLogs := captureLogs(t)
+	buf := captureNamedLogs(t, t.Name())
 	c, err := New(Config{
-		Name:      "async-error",
-		URLs:      []string{startServer(t)},
-		JetStream: JetStreamConfig{PublishAsyncTimeout: 100 * time.Millisecond},
+		Name:       "async-error",
+		LoggerName: t.Name(),
+		URLs:       []string{startServer(t)},
+		JetStream:  JetStreamConfig{PublishAsyncTimeout: 100 * time.Millisecond},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +136,11 @@ func TestPublishJetStreamAsyncCloseWaitsForError(t *testing.T) {
 		}
 	default:
 		t.Fatal("Close 未等到异步结果")
+	}
+	for _, record := range readLogs(t, defaultLogs) {
+		if record["nats_event"] != nil {
+			t.Fatalf("异步错误和连接日志不得落到默认 Logger: %v", record)
+		}
 	}
 	for _, record := range readLogs(t, buf) {
 		if record["nats_event"] == "async_publish_error" {

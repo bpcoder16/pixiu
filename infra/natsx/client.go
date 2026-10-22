@@ -25,6 +25,9 @@ var (
 type Config struct {
 	// Name 是连接名称，同时用于日志标识；不能为空或仅含空白。
 	Name string
+	// LoggerName 指定连接状态、异步错误和消费入口的命名 Logger；空值或未注册时使用默认 Logger。
+	// 消费 Handler 及其下游继承消息 ctx；主动发布和 Request 的日志始终跟随调用方 ctx。
+	LoggerName string
 	// Namespace 是当前实例的业务资源前缀；空值不启用，非空仅接受 ASCII 字母、数字、_、-。
 	// 初始化后固定，封装的发送及注册入口接收原始主题和名称，自动添加前缀。
 	Namespace string
@@ -231,7 +234,7 @@ func New(cfg Config, options ...nats.Option) (*Client, error) {
 	opts.Timeout = cfg.ConnectTimeout
 	opts.DrainTimeout = cfg.DrainTimeout
 	// 消息处理生命周期由 Client 管理，不绑定初始化调用方的请求或超时。
-	c.handlerCtx, c.cancelHandlers = context.WithCancel(context.Background())
+	c.handlerCtx, c.cancelHandlers = context.WithCancel(logit.WithLoggerName(context.Background(), cfg.LoggerName))
 	// 五个连接回调字段均由 Pixiu 管理；用户自定义已在上方校验中拒绝。
 	c.installCallbacks(&opts, cfg.AsyncErrorHandler)
 	nc, err := opts.Connect()
@@ -446,7 +449,8 @@ func (c *Client) forceClose() error {
 }
 
 func (c *Client) logState(level logit.Level, event, subject string, err error, extra ...logit.Field) {
-	ctx := context.Background()
+	// 生命周期取消不影响日志路由，连接收尾仍使用初始化时配置的 Logger。
+	ctx := c.handlerCtx
 	if !logit.LoggerFromContext(ctx).Enabled(level) {
 		return
 	}

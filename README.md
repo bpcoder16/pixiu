@@ -391,6 +391,8 @@ func main() {
 
 注册文件中的 `streamDefaults.replicas` 显式配置时必须为正整数；省略或 `null` 时使用对应实例初始化时 `nats.<name>.yaml` 中 `urls` 的条目数，不去重、不计入自动发现节点。最终全局值作为逐项副本数上限，即使清单为空也校验；仅列部分种子地址、使用代理入口或需要不同副本策略时，应显式配置。每个客户端的三类注册入口各只允许调用一次，通过入口检查后，空清单或失败也占用次数；配置装配不能与手动注册混用，失败后应中止启动并关闭客户端，不在同一实例上重试。JetStream 处理函数完成本条业务后返回，由组件根据返回结果确认或重投，业务不自行 ACK / NAK / Term，仍需保证幂等。
 
+连接文件可配置 `loggerName: "nats"`，并在 app.yaml 的 `log.names` 中声明 nats；连接、异步错误、订阅及消费链路写入 nats 命名日志。Handler 及其下游沿用消息 ctx 即可继承；HTTP/Cron 中发布 NATS 的调用日志继续跟随调用方 ctx。省略或未注册 Logger 名称时回退默认日志。
+
 可选 `namespace` 配置在连接文件 `nats.events.yaml`，注册文件不接受该字段。非空值仅允许 ASCII 字母、数字、`_`、`-`；例如 `test1` 会将主题 `orders.created` 映射为 `test1.orders.created`，将 Stream `ORDERS` 映射为 `test1_ORDERS`，Durable、Core 名称及非空 Queue 也添加 `test1_`。注册与发布 / Request 均填写原始名称或主题，Handler 名称不变；回调主题已含前缀，原生 `Conn()` / `JetStream()` 不自动添加前缀。修改 namespace 不会迁移或删除旧资源，完整边界见 [`natsx` 包文档](infra/natsx/doc.go)。
 
 NATS 消费者可在启动时保存客户端引用，也可在消费排空期间查询 `Default` / `Named` 并继续发布。关闭完成后查询仍按原约定 panic；其他客户端的关闭与查询行为不变。先停止并等待外部生产者，再由资源栈排空 NATS，随后关闭数据库等依赖，日志最后关闭。

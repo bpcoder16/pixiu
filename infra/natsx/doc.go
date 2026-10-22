@@ -1,5 +1,7 @@
 // Package natsx 提供实例式 NATS 连接、启动期消费注册、通用消息操作和 logit 结果日志。
 // 操作结果成功写 Info，失败写 Error。
+// Config.LoggerName 指定连接、异步错误及消费入口的命名 Logger，空值或未注册名称回退默认 Logger。
+// Handler 及其下游沿用消息 ctx 时继承此路由；Publish、Request 及 JetStream 发布始终使用调用方 ctx。
 // Publish、Request、PublishJetStream、PublishJetStreamAsync 在 ctx 启用 logit.WithStart 时登记请求级耗时，
 // 字段为 NATS_<连接名>_<序号>_duration_ms；日志被过滤时仍登记，供 InfoDuration 等汇总。
 // 耗时不包含日志构建或写入，消费回调不计入下游调用。
@@ -252,7 +254,7 @@
 // ctx 只用于提交前取消检查、日志与追踪，不取消已提交消息，也不控制后续确认等待。
 // 先检查方法返回的提交 error，再检查 future.Ok()/Err()；异步错误同时记录日志。
 // async_publish_error 从消息 Header 读取已有的非空 Nats-Msg-Id、X-Log-Id，
-// 分别输出 message_id、logId，缺失时不生成替代 ID，使用默认 Logger。
+// 分别输出 message_id、logId，缺失时不生成替代 ID，使用 Config.LoggerName 指定的路由。
 // 提交日志及耗时不表示持久化成功，PubAck 也不代表消费者业务完成。
 // PublishAsyncTimeout 默认 5 秒，与消费者 AckWait 无关；确认超时不保证消息未写入。
 // Close 排空消费后等待异步结果；全部完成不等于全部成功。

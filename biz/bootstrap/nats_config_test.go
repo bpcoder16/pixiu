@@ -57,3 +57,37 @@ func TestNATSConfigNamespace(t *testing.T) {
 		})
 	}
 }
+
+func TestNATSConfigLoggerName(t *testing.T) {
+	for _, value := range []string{"", "null", "''", "nats", "42", "true", "{}", "[]"} {
+		t.Run(value, func(t *testing.T) {
+			content := "urls: [localhost:4222]\n"
+			if value != "" {
+				content += "loggerName: " + value + "\n"
+			}
+			path := filepath.Join(t.TempDir(), "nats.test.yaml")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			file, err := configx.Parse[natsFileConfig](path)
+			switch value {
+			case "42", "true", "{}", "[]":
+				if err == nil || !strings.Contains(strings.ToLower(err.Error()), "loggername") {
+					t.Fatalf("loggerName 应严格拒绝错误类型: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := file.clientConfig("events")
+			want := ""
+			if value == "nats" {
+				want = value
+			}
+			if err != nil || cfg.LoggerName != want {
+				t.Fatalf("日志路由未传入客户端: cfg=%+v, err=%v", cfg, err)
+			}
+		})
+	}
+}

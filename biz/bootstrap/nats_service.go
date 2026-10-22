@@ -26,7 +26,8 @@ import (
 // 各入口分阶段预检，后序校验失败时前序资源或消费可能已启动。
 // nil 注册表视为空表，未引用的 Handler 不启动；全局 streamDefaults.replicas 显式配置时必须为正整数。
 // 全局 replicas 省略或 null 时使用当前客户端初始化时的 URL 条目数，不计入自动发现的节点。
-// namespace 来自 nats.<instanceName>.yaml 的客户端初始化配置，本文件不接受该字段。
+// namespace 和 loggerName 来自 nats.<instanceName>.yaml 的客户端初始化配置，本文件不接受这两个字段。
+// 连接及消费日志沿用客户端 Logger 路由，Handler 及其下游须继续传递消息 ctx。
 // 配置填写原始名称和主题，前缀统一由 Client 的注册及发送入口添加；Handler 名称不变。
 // 逐项 Stream 的 replicas 不得超过全局值，超限时在注册任何资源前返回错误。
 // Stream maxBytes、retention、maxAge、duplicates 可选，省略或 null 沿用 Default；显式零值按 NATS 语义处理。

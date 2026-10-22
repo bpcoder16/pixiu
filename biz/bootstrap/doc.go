@@ -271,6 +271,8 @@
 // NATS 使用 MustRegisterNATS(name, isDefault) 声明，Elasticsearch 之后读取 nats.<name>.yaml。
 // 全部 NATS 文件严格解析并转换后，先登记一次 natsx.CloseAll，再创建默认或命名客户端；
 // 未声明时跳过。模板见 conf.example/nats.example.yaml；文件不接受 name、isDefault。
+// loggerName 指定连接及消费链路的命名 Logger；模板为 nats，须在 app.yaml 的 log.names 中声明。
+// 省略、null、空值或名称未注册时回退默认 Logger；HTTP/Cron 发布仍跟随调用方 ctx。
 // 消费者通过 NewNATSConsumerService 纳入 Start，与 HTTP/Cron 同时停收，登记顺序不保证业务依赖。
 // 全部服务共享总关闭预算；ErrShutdownTimeout 时取消剩余任务，入口仍执行资源栈回收，普通错误沿用管理器和资源栈汇总。
 // 转换阶段检查 URL 解析及内嵌凭据，通用参数由 natsx 在构造时校验；
