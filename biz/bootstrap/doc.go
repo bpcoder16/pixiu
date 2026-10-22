@@ -185,8 +185,7 @@
 //		return bootstrap.NewCronService(Registry.Handlers()...)
 //	})
 //
-// NewCronService 内部调用 NewCronScheduler，构造错误原样返回，成功后由管理器接管运行与关闭。
-// 需要直接操作 Scheduler 时仍可使用 NewCronScheduler(Registry.Handlers()...) 并自行管理其生命周期。
+// NewCronService 读取调度配置并绑定 Handler，构造错误原样返回，成功后由管理器接管运行与关闭。
 // lock 段存在时通过已初始化的命名 Redis 构造 gocron-redis-lock，配置 TTL 与自动续租；
 // 任务须设置正 timeout。仅在租约有效时互斥，不保证每周期一次，失租不自动取消业务。
 // 混合运行统一停收所有服务、共享一个排空期限；资源栈在正常完成或超时取消后执行。
@@ -283,7 +282,7 @@
 // drainTimeout 默认 10s，仅用于底层连接 Drain；closeTimeout 默认 20s，限制完整关闭流程。
 // jetStream.publishAsyncTimeout 默认 5s，只限制默认上下文的异步 PubAck 等待。
 // 连接成功不代表 JetStream 已启用或业务权限已验证。迁移和 Handler 依赖就绪后，
-// NewNATSConsumerService 内部调用 NewNATSConsumer，读取独立的 nats-register.<name>.yaml 并绑定 Handler，
+// NewNATSConsumerService 读取独立的 nats-register.<name>.yaml 并绑定 Handler，
 // 构造错误原样返回；Run 调用 natsx 的三个注册入口：
 //
 //	jsHandlers := natsx.MustNewJetStreamHandlerRegistry()
@@ -299,13 +298,12 @@
 //		return bootstrap.NewNATSConsumerService("orders", jsHandlers, coreHandlers)
 //	})
 //
-// 需要直接操作消费组件时仍可使用 NewNATSConsumer，并自行管理 Run/Stop/Wait/Cancel。
 // 示例需导入 context、infra/apprun、infra/natsx、nats.go 和 nats.go/jetstream，并已初始化 orders 命名客户端及配置环境。
 // 客户端未登记或 CloseAll 开始后查询沿用 natsx.Named 的 panic；配置错误由构造返回，注册失败由 Run 返回。
 // 调用方无论排空结果都回收资源；Run/Stop/Wait/Cancel 分工，启动失败也收尾已启动消费。
-// NATSConsumer.Cancel 先复用 Stop，再取消剩余消费；可直接或重复调用，不关闭共享连接。
-// Start 并发运行服务，登记顺序不规定停机依赖。手动同步注册可使用 RegisterNATSFromConfig，资源回收前通过 StopConsumers、WaitConsumers 和必要的 CancelConsumers 处理消费。
-// 内部创建 context.Background()，不设置整体注册期限，资源请求与 Core Flush 沿用 SDK 默认行为。
+// 服务的 Cancel 先复用 Stop，再取消剩余消费；可直接或重复调用，不关闭共享连接。
+// Start 并发运行服务，登记顺序不规定停机依赖。手动注册可使用 natsx 的三个集中注册入口，资源回收前通过 StopConsumers、WaitConsumers 和必要的 CancelConsumers 处理消费。
+// 注册 context 可由 Stop 取消，不设置整体注册期限；资源请求与 Core Flush 沿用 SDK 默认行为。
 // Client 关闭状态在配置预检后交给 natsx 注册入口校验；长期 Handler 使用独立消息 context。
 // 文件可使用 conf.example/nats-register.example.yaml，保留示例已登记的 Handler 对应项。
 // 注册文件不接受 namespace；该值统一来自 nats.<name>.yaml 的客户端配置。

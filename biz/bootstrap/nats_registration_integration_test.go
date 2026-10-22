@@ -1,6 +1,6 @@
 //go:build natsintegration
 
-package bootstrap_test
+package bootstrap
 
 import (
 	"context"
@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bpcoder16/pixiu/biz/bootstrap"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/infra/natsx"
 	"github.com/bpcoder16/pixiu/logit"
@@ -70,6 +69,23 @@ func TestNATSFromConfig(t *testing.T) {
 	} {
 		t.Run(tc.name, tc.run)
 	}
+}
+
+// 同步验证构造与注册阶段；Run 的阻塞、取消和排空另由服务生命周期测试覆盖。
+func registerNATSForTest(t *testing.T, instanceName string, jetStreamHandlers *natsx.JetStreamHandlerRegistry, coreHandlers *natsx.CoreHandlerRegistry) error {
+	t.Helper()
+	consumer, err := newNATSConsumer(instanceName, jetStreamHandlers, coreHandlers)
+	if err != nil {
+		return err
+	}
+	t.Cleanup(consumer.cancelRegistration)
+	return consumer.register(consumer.registerCtx)
+}
+
+func recoverValue(fn func()) (value any) {
+	defer func() { value = recover() }()
+	fn()
+	return nil
 }
 
 func startNATSTestServer(t *testing.T, jetStream bool) string {
@@ -160,7 +176,7 @@ func testNATSFromConfigMissingClientBeforeEnvironment(t *testing.T) {
 	isolatedNATS(t, func() {
 		// 生命周期误用沿用 Named 的原始 panic，不先触发 env 的 panic。
 		value := recoverValue(func() {
-			_ = bootstrap.RegisterNATSFromConfig("missing", nil, nil)
+			_ = registerNATSForTest(t, "missing", nil, nil)
 		})
 		if value != `natsx: client "missing" is not registered` {
 			t.Fatalf("未初始化实例应沿用 Named 的 panic，实际: %v", value)
@@ -192,7 +208,7 @@ func testNATSFromConfigPublishConsumeAndReuse(t *testing.T) {
 			// 不符合条件的可选覆盖不应用，继续使用全局副本数。
 			content := strings.Replace(natsRegistrationTemplate, "subjects: [events]", "subjects: [events]\n    replicas: 0", 1)
 			writeNATSRegistration(t, name, content)
-			if err := bootstrap.RegisterNATSFromConfig(name, js, core); err != nil {
+			if err := registerNATSForTest(t, name, js, core); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -233,7 +249,7 @@ func testNATSFromConfigPublishConsumeAndReuse(t *testing.T) {
 			case <-time.After(10 * time.Millisecond):
 			}
 		}
-		if err := bootstrap.RegisterNATSFromConfig("first", js, core); err == nil || !strings.Contains(err.Error(), "already called") {
+		if err := registerNATSForTest(t, "first", js, core); err == nil || !strings.Contains(err.Error(), "already called") {
 			t.Fatalf("应拒绝同一客户端重复装配: %v", err)
 		}
 		if err := natsx.CloseAll(); err != nil {
@@ -309,7 +325,7 @@ func testNATSFromConfigNamespaceIsolation(t *testing.T) {
 				return nil
 			}, "core")
 			writeNATSRegistration(t, instance.name, content)
-			if err := bootstrap.RegisterNATSFromConfig(instance.name, js, core); err != nil {
+			if err := registerNATSForTest(t, instance.name, js, core); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -392,13 +408,13 @@ func testNATSFromConfigPreflightAndErrors(t *testing.T) {
 		ctx := context.Background()
 		js := natsx.MustNewJetStreamHandlerRegistry()
 		js.MustRegister(func(context.Context, jetstream.Msg) error { return nil }, "task")
-		if err := bootstrap.RegisterNATSFromConfig("demo", js, nil); !errors.Is(err, os.ErrNotExist) {
+		if err := registerNATSForTest(t, "demo", js, nil); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("缺文件应保留错误链: %v", err)
 		}
 		for _, value := range []string{"'1'", "[]", "{}", "2"} {
 			content := strings.Replace(natsRegistrationTemplate, "subjects: [events]", "subjects: [events]\n    replicas: "+value, 1)
 			writeNATSRegistration(t, "demo", content)
-			err := bootstrap.RegisterNATSFromConfig("demo", js, nil)
+			err := registerNATSForTest(t, "demo", js, nil)
 			if err == nil || !strings.Contains(err.Error(), "streams[0]") || !strings.Contains(err.Error(), "nats-register.demo.yaml") {
 				t.Fatalf("副本配置错误应带路径及位置: %v", err)
 			}
@@ -409,7 +425,7 @@ func testNATSFromConfigPreflightAndErrors(t *testing.T) {
 		for _, option := range []string{"ackWait: 1d", "retryDelay: later", "consume:\n      unknown: null"} {
 			content := strings.Replace(natsRegistrationTemplate, "    handler: task", "    handler: task\n    "+option, 1)
 			writeNATSRegistration(t, "demo", content)
-			err := bootstrap.RegisterNATSFromConfig("demo", js, nil)
+			err := registerNATSForTest(t, "demo", js, nil)
 			if err == nil || !strings.Contains(err.Error(), "jetStreamConsumers[0]") || !strings.Contains(err.Error(), "nats-register.demo.yaml") {
 				t.Fatalf("消费配置解码错误应带路径及位置: %v", err)
 			}
@@ -418,7 +434,7 @@ func testNATSFromConfigPreflightAndErrors(t *testing.T) {
 			}
 		}
 		writeNATSRegistration(t, "demo", natsRegistrationTemplate)
-		err := bootstrap.RegisterNATSFromConfig("demo", js, nil)
+		err := registerNATSForTest(t, "demo", js, nil)
 		if err == nil || !strings.Contains(err.Error(), "coreConsumers[0]") || !strings.Contains(err.Error(), "nats-register.demo.yaml") {
 			t.Fatalf("后置未知 Handler 应带路径及位置: %v", err)
 		}
@@ -437,7 +453,7 @@ func testNATSFromConfigPreflightAndErrors(t *testing.T) {
 		} {
 			content := strings.Replace(natsRegistrationTemplate, "    subscribers: 4\n", declaration, 1)
 			writeNATSRegistration(t, "demo", content)
-			err := bootstrap.RegisterNATSFromConfig("demo", js, core)
+			err := registerNATSForTest(t, "demo", js, core)
 			if err == nil || !strings.Contains(err.Error(), `coreConsumers[1] "queue" subscribers`) || !strings.Contains(err.Error(), "nats-register.demo.yaml") {
 				t.Fatalf("队列订阅数错误应带路径及位置: %v", err)
 			}
@@ -450,25 +466,25 @@ func testNATSFromConfigPreflightAndErrors(t *testing.T) {
 		}
 		// 本地预检失败不应消耗注册次数，随后用同一实例成功提交空声明。
 		writeNATSRegistration(t, "demo", "streamDefaults: {replicas: 1}")
-		if err := bootstrap.RegisterNATSFromConfig("demo", nil, nil); err != nil {
+		if err := registerNATSForTest(t, "demo", nil, nil); err != nil {
 			t.Fatal(err)
 		}
 		for _, name := range []string{"", "../escape", " demo"} {
-			if err := bootstrap.RegisterNATSFromConfig(name, nil, nil); err == nil {
+			if err := registerNATSForTest(t, name, nil, nil); err == nil {
 				t.Fatalf("应拒绝无效实例名 %q", name)
 			}
 		}
 		if err := client.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if err := bootstrap.RegisterNATSFromConfig("demo", nil, nil); !errors.Is(err, natsx.ErrClosed) {
+		if err := registerNATSForTest(t, "demo", nil, nil); !errors.Is(err, natsx.ErrClosed) {
 			t.Fatalf("直接关闭已登记的 Client 后应返回 ErrClosed: %v", err)
 		}
 		if err := natsx.CloseAll(); err != nil {
 			t.Fatal(err)
 		}
 		value := recoverValue(func() {
-			_ = bootstrap.RegisterNATSFromConfig("demo", nil, nil)
+			_ = registerNATSForTest(t, "demo", nil, nil)
 		})
 		if value != "natsx: named clients closed" {
 			t.Fatalf("CloseAll 后查询应沿用 Named 的 panic，实际: %v", value)
@@ -491,7 +507,7 @@ streams:
   - name: EVENTS
     subjects: [events]
 `)
-		err := bootstrap.RegisterNATSFromConfig("demo", nil, nil)
+		err := registerNATSForTest(t, "demo", nil, nil)
 		if err == nil || !strings.Contains(err.Error(), `natsx: duplicate stream "EVENTS"`) {
 			t.Fatalf("Stream 重名应由 natsx 拒绝: %v", err)
 		}
@@ -502,7 +518,7 @@ streams:
 		}
 		// 重名已进入底层入口，修正配置也不能复用本次 Stream 注册机会。
 		writeNATSRegistration(t, "demo", "streamDefaults: {replicas: 1}")
-		if err = bootstrap.RegisterNATSFromConfig("demo", nil, nil); err == nil || !strings.Contains(err.Error(), "RegisterStreams already called") {
+		if err = registerNATSForTest(t, "demo", nil, nil); err == nil || !strings.Contains(err.Error(), "RegisterStreams already called") {
 			t.Fatalf("重名失败应消耗 Stream 注册次数: %v", err)
 		}
 	})
@@ -538,7 +554,7 @@ streams:
   - name: FIRST
     subjects: [first]
 `+test.stream)
-				err := bootstrap.RegisterNATSFromConfig("demo", nil, nil)
+				err := registerNATSForTest(t, "demo", nil, nil)
 				if err == nil || !strings.Contains(err.Error(), "register streams: natsx:") {
 					t.Fatalf("Stream 通用校验应由 natsx 执行: %v", err)
 				}
@@ -546,7 +562,7 @@ streams:
 					t.Fatalf("后续声明非法时不应创建首个 Stream: %v", err)
 				}
 				writeNATSRegistration(t, "demo", "streamDefaults: {replicas: 1}")
-				if err = bootstrap.RegisterNATSFromConfig("demo", nil, nil); err == nil || !strings.Contains(err.Error(), "RegisterStreams already called") {
+				if err = registerNATSForTest(t, "demo", nil, nil); err == nil || !strings.Contains(err.Error(), "RegisterStreams already called") {
 					t.Fatalf("通用校验失败应消耗 Stream 注册次数: %v", err)
 				}
 			})
@@ -592,7 +608,7 @@ streams:
 			strings.Replace(content, "duplicates: 5m", "duplicates: forever", 1),
 		} {
 			writeNATSRegistration(t, "options", invalid)
-			err := bootstrap.RegisterNATSFromConfig("options", nil, nil)
+			err := registerNATSForTest(t, "options", nil, nil)
 			if err == nil || !strings.Contains(err.Error(), "nats-register.options.yaml") {
 				t.Fatalf("非法 Stream 配置应在预检阶段报错并包含路径: %v", err)
 			}
@@ -601,7 +617,7 @@ streams:
 			}
 		}
 		writeNATSRegistration(t, "options", content)
-		if err := bootstrap.RegisterNATSFromConfig("options", nil, nil); err != nil {
+		if err := registerNATSForTest(t, "options", nil, nil); err != nil {
 			t.Fatal(err)
 		}
 		for _, test := range []struct {
@@ -673,7 +689,7 @@ streams:
   - name: INVALID
     subjects: [invalid]
 `+test.fields)
-			err := bootstrap.RegisterNATSFromConfig(test.instance, nil, nil)
+			err := registerNATSForTest(t, test.instance, nil, nil)
 			var apiErr *jetstream.APIError
 			if !errors.As(err, &apiErr) || !strings.Contains(err.Error(), "register streams") {
 				t.Fatalf("%s 的时长范围应由服务端校验并保留错误链: %v", test.instance, err)
@@ -743,7 +759,7 @@ jetStreamConsumers:
       maxMessages: null
     retryDelay: null
 `)
-		if err := bootstrap.RegisterNATSFromConfig("demo", handlers, nil); err != nil {
+		if err := registerNATSForTest(t, "demo", handlers, nil); err != nil {
 			t.Fatal(err)
 		}
 		defaults := natsx.DefaultJetStreamConsumer("EVENTS", "defaults", nil).Config
@@ -863,7 +879,7 @@ jetStreamConsumers:
 `+test.extraConfig)
 				handlers := natsx.MustNewJetStreamHandlerRegistry()
 				handlers.MustRegister(func(context.Context, jetstream.Msg) error { return nil }, "task")
-				err := bootstrap.RegisterNATSFromConfig("demo", handlers, nil)
+				err := registerNATSForTest(t, "demo", handlers, nil)
 				if err == nil || !strings.Contains(err.Error(), "register JetStream consumers: natsx:") {
 					t.Fatalf("Consumer 通用校验及判重应由 natsx 执行: %v", err)
 				}
@@ -921,7 +937,7 @@ coreConsumers:
 				handlers := natsx.MustNewCoreHandlerRegistry()
 				handlers.MustRegister(func(context.Context, *nats.Msg) error { return nil }, "core")
 				subscriptions := client.Conn().NumSubscriptions()
-				err := bootstrap.RegisterNATSFromConfig("demo", nil, handlers)
+				err := registerNATSForTest(t, "demo", nil, handlers)
 				if err == nil || !strings.Contains(err.Error(), "register Core consumers: natsx:") {
 					t.Fatalf("Core Consumer 通用校验及判重应由 natsx 执行: %v", err)
 				}
@@ -975,7 +991,7 @@ coreConsumers:
 				handlers := natsx.MustNewCoreHandlerRegistry()
 				handlers.MustRegister(func(context.Context, *nats.Msg) error { return nil }, "core")
 				before := client.Conn().NumSubscriptions()
-				if err := bootstrap.RegisterNATSFromConfig("core", nil, handlers); err != nil {
+				if err := registerNATSForTest(t, "core", nil, handlers); err != nil {
 					t.Fatal(err)
 				}
 				if got := client.Conn().NumSubscriptions() - before; got != test.want {
@@ -1000,7 +1016,7 @@ coreConsumers:
 		core.MustRegister(func(_ context.Context, msg *nats.Msg) error {
 			return msg.Respond([]byte("ok"))
 		}, "reply")
-		if err := bootstrap.RegisterNATSFromConfig("core", nil, core); err != nil {
+		if err := registerNATSForTest(t, "core", nil, core); err != nil {
 			t.Fatal(err)
 		}
 		ctx, cancel := context.WithTimeout(logit.WithContext(context.Background()), 5*time.Second)
@@ -1047,7 +1063,7 @@ func testNATSFromConfigRemoteConflictsAndPartialCleanup(t *testing.T) {
 					content = strings.Replace(content, "subject: jobs", "subject: 'bad subject'", 1)
 				}
 				writeNATSRegistration(t, "demo", content)
-				err := bootstrap.RegisterNATSFromConfig("demo", js, core)
+				err := registerNATSForTest(t, "demo", js, core)
 				switch scenario {
 				case "stream-conflict":
 					if !errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {

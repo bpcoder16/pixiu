@@ -183,7 +183,7 @@ HTTP、Cron 和 NATS 统一停收，共享默认 30 秒并行排空；超时取�
 
 常见启动流程直接使用 bootstrap.Start(factories...)，按顺序构造和登记，再接管 SIGINT/SIGTERM。构造失败逆序清理已构造服务；运行后统一停收并共享默认 30 秒。StartWithConfig 的 ShutdownTimeout 自定义服务预算，资源栈由应用单独持有。
 
-`bootstrap.NewCronService(handlers...)` 内部调用 `NewCronScheduler`，从独立的 [cron.yaml](biz/bootstrap/conf.example/cron.yaml) 读取调度，按名称绑定 `cronx.NamedHandler`，返回供 Manager 使用的服务和构造错误。也可使用 `cronx.MustNewHandlerRegistry(handlers...).Handlers()...` 提供声明；需要直接操作调度器时保留 `bootstrap.NewCronScheduler(handlers...)` 用法。启用 lock 段时直接组合命名 Redis 与 gocron-redis-lock，设置租期和自动续租，不扩展 lockx。任务超时只取消 context，实际返回后才解锁；失租不会自动取消业务，不保证集群每周期只执行一次。
+`bootstrap.NewCronService(handlers...)` 从独立的 [cron.yaml](biz/bootstrap/conf.example/cron.yaml) 读取调度，按名称绑定 `cronx.NamedHandler`，返回供 Manager 使用的服务和构造错误。也可使用 `cronx.MustNewHandlerRegistry(handlers...).Handlers()...` 提供声明。启用 lock 段时直接组合命名 Redis 与 gocron-redis-lock，设置租期和自动续租，不扩展 lockx。任务超时只取消 context，实际返回后才解锁；失租不会自动取消业务，不保证集群每周期只执行一次。
 
 HTTP、Cron 不再保留独立关闭计时器；http.yaml 的 shutdownTimeout 以及 cron.yaml 的 shutdownTimeout、drainTimeout 须删除，业务任务自身 timeout 保留。服务登记顺序不决定停收顺序。示例见 [bootstrap 文档](biz/bootstrap/doc.go) 与 [pixiu-demo](https://github.com/bpcoder16/pixiu-demo)。
 
@@ -387,7 +387,7 @@ func main() {
 
 此示例只展示初始化；常驻 HTTP 应用还需接入上面的服务管理器。`MustRegisterNATS` 声明实例，`MustBaseInit` 只完成连接初始化，不会自动准备 Stream 或启动消费。
 
-需要消费时，通过 natsx.MustNewJetStreamHandlerRegistry / MustNewCoreHandlerRegistry 登记 Handler，在 Start 工厂中直接返回 `bootstrap.NewNATSConsumerService(instanceName, jetStreamHandlers, coreHandlers)`。该函数内部调用 NewNATSConsumer 读取消费配置并绑定 Handler，返回服务和构造错误；需要直接操作消费组件时仍可使用 NewNATSConsumer。Run 注册，Stop 停收，Wait 等待回调与确认，Cancel 协作取消。与 HTTP/Cron 共用默认 30 秒，登记顺序不表示启动或停机依赖。排空期间保留连接及发布能力，随后由资源栈关闭。模板见 [NATS 消费配置](biz/bootstrap/conf.example/nats-register.example.yaml)；具名函数默认保留原始大小写，闭包、方法值、泛型函数须显式命名。
+需要消费时，通过 natsx.MustNewJetStreamHandlerRegistry / MustNewCoreHandlerRegistry 登记 Handler，在 Start 工厂中直接返回 `bootstrap.NewNATSConsumerService(instanceName, jetStreamHandlers, coreHandlers)`。该函数读取消费配置并绑定 Handler，返回服务和构造错误。Run 注册，Stop 停收，Wait 等待回调与确认，Cancel 协作取消。与 HTTP/Cron 共用默认 30 秒，登记顺序不表示启动或停机依赖。排空期间保留连接及发布能力，随后由资源栈关闭。模板见 [NATS 消费配置](biz/bootstrap/conf.example/nats-register.example.yaml)；具名函数默认保留原始大小写，闭包、方法值、泛型函数须显式命名。
 
 注册文件中的 `streamDefaults.replicas` 始终必填且为正整数，即使清单为空。每个客户端的三类注册入口各只允许调用一次，通过入口检查后，空清单或失败也占用次数；配置装配不能与手动注册混用，失败后应中止启动并关闭客户端，不在同一实例上重试。JetStream 处理函数完成本条业务后返回，由组件根据返回结果确认或重投，业务不自行 ACK / NAK / Term，仍需保证幂等。
 

@@ -1,6 +1,6 @@
 //go:build natsintegration
 
-package bootstrap_test
+package bootstrap
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bpcoder16/pixiu/biz/bootstrap"
 	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/natsx"
 	"github.com/bpcoder16/pixiu/lifecycle"
@@ -27,10 +26,10 @@ func (f natsRegistrationWriteFunc) Write(p []byte) (int, error) { return f(p) }
 func testNewNATSConsumerServiceConstructionErrors(t *testing.T) {
 	isolatedNATS(t, func() {
 		client := registrationClients(t, false, "config")[0]
-		if _, err := bootstrap.NewNATSConsumerService("bad.name", nil, nil); err == nil || !strings.Contains(err.Error(), "invalid NATS instance name") {
+		if _, err := NewNATSConsumerService("bad.name", nil, nil); err == nil || !strings.Contains(err.Error(), "invalid NATS instance name") {
 			t.Fatalf("应返回非法实例名错误: %v", err)
 		}
-		service, err := bootstrap.NewNATSConsumerService("config", nil, nil)
+		service, err := NewNATSConsumerService("config", nil, nil)
 		if !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("应保留配置文件错误链: %v", err)
 		}
@@ -38,7 +37,7 @@ func testNewNATSConsumerServiceConstructionErrors(t *testing.T) {
 			t.Fatal("构造失败应返回空服务")
 		}
 		writeNATSRegistration(t, "config", "streamDefaults: {replicas: 1}\ncoreConsumers:\n  - name: work\n    subject: work\n    handler: missing\n")
-		if _, err := bootstrap.NewNATSConsumerService("config", nil, nil); err == nil || !strings.Contains(err.Error(), "missing") {
+		if _, err := NewNATSConsumerService("config", nil, nil); err == nil || !strings.Contains(err.Error(), "missing") {
 			t.Fatalf("应返回 Handler 绑定错误: %v", err)
 		}
 		if client.Conn().NumSubscriptions() != 0 || client.Conn().IsClosed() {
@@ -53,7 +52,7 @@ func testNewNATSConsumerServiceSlowRegistrationLog(t *testing.T) {
 		writeNATSRegistration(t, "slow-log", "streamDefaults: {replicas: 1}\ncoreConsumers:\n  - name: work\n    subject: work\n    handler: work\n")
 		handlers := &natsx.CoreHandlerRegistry{}
 		handlers.MustRegister(func(context.Context, *nats.Msg) error { return nil }, "work")
-		service, err := bootstrap.NewNATSConsumerService("slow-log", nil, handlers)
+		service, err := NewNATSConsumerService("slow-log", nil, handlers)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -138,7 +137,7 @@ func testNewNATSConsumerServiceDirectCancel(t *testing.T) {
 					return ctx.Err()
 				}, "work")
 				writeNATSRegistration(t, "cancel", "streamDefaults: {replicas: 1}\ncoreConsumers:\n  - name: work\n    subject: work\n    handler: work\n")
-				service, err := bootstrap.NewNATSConsumerService("cancel", nil, handlers)
+				service, err := NewNATSConsumerService("cancel", nil, handlers)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -239,7 +238,7 @@ func testNewNATSConsumerService(t *testing.T) {
 				jsHandlers.MustRegister(func(context.Context, jetstream.Msg) error { return nil }, "task")
 				coreHandlers := &natsx.CoreHandlerRegistry{}
 				coreHandlers.MustRegister(handler, "work")
-				service, err := bootstrap.NewNATSConsumerService("service", jsHandlers, coreHandlers)
+				service, err := NewNATSConsumerService("service", jsHandlers, coreHandlers)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -248,7 +247,7 @@ func testNewNATSConsumerService(t *testing.T) {
 				}
 				if mode == "factory_failure" {
 					constructionErr := errors.New("later factory failed")
-					err := bootstrap.Start(func() (apprun.Service, error) { return service, nil }, func() (apprun.Service, error) { return apprun.Service{}, constructionErr })
+					err := Start(func() (apprun.Service, error) { return service, nil }, func() (apprun.Service, error) { return apprun.Service{}, constructionErr })
 					if !errors.Is(err, constructionErr) {
 						t.Fatalf("构造失败原因丢失: %v", err)
 					}
@@ -372,4 +371,16 @@ func testNewNATSConsumerService(t *testing.T) {
 			})
 		})
 	}
+}
+
+// stopAndWait 仅用于测试清理；生产调用方显式传递统一的排空期限。
+func stopAndWait(stop func() error, wait func(context.Context) error, cancel func()) error {
+	err := stop()
+	ctx, done := context.WithTimeout(context.Background(), 5*time.Second)
+	defer done()
+	waitErr := wait(ctx)
+	if waitErr != nil {
+		cancel()
+	}
+	return errors.Join(err, waitErr)
 }

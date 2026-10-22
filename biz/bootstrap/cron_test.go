@@ -50,7 +50,7 @@ func TestCronConfigurationAndBinding(t *testing.T) {
 			"lock: {redisName: cache, keyPrefix: 'test:'}\njobs:\n  - name: job\n    every: 1s\n",
 		} {
 			writeCronConfig(t, content)
-			s, err := bootstrap.NewCronScheduler(handler)
+			s, err := bootstrap.NewCronService(handler)
 			if err == nil {
 				_ = stopAndWait(s.Stop, s.Wait, s.Cancel)
 				t.Fatalf("无效配置被接受: %s", content)
@@ -64,19 +64,19 @@ func TestCronConfigurationAndBinding(t *testing.T) {
 			Name:    " job",
 			Handler: handler.Handler,
 		}}} {
-			if s, err := bootstrap.NewCronScheduler(handlers...); err == nil {
+			if s, err := bootstrap.NewCronService(handlers...); err == nil {
 				_ = stopAndWait(s.Stop, s.Wait, s.Cancel)
 				t.Fatal("应拒绝非法 Handler 声明")
 			}
 		}
 		writeCronConfig(t, "lock: {redisName: missing, keyPrefix: 'test:'}\n")
-		if _, err := bootstrap.NewCronScheduler(); err == nil || !strings.Contains(err.Error(), "missing") {
+		if _, err := bootstrap.NewCronService(); err == nil || !strings.Contains(err.Error(), "missing") {
 			t.Fatalf("未初始化 Redis 应返回错误: %v", err)
 		}
 		if err := os.Remove(filepath.Join(env.ConfigDirPath(), "cron.yaml")); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := bootstrap.NewCronScheduler(); !errors.Is(err, os.ErrNotExist) {
+		if _, err := bootstrap.NewCronService(); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("应保留文件错误链: %v", err)
 		}
 	})
@@ -89,8 +89,8 @@ func TestCronRegistryCaseSensitiveBinding(t *testing.T) {
 		for _, name := range []string{"RegistryHeartbeat", "registryHeartbeat", "registryheartbeat"} {
 			t.Run(name, func(t *testing.T) {
 				writeCronConfig(t, fmt.Sprintf("jobs:\n  - name: %s\n    every: 1s\n", name))
-				s, err := bootstrap.NewCronScheduler(registry.Handlers()...)
-				if s != nil {
+				s, err := bootstrap.NewCronService(registry.Handlers()...)
+				if s.Run != nil {
 					if closeErr := stopAndWait(s.Stop, s.Wait, s.Cancel); closeErr != nil {
 						t.Fatal(closeErr)
 					}
@@ -124,11 +124,11 @@ func TestCronMinimumInterval(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				writeCronConfig(t, "jobs:\n  - name: job\n    "+tc.schedule+"\n")
-				s, err := bootstrap.NewCronScheduler(cronx.NamedHandler{
+				s, err := bootstrap.NewCronService(cronx.NamedHandler{
 					Name:    "job",
 					Handler: func(context.Context) error { return nil },
 				})
-				if s != nil {
+				if s.Run != nil {
 					t.Cleanup(func() {
 						if err := stopAndWait(s.Stop, s.Wait, s.Cancel); err != nil {
 							t.Error(err)
@@ -136,8 +136,8 @@ func TestCronMinimumInterval(t *testing.T) {
 					})
 				}
 				if tc.wantErr {
-					if err == nil || !strings.Contains(err.Error(), "cron.yaml") || !strings.Contains(err.Error(), "100ms") || s != nil {
-						t.Fatalf("应拒绝短间隔并保留配置路径和下限: schedulerNil=%v err=%v", s == nil, err)
+					if err == nil || !strings.Contains(err.Error(), "cron.yaml") || !strings.Contains(err.Error(), "100ms") || s.Run != nil {
+						t.Fatalf("应拒绝短间隔并保留配置路径和下限: serviceEmpty=%v err=%v", s.Run == nil, err)
 					}
 				} else if err != nil {
 					t.Fatalf("恰好 100ms 应允许构造: %v", err)
@@ -158,7 +158,7 @@ func TestCronLockedTimeoutValidatedByScheduler(t *testing.T) {
 		bootstrap.MustBaseInit(cfg, &resources)
 		for _, timeout := range []string{"0s", "-1s"} {
 			writeCronConfig(t, fmt.Sprintf("lock: {redisName: cron-lock, keyPrefix: 'test:'}\njobs:\n  - name: job\n    every: 1s\n    timeout: %s\n", timeout))
-			s, err := bootstrap.NewCronScheduler(cronx.NamedHandler{
+			s, err := bootstrap.NewCronService(cronx.NamedHandler{
 				Name:    "job",
 				Handler: func(context.Context) error { return nil },
 			})

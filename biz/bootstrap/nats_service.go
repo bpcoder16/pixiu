@@ -6,16 +6,19 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/infra/natsx"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// RegisterNATSFromConfig 读取 nats-register.<instanceName>.yaml，绑定 Handler 并批量注册。
-// 要求 env 已初始化；仅在依赖就绪后启动期串行调用，借用命名 Client，不另建连接或接管关闭。
+// NewNATSConsumerService 读取 nats-register.<instanceName>.yaml 并绑定 Handler，构造名为 nats:<instanceName> 的服务。
+// 要求 env、Handler 及底层客户端已就绪；一个 Client 只创建一个消费组件，实际注册在 Run 中执行。
+// 构造不启动订阅，错误原样返回；服务接入统一停收、排空和取消协议，共享客户端仍由资源栈关闭。
 // 客户端通过 natsx.Named 查询，实例未登记或 CloseAll 开始后查询会 panic。
 // 配置先预检并绑定 Handler；各类资源的通用参数校验和判重交给各自的 natsx 注册入口，失败也占用其注册次数。
 // Stream subjects 列表在配置层必填；三个入口各调用一次，空清单也占用次数，不能与手动注册混用。
@@ -28,14 +31,43 @@ import (
 // JetStream ackWait、maxDeliver、maxAckPending、consume.workers、consume.maxMessages、retryDelay 可选，
 // 省略或 null 沿用 Default，显式值的归一化及校验交给 natsx 注册入口和服务端。
 // Core queue 非空时 subscribers 必须大于 1，否则在注册任何资源前返回错误。
-// 返回前可能执行 Handler；失败须中止启动并由原资源栈关闭 Client，不回滚远端资源或业务。
-// 内部使用 context.Background()，不设置整体注册期限，资源请求与 Core Flush 沿用 SDK 默认行为。
+// Run 注册期间可能执行 Handler；失败须中止启动并先排空已启动消费，再由资源栈关闭 Client，不回滚远端资源或业务。
+// 注册 context 可由 Stop 取消，不设置整体注册期限；资源请求与 Core Flush 沿用 SDK 默认行为。
 // Client 关闭检查沿用 natsx；长期 Handler 使用独立消息 context，不提供热更新或整批重试。
-func RegisterNATSFromConfig(instanceName string, jetStreamHandlers *natsx.JetStreamHandlerRegistry, coreHandlers *natsx.CoreHandlerRegistry) error {
+func NewNATSConsumerService(instanceName string, jetStreamHandlers *natsx.JetStreamHandlerRegistry, coreHandlers *natsx.CoreHandlerRegistry) (apprun.Service, error) {
+	c, err := newNATSConsumer(instanceName, jetStreamHandlers, coreHandlers)
+	if err != nil {
+		return apprun.Service{}, err
+	}
+	return apprun.Service{
+		Name:   "nats:" + c.name,
+		Run:    c.Run,
+		Stop:   c.Stop,
+		Wait:   c.Wait,
+		Cancel: c.Cancel,
+	}, nil
+}
+
+// natsConsumer 管理一个共享客户端的消费者；连接始终由资源栈关闭。
+type natsConsumer struct {
+	name               string
+	client             *natsx.Client
+	batch              *natsRegistrations
+	location           string
+	mu                 sync.Mutex
+	stopped            bool
+	started            bool
+	done               chan struct{}
+	registerCtx        context.Context
+	cancelRegistration context.CancelFunc
+}
+
+// newNATSConsumer 读取配置并绑定 Handler，准备可取消的注册 context。
+func newNATSConsumer(instanceName string, jetStreamHandlers *natsx.JetStreamHandlerRegistry, coreHandlers *natsx.CoreHandlerRegistry) (*natsConsumer, error) {
 	if instanceName == "" || strings.IndexFunc(instanceName, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-')
 	}) >= 0 {
-		return fmt.Errorf("bootstrap: invalid NATS instance name %q", instanceName)
+		return nil, fmt.Errorf("bootstrap: invalid NATS instance name %q", instanceName)
 	}
 	// 先查询命名实例，避免未初始化的配置环境遮蔽 Named 的 panic。
 	client := natsx.Named(instanceName)
@@ -43,20 +75,83 @@ func RegisterNATSFromConfig(instanceName string, jetStreamHandlers *natsx.JetStr
 	location := fmt.Sprintf("bootstrap: NATS %q config %q", instanceName, path)
 	cfg, err := configx.Parse[natsRegistrationConfig](path)
 	if err != nil {
-		return fmt.Errorf("%s: %w", location, err)
+		return nil, fmt.Errorf("%s: %w", location, err)
 	}
 	batch, err := cfg.bind(jetStreamHandlers, coreHandlers)
 	if err != nil {
-		return fmt.Errorf("%s: %w", location, err)
+		return nil, fmt.Errorf("%s: %w", location, err)
 	}
-	ctx := context.Background()
-	if err = client.RegisterStreams(ctx, batch.streams...); err != nil {
+	registerCtx, cancelRegistration := context.WithCancel(context.Background())
+	return &natsConsumer{
+		name:               instanceName,
+		client:             client,
+		batch:              batch,
+		location:           location,
+		done:               make(chan struct{}),
+		registerCtx:        registerCtx,
+		cancelRegistration: cancelRegistration,
+	}, nil
+}
+
+// Run 注册消费者并等待停收。启动注册可以被 Stop 取消，不阻塞其他组件停收。
+func (c *natsConsumer) Run() error {
+	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return nil
+	}
+	if c.started {
+		c.mu.Unlock()
+		return apprun.ErrStarted
+	}
+	c.started = true
+	c.mu.Unlock()
+	err := c.register(c.registerCtx)
+	if err != nil {
+		c.mu.Lock()
+		stopping := c.stopped
+		c.mu.Unlock()
+		if !stopping || !errors.Is(err, context.Canceled) && !errors.Is(err, natsx.ErrClosed) {
+			return err
+		}
+	}
+	<-c.done
+	return nil
+}
+
+// Stop 停止注册和消费接入，保留已有 Handler 的 context 与共享连接。
+func (c *natsConsumer) Stop() error {
+	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return nil
+	}
+	c.stopped = true
+	c.cancelRegistration()
+	close(c.done)
+	c.mu.Unlock()
+	c.client.StopConsumers()
+	return nil
+}
+
+// Wait 等待实际消费排空，超时不关闭共享连接。
+func (c *natsConsumer) Wait(ctx context.Context) error { return c.client.WaitConsumers(ctx) }
+
+// Cancel 先停收，再协作取消剩余业务；共享连接仍由资源栈回收。
+func (c *natsConsumer) Cancel() {
+	_ = c.Stop()
+	c.client.CancelConsumers()
+}
+
+func (c *natsConsumer) register(ctx context.Context) error {
+	client, batch, location := c.client, c.batch, c.location
+	if err := client.RegisterStreams(ctx, batch.streams...); err != nil {
 		return fmt.Errorf("%s: register streams: %w", location, err)
 	}
-	if err = client.RegisterJetStreamConsumers(ctx, batch.jetStreamConsumers...); err != nil {
+	if err := client.RegisterJetStreamConsumers(ctx, batch.jetStreamConsumers...); err != nil {
 		return fmt.Errorf("%s: register JetStream consumers: %w", location, err)
 	}
-	if err = client.RegisterCoreConsumers(ctx, batch.coreConsumers...); err != nil {
+	if err := client.RegisterCoreConsumers(ctx, batch.coreConsumers...); err != nil {
 		return fmt.Errorf("%s: register Core consumers: %w", location, err)
 	}
 	return nil

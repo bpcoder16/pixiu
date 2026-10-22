@@ -1,4 +1,4 @@
-# 显式调用 NewCronScheduler 才读取本文件；不依赖 HTTP/Gin。
+# 显式调用 NewCronService 才读取本文件；不依赖 HTTP/Gin。
 # 命名 Logger 未注册时回退到默认 Logger；需要独立文件时在 app.yaml 的 log.names 中声明 cron。
 loggerName: "cron"
 # 服务统一停收并共享 30s 排空期限；到期取消剩余任务。

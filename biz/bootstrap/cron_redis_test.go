@@ -15,6 +15,7 @@ import (
 
 	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
+	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/cronx"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/infra/redisx"
@@ -73,20 +74,20 @@ func TestCronRedisLeaseAndDrain(t *testing.T) {
 				return nil
 			},
 		}
-		var schedulers []*cronx.Scheduler
+		var services []apprun.Service
 		defer func() {
 			finish()
-			for _, s := range schedulers {
+			for _, s := range services {
 				_ = stopAndWait(s.Stop, s.Wait, s.Cancel)
 			}
 		}()
 		results := make(chan error, 2)
 		for range 2 {
-			s, err := bootstrap.NewCronScheduler(handler)
+			s, err := bootstrap.NewCronService(handler)
 			if err != nil {
 				t.Fatal(err)
 			}
-			schedulers = append(schedulers, s)
+			services = append(services, s)
 			go func() { results <- s.Run() }()
 		}
 		select {
@@ -110,7 +111,7 @@ func TestCronRedisLeaseAndDrain(t *testing.T) {
 			t.Fatal("未记录另一个实例未获得锁的日志")
 		}
 		closed := make(chan error, 2)
-		for _, s := range schedulers {
+		for _, s := range services {
 			go func() { closed <- stopAndWait(s.Stop, s.Wait, s.Cancel) }()
 		}
 		time.Sleep(60 * time.Millisecond)

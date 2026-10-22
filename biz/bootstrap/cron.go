@@ -17,6 +17,31 @@ import (
 	"github.com/go-co-op/gocron/v2"
 )
 
+// NewCronService 严格读取 cron.yaml，绑定 Handler 并构造名为 cron 的服务，构造错误原样返回。
+// 只启用 jobs 中列出的任务；允许多注册 Handler，配置引用未注册的名称会报错。
+// 注释或删除某个 job 后重启即可停用；全部注释时允许零任务运行。
+// 构造不执行业务；启用锁时借用已初始化的命名 Redis，运行与关闭由服务管理器接管。
+// 只转换关闭早于 Run 的 ErrClosed，保留实际运行和排空错误。
+func NewCronService(handlers ...cronx.NamedHandler) (apprun.Service, error) {
+	s, err := newCronScheduler(handlers...)
+	if err != nil {
+		return apprun.Service{}, err
+	}
+	return apprun.Service{
+		Name: "cron",
+		Run: func() error {
+			err := s.Run()
+			if errors.Is(err, cronx.ErrClosed) {
+				return nil
+			}
+			return err
+		},
+		Stop:   s.Stop,
+		Wait:   s.Wait,
+		Cancel: s.Cancel,
+	}, nil
+}
+
 type cronConfig struct {
 	LoggerName string          `mapstructure:"loggerName"`
 	Lock       *cronLockConfig `mapstructure:"lock"`
@@ -45,11 +70,8 @@ type cronLockConfig struct {
 	RenewInterval time.Duration `mapstructure:"renewInterval"`
 }
 
-// NewCronScheduler 严格读取 cron.yaml，绑定 Handler 并借用已初始化的命名 Redis。
-// 只启用 jobs 中列出的任务；允许多注册 Handler，配置引用未注册的名称会报错。
-// 注释或删除某个 job 后重启即可停用；全部注释时允许零任务运行。
-// 构造不执行业务；返回后由调用方管理，需要服务装配时可直接调用 NewCronService。
-func NewCronScheduler(handlers ...cronx.NamedHandler) (*cronx.Scheduler, error) {
+// newCronScheduler 读取配置并构造调度器；Redis 锁借用已初始化的命名客户端。
+func newCronScheduler(handlers ...cronx.NamedHandler) (*cronx.Scheduler, error) {
 	path := filepath.Join(env.ConfigDirPath(), "cron.yaml")
 	cfg, err := configx.Parse[cronConfig](path)
 	if err != nil {
@@ -174,26 +196,4 @@ func cronRedis(name string) (client *redisx.Client, err error) {
 		}
 	}()
 	return redisx.Named(name), nil
-}
-
-// NewCronService 调用 NewCronScheduler 读取配置并构造名为 cron 的服务，构造错误原样返回。
-// 只转换关闭早于 Run 的 ErrClosed，保留实际运行和排空错误。
-func NewCronService(handlers ...cronx.NamedHandler) (apprun.Service, error) {
-	s, err := NewCronScheduler(handlers...)
-	if err != nil {
-		return apprun.Service{}, err
-	}
-	return apprun.Service{
-		Name: "cron",
-		Run: func() error {
-			err := s.Run()
-			if errors.Is(err, cronx.ErrClosed) {
-				return nil
-			}
-			return err
-		},
-		Stop:   s.Stop,
-		Wait:   s.Wait,
-		Cancel: s.Cancel,
-	}, nil
 }

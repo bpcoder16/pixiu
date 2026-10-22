@@ -1,5 +1,5 @@
 # 复制为 nats-register.<name>.yaml，与 nats.<name>.yaml 放在同一配置目录。
-# 仅由依赖就绪后的 RegisterNATSFromConfig 显式读取，不随 MustBaseInit 自动启动消费。
+# 由依赖就绪后的 NewNATSConsumerService 读取，服务 Run 时启动消费；不随 MustBaseInit 自动启动。
 # namespace 在 nats.<name>.yaml 中配置，本文件不接受该字段。
 # 此处填写原始名称和主题；Client 为注册、发布和 Request 统一添加前缀。
 # 例如 namespace 为 test1 时，名称及非空 queue 添加 test1_，主题添加 test1.。
