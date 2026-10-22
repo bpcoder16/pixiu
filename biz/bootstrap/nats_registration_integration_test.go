@@ -97,7 +97,7 @@ func startNATSTestServer(t *testing.T, jetStream bool) string {
 		StoreDir:  t.TempDir(),
 		NoLog:     true,
 		NoSigs:    true,
-		// 固定测试逻辑配额，容纳多个默认 5 GiB Stream，避免按本机剩余磁盘计算。
+		// 固定测试逻辑配额，避免按本机剩余磁盘计算。
 		JetStreamMaxStore: 64 << 30,
 	})
 	if err != nil {
@@ -582,21 +582,25 @@ streams:
     subjects: [defaults]
   - name: NULLS
     subjects: [nulls]
+    maxBytes: null
     retention: null
     maxAge: null
     duplicates: null
   - name: TASKS
     subjects: [tasks]
+    maxBytes: 104857600
     retention: workqueue
     maxAge: 1h
     duplicates: 30s
   - name: EVENTS
     subjects: [events]
+    maxBytes: 0
     retention: limits
     maxAge: 1m
     duplicates: 0
   - name: UPDATES
     subjects: [updates]
+    maxBytes: -1
     retention: interest
     maxAge: 0
     duplicates: 5m
@@ -622,36 +626,42 @@ streams:
 		}
 		for _, test := range []struct {
 			name       string
+			maxBytes   int64
 			retention  jetstream.RetentionPolicy
 			maxAge     time.Duration
 			duplicates time.Duration
 		}{
 			{
 				name:       "DEFAULTS",
+				maxBytes:   -1,
 				retention:  jetstream.LimitsPolicy,
 				maxAge:     90 * 24 * time.Hour,
 				duplicates: 2 * time.Minute,
 			},
 			{
 				name:       "NULLS",
+				maxBytes:   -1,
 				retention:  jetstream.LimitsPolicy,
 				maxAge:     90 * 24 * time.Hour,
 				duplicates: 2 * time.Minute,
 			},
 			{
 				name:       "TASKS",
+				maxBytes:   100 << 20,
 				retention:  jetstream.WorkQueuePolicy,
 				maxAge:     time.Hour,
 				duplicates: 30 * time.Second,
 			},
 			{
 				name:       "EVENTS",
+				maxBytes:   -1,
 				retention:  jetstream.LimitsPolicy,
 				maxAge:     time.Minute,
 				duplicates: time.Minute,
 			},
 			{
 				name:       "UPDATES",
+				maxBytes:   -1,
 				retention:  jetstream.InterestPolicy,
 				maxAge:     0,
 				duplicates: 5 * time.Minute,
@@ -662,8 +672,8 @@ streams:
 				t.Fatal(err)
 			}
 			got := stream.CachedInfo().Config
-			if got.Retention != test.retention || got.MaxAge != test.maxAge || got.Duplicates != test.duplicates {
-				t.Fatalf("Stream %s 有效配置错误: retention=%v, maxAge=%v, duplicates=%v", test.name, got.Retention, got.MaxAge, got.Duplicates)
+			if got.MaxBytes != test.maxBytes || got.Retention != test.retention || got.MaxAge != test.maxAge || got.Duplicates != test.duplicates {
+				t.Fatalf("Stream %s 有效配置错误: maxBytes=%d, retention=%v, maxAge=%v, duplicates=%v", test.name, got.MaxBytes, got.Retention, got.MaxAge, got.Duplicates)
 			}
 		}
 		for i, test := range []struct {

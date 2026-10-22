@@ -14,9 +14,11 @@ streams:
   - name: "ORDERS"
     subjects:
       - "orders.>"
-    # 以下四项均可省略或设为 null，按需取消注释覆盖。
-    # replicas 沿用 streamDefaults.replicas；其余三项沿用 natsx Default，注释中列出当前默认值。
+    # 以下五项均可省略或设为 null，按需取消注释覆盖。
+    # replicas 沿用 streamDefaults.replicas；其余四项沿用 natsx Default，注释中列出当前默认值。
     # replicas: 1          # 不得超过全局值；0 或负数也沿用全局值，解码及数字转换沿用 configx。
+    # maxBytes: -1         # 整数字节数，默认不设 Stream 容量上限；100 MiB 为 104857600。不接受带单位字符串。
+    # maxBytes 为 0 或 -1 时不设 Stream 容量上限，仍受账户及服务端配额限制。
     # retention: "limits"  # 可选 limits、interest、workqueue。
     # maxAge: "2160h"      # 消息最大年龄；0 表示不限制年龄。支持 Go 时长单位，不支持 d。
     # duplicates: "2m"     # 消息 ID 去重窗口；0 由服务端确定，不代表关闭去重。

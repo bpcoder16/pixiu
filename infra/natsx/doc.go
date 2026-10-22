@@ -183,10 +183,10 @@
 //
 // 上例的 client 已初始化且已安排 Close，sendSMS 是业务函数；还需导入 time 与官方 jetstream 包。
 // DefaultStreamConfig 返回可直接修改的原生配置，replicas 原样写入副本数，复制传入的 subjects；校验由注册入口和 SDK 承担。
-// 默认 LimitsPolicy、FileStorage、MaxBytes=5 GiB、MaxMsgSize=512 KiB、DiscardNew、MaxAge=90 天（约 3 个月）、Duplicates=2 分钟、NoAck=false，
+// 默认 LimitsPolicy、FileStorage、MaxBytes=-1（不设 Stream 容量上限，仍受账户及服务端配额限制）、MaxMsgSize=512 KiB、DiscardNew、MaxAge=90 天（约 3 个月）、Duplicates=2 分钟、NoAck=false，
 // 其余字段沿用 SDK 默认。注册前可直接覆盖字段，例如 streamCfg.MaxBytes = 2 << 30。
 // MaxMsgSize 限制 Header 与正文的总大小，须为组件追加的追踪 ID、消息 ID 等 Header 预留空间。
-// LimitsPolicy 下 ACK 不释放容量；默认满额拒绝新消息，空间释放后可继续发布，MaxAge 到期也会删除未 ACK 的消息。
+// LimitsPolicy 下 ACK 不释放容量；达到显式配置的容量上限时拒绝新消息，空间释放后可继续发布，MaxAge 到期也会删除未 ACK 的消息。
 // 需要满额淘汰最老消息时，可在注册前设置 streamCfg.Discard = jetstream.DiscardOld。
 // DefaultJetStreamConsumer 返回可修改的消费声明，默认显式确认、AckWait=60s、MaxDeliver=5（含首次投递），
 // 显式设置 MaxAckPending=1000，限制同一 Durable 下所有实例合计的未确认消息数。

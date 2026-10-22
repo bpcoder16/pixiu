@@ -95,6 +95,64 @@ func TestNATSRegistrationDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestNATSRegistrationMaxBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  int64
+	}{
+		{
+			name: "omitted",
+			want: -1,
+		},
+		{
+			name:  "null",
+			value: "null",
+			want:  -1,
+		},
+		{
+			name:  "small-stream",
+			value: "104857600",
+			want:  100 << 20,
+		},
+		{
+			name:  "above-int32",
+			value: "8589934592",
+			want:  8 << 30,
+		},
+		{
+			name:  "zero",
+			value: "0",
+		},
+		{
+			name:  "unlimited",
+			value: "-1",
+			want:  -1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := registrationYAML
+			if tc.value != "" {
+				content = strings.Replace(content, "subjects: [orders.>]", "subjects: [orders.>]\n    maxBytes: "+tc.value, 1)
+			}
+			cfg, err := parseNATSRegistration(t, content)
+			if err != nil {
+				t.Fatal(err)
+			}
+			batch, err := cfg.bind(
+				natsx.MustNewJetStreamHandlerRegistry(registrationTask),
+				natsx.MustNewCoreHandlerRegistry(registrationCore),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := batch.streams[0].MaxBytes; got != tc.want {
+				t.Fatalf("Stream 容量覆盖错误: got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNATSRegistrationRejectsLegacyNamespace(t *testing.T) {
 	for _, value := range []string{"null", "''", "test1"} {
 		t.Run(value, func(t *testing.T) {
@@ -477,6 +535,16 @@ func TestNATSRegistrationRejectsInvalidConfig(t *testing.T) {
 		},
 		{name: "unknown", content: registrationYAML + "\nextra: true", want: "extra"},
 		{name: "unknown-stream", content: strings.Replace(registrationYAML, "replicas: 1", "replica: 1", 1), want: "replica"},
+		{
+			name:    "string-max-bytes",
+			content: strings.Replace(registrationYAML, "subjects: [orders.>]", "subjects: [orders.>]\n    maxBytes: '100MiB'", 1),
+			want:    "maxBytes",
+		},
+		{
+			name:    "bool-max-bytes",
+			content: strings.Replace(registrationYAML, "subjects: [orders.>]", "subjects: [orders.>]\n    maxBytes: true", 1),
+			want:    "maxBytes",
+		},
 		{name: "runtime-option", content: strings.Replace(registrationYAML, "durable: worker", "durable: worker\n    workers: 2", 1), want: "workers"},
 		{
 			name:    "unknown-retention",

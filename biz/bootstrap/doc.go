@@ -319,7 +319,9 @@
 // streamDefaults.replicas 始终必填，解码后必须为正整数，即使没有 Stream。
 // 逐项 replicas 解码后非 nil 且大于零时覆盖，否则继承；解码及数字转换沿用 configx。
 // 逐项 replicas 不得超过 streamDefaults.replicas，超限时在注册任何资源前返回错误。
-// Stream retention、maxAge、duplicates 可选，省略或 null 沿用 Default（当前为 limits、90 天、2 分钟）。
+// Stream maxBytes、retention、maxAge、duplicates 可选，省略或 null 沿用 Default（当前为 -1、limits、90 天、2 分钟）。
+// maxBytes 使用整数字节数，例如 104857600 表示 100 MiB；0 或 -1 不设 Stream 容量上限，仍受账户及服务端配额限制。
+// 数字解码沿用 configx，不接受带单位字符串；范围及配额校验交给服务端。
 // retention 只接受 limits、interest、workqueue，非法策略在注册任何资源前报错。
 // 两个时长沿用 configx 解码，推荐 2160h、2m 等 Go 时长字符串；数字按纳秒处理，不支持 d 单位。
 // maxAge 为 0 时不限制消息年龄；duplicates 为 0 时由服务端确定窗口，不代表关闭去重。

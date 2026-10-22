@@ -55,7 +55,8 @@ type CoreConsumer struct {
 }
 
 // DefaultStreamConfig 构建可直接修改的原生 Stream 配置，复制 subjects；校验由注册入口和 SDK 承担。
-// 副本数由 replicas 原样指定；默认 LimitsPolicy、文件存储、5 GiB 容量、满额拒绝新消息、最多保留 90 天（约 3 个月）、2 分钟去重，并保留发布确认。
+// 副本数由 replicas 原样指定；默认 LimitsPolicy、文件存储、不设 Stream 容量上限、最多保留 90 天（约 3 个月）、2 分钟去重，并保留发布确认。
+// 仍受账户及服务端配额限制；显式设置容量上限后满额拒绝新消息。
 // 单条消息的 Header 与正文总大小默认不超过 512 KiB。
 // LimitsPolicy 下 ACK 不释放容量；过期不等待消费，未 ACK 的旧消息到期也会删除。
 func DefaultStreamConfig(name string, replicas int, subjects ...string) jetstream.StreamConfig {
@@ -69,7 +70,7 @@ func DefaultStreamConfig(name string, replicas int, subjects ...string) jetstrea
 		Retention:  jetstream.LimitsPolicy,
 		Storage:    jetstream.FileStorage, // 消息存储到磁盘。
 		Replicas:   replicas,              // 调用方按部署指定副本数。
-		MaxBytes:   5 << 30,               // 单个 Stream 的容量上限：5 GiB。
+		MaxBytes:   -1,                    // 不设 Stream 容量上限，仍受账户及服务端配额限制。
 		MaxMsgSize: 512 << 10,             // 单条消息总大小上限：512 KiB，包含 Header 与正文。
 		Discard:    jetstream.DiscardNew,  // 容量满时拒绝新消息，向发布方返回错误。
 		MaxAge:     90 * 24 * time.Hour,   // 固定 90 天，约 3 个月；到期自动删除。

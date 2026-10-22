@@ -46,7 +46,7 @@ func TestDefaultStreamConfigRegistrationAndPublish(t *testing.T) {
 	}
 	got := stream.CachedInfo().Config
 	if got.Retention != jetstream.LimitsPolicy || got.Storage != jetstream.FileStorage ||
-		got.Replicas != 1 || got.MaxBytes != 5<<30 || got.MaxMsgSize != 512<<10 ||
+		got.Replicas != 1 || got.MaxBytes != -1 || got.MaxMsgSize != 512<<10 ||
 		got.Discard != jetstream.DiscardNew || got.MaxAge != 90*24*time.Hour ||
 		got.Duplicates != 2*time.Minute || got.NoAck {
 		t.Fatalf("服务端有效配置不符合推荐值: %+v", got)

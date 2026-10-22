@@ -27,7 +27,7 @@ import (
 // namespace 来自 nats.<instanceName>.yaml 的客户端初始化配置，本文件不接受该字段。
 // 配置填写原始名称和主题，前缀统一由 Client 的注册及发送入口添加；Handler 名称不变。
 // 逐项 Stream 的 replicas 不得超过全局值，超限时在注册任何资源前返回错误。
-// Stream retention、maxAge、duplicates 可选，省略或 null 沿用 Default；显式零时长按 NATS 语义处理。
+// Stream maxBytes、retention、maxAge、duplicates 可选，省略或 null 沿用 Default；显式零值按 NATS 语义处理。
 // JetStream ackWait、maxDeliver、maxAckPending、consume.workers、consume.maxMessages、retryDelay 可选，
 // 省略或 null 沿用 Default，显式值的归一化及校验交给 natsx 注册入口和服务端。
 // Core queue 非空时 subscribers 必须大于 1，否则在注册任何资源前返回错误。
@@ -170,6 +170,7 @@ type natsStreamRegistration struct {
 	Name       string         `mapstructure:"name"`
 	Subjects   []string       `mapstructure:"subjects"`
 	Replicas   *int           `mapstructure:"replicas"`
+	MaxBytes   *int64         `mapstructure:"maxBytes"`
 	Retention  *string        `mapstructure:"retention"`
 	MaxAge     *time.Duration `mapstructure:"maxAge"`
 	Duplicates *time.Duration `mapstructure:"duplicates"`
@@ -228,6 +229,10 @@ func (cfg *natsRegistrationConfig) bind(jsRegistry *natsx.JetStreamHandlerRegist
 			effectiveReplicas,
 			spec.Subjects...,
 		)
+		// 仅覆盖显式容量，保留 0/-1 的不限量语义；账户及服务端配额继续由 NATS 校验。
+		if spec.MaxBytes != nil {
+			stream.MaxBytes = *spec.MaxBytes
+		}
 		if spec.Retention != nil {
 			switch *spec.Retention {
 			case "limits":
