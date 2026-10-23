@@ -54,7 +54,8 @@
 // 此示例另用标准库 net/http 和 pixiu 的 infra/apprun；handler 由应用提供，http.yaml 从 env.ConfigDirPath() 读取。
 // ServiceFactory 的签名为 func() (apprun.Service, error)，Start 按传入顺序同步构造并登记，全部成功后运行。
 // 后续构造或登记失败时逆序回收此前成功构造的服务，包括本轮登记失败的服务，并保留原错误与回收错误。
-// 启动前回收时，Wait 返回错误或共享 context 到期均调用该服务的 Cancel 兜底，继续回收其他服务。
+// 启动前回收时，Stop/Wait/Cancel 的 panic 转为 apprun.PanicError，保留堆栈并继续回收其他服务。
+// Wait 返回错误、panic 或共享 context 到期均调用该服务的 Cancel 兜底。
 // 构造函数返回错误时负责自行回收本轮部分资源；nil 构造函数返回错误，无服务时返回 apprun.ErrNoServices。
 // Start 使用管理器默认的 30 秒运行期总关闭预算；进入运行阶段后由管理器统一停收并行排空服务，不重复回收。
 // 构造及启动前回收不计入运行期关闭预算，信号仅从所有服务登记成功后开始接管。

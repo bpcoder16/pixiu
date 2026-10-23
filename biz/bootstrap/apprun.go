@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"time"
 
@@ -15,6 +16,7 @@ type ServiceFactory func() (apprun.Service, error)
 
 // Start 按顺序构造、登记服务，全部成功后接管 SIGINT/SIGTERM 并阻塞至运行和关闭结束。
 // 构造或登记失败时停止后续构造，逆序回收已构造服务并合并错误；nil 构造函数返回错误。
+// 回收回调的 panic 转为 apprun.PanicError，保留堆栈并继续回收其他服务。
 // 运行后由管理器统一停收并排空，不重复回收；运行期总关闭预算默认 30 秒，不含构造及启动前失败回收。
 // 自定义关闭预算使用 StartWithConfig；自定义运行 context 使用 NewAppManager 自行装配。
 // 应用只应有一个信号所有者。
@@ -50,18 +52,23 @@ func startServices(timeout time.Duration, factories ...ServiceFactory) (err erro
 		// 构造失败也先通知全部已构造服务停收，再共享一个期限收尾。
 		for _, service := range slices.Backward(services) {
 			if service.Stop != nil {
-				err = errors.Join(err, service.Stop())
+				err = errors.Join(err, callServiceCleanup(service.Name, "stop", service.Stop))
 			}
 		}
 		for _, service := range slices.Backward(services) {
 			var waitErr error
 			if service.Wait != nil {
-				waitErr = service.Wait(ctx)
+				waitErr = callServiceCleanup(service.Name, "wait", func() error {
+					return service.Wait(ctx)
+				})
 				err = errors.Join(err, waitErr)
 			}
 			// Wait 失败不能确认业务已结束，与管理器一样发出取消兜底。
 			if (waitErr != nil || ctx.Err() != nil) && service.Cancel != nil {
-				service.Cancel()
+				err = errors.Join(err, callServiceCleanup(service.Name, "cancel", func() error {
+					service.Cancel()
+					return nil
+				}))
 			}
 		}
 	}()
@@ -82,6 +89,21 @@ func startServices(timeout time.Duration, factories ...ServiceFactory) (err erro
 	// 运行阶段由管理器接管关闭职责，返回后不再执行启动前回收。
 	services = nil
 	return manager.RunSignals()
+}
+
+// 逐个隔离回收回调，与管理器运行期保持相同的 panic 错误类型和诊断信息。
+func callServiceCleanup(name, operation string, fn func() error) (err error) {
+	defer func() {
+		if value := recover(); value != nil {
+			err = &apprun.PanicError{
+				Service:   name,
+				Operation: operation,
+				Value:     value,
+				Stack:     debug.Stack(),
+			}
+		}
+	}()
+	return fn()
 }
 
 // NewAppManager 创建由调用方持有的服务管理器，不注册服务或订阅信号。

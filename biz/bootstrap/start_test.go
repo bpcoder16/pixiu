@@ -122,6 +122,81 @@ func TestStartRollbackWaitFailureCancels(t *testing.T) {
 	}
 }
 
+func TestStartRollbackPanicContinuesCleanup(t *testing.T) {
+	constructErr := errors.New("construct failed")
+	waitErr := errors.New("wait failed")
+	const panicValue = "cleanup failed"
+	for _, failure := range []string{"construction", "registration"} {
+		for _, operation := range []string{"stop", "wait", "cancel"} {
+			t.Run(failure+"/"+operation, func(t *testing.T) {
+				var events []string
+				factory := func(name string) bootstrap.ServiceFactory {
+					return func() (apprun.Service, error) {
+						record := func(phase string) {
+							events = append(events, phase+":"+name)
+							if name == "second" && phase == operation {
+								panic(panicValue)
+							}
+						}
+						return apprun.Service{
+							Name: name,
+							Run: func() error {
+								t.Error("启动失败时不得运行服务")
+								return nil
+							},
+							Stop: func() error {
+								record("stop")
+								return nil
+							},
+							Wait: func(context.Context) error {
+								record("wait")
+								return waitErr
+							},
+							Cancel: func() {
+								record("cancel")
+							},
+						}, nil
+					}
+				}
+				wantErr := constructErr
+				if failure == "registration" {
+					wantErr = apprun.ErrInvalidService
+				}
+				var err error
+				if value := recoverValue(func() {
+					err = bootstrap.Start(
+						factory("first"),
+						factory("second"),
+						func() (apprun.Service, error) {
+							if failure == "construction" {
+								return apprun.Service{}, constructErr
+							}
+							return apprun.Service{}, nil
+						},
+					)
+				}); value != nil {
+					t.Fatalf("回收 panic 不应中断其他服务清理: %v，已执行 %v", value, events)
+				}
+				if !errors.Is(err, wantErr) || !errors.Is(err, waitErr) {
+					t.Fatalf("未保留启动及回收错误: %v", err)
+				}
+				var panicErr *apprun.PanicError
+				if !errors.As(err, &panicErr) {
+					t.Fatalf("未保留回收 panic: %v", err)
+				}
+				if panicErr.Service != "second" || panicErr.Operation != operation || panicErr.Value != panicValue || len(panicErr.Stack) == 0 {
+					t.Fatalf("回收 panic 信息不完整: %+v", panicErr)
+				}
+				// 单个回调失败不打断逆序停收和排空；未确认排空的服务仍取消一次。
+				want := []string{"stop:second", "stop:first", "wait:second", "cancel:second", "wait:first", "cancel:first"}
+				if !slices.Equal(events, want) {
+					t.Fatalf("启动失败回收顺序 = %v，预期 %v", events, want)
+				}
+			})
+		}
+	}
+}
+
 func TestStartRegistrationFailureClosesConstructedServices(t *testing.T) {
 	for _, reason := range []string{"duplicate", "missing-run", "missing-shutdown"} {
 		t.Run(reason, func(t *testing.T) {

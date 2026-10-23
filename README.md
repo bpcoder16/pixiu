@@ -522,7 +522,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -592,7 +592,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"time"
 
