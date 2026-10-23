@@ -201,6 +201,7 @@ pixiu/
 ├── conc/                  单次调用的并发任务编排
 ├── jsonx/                 JSON 首值解码
 ├── netx/                  网络基础能力
+├── validx/                参数格式验证
 ├── infra/                 通用技术能力与 SDK 适配
 │   ├── apprun/             常驻服务运行监督与关闭
 │   ├── configx/            结构体配置解析与命名获取
