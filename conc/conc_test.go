@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -481,6 +482,94 @@ func TestRunNamedTimeoutCompletesNormally(t *testing.T) {
 	result := report.Results["ok"]
 	if err != nil || ctx.Err() != nil || len(report.Results) != 1 || result.Value != 42 || !result.Started || result.TimedOut || result.Duration <= 0 {
 		t.Fatalf("正常完成报告=%+v, 错误=%v", report, err)
+	}
+}
+
+type blockingTaskError struct {
+	formatted chan struct{}
+	release   <-chan struct{}
+}
+
+func (e *blockingTaskError) Error() string {
+	select {
+	case e.formatted <- struct{}{}:
+	default:
+	}
+	<-e.release
+	return "阻塞的任务错误"
+}
+
+func TestRunNamedTimeoutDoesNotFormatTaskError(t *testing.T) {
+	for _, panics := range []bool{false, true} {
+		name := "error"
+		if panics {
+			name = "panic"
+		}
+		t.Run(name, func(t *testing.T) {
+			release := make(chan struct{})
+			finish := sync.OnceFunc(func() { close(release) })
+			defer finish()
+			failure := &blockingTaskError{
+				formatted: make(chan struct{}, 1),
+				release:   release,
+			}
+			done := make(chan struct{})
+			var report Report
+			var err error
+			go func() {
+				defer close(done)
+				report, err = RunNamed(context.Background(), map[string]Task{
+					"failed": func(context.Context) (any, error) {
+						if panics {
+							panic(failure)
+						}
+						return "部分结果", failure
+					},
+					"slow": func(context.Context) (any, error) {
+						<-release // 故意忽略取消，验证超时后的错误汇总仍能返回。
+						return nil, nil
+					},
+				}, WithTimeout(500*time.Millisecond))
+			}()
+			defer func() {
+				finish()
+				select {
+				case <-done:
+				case <-time.After(3 * time.Second):
+					t.Error("解除阻塞后 RunNamed 未结束")
+				}
+			}()
+			select {
+			case <-done:
+			case <-failure.formatted:
+				t.Fatal("RunNamed 同步格式化任务错误，可能阻塞整体超时")
+			case <-time.After(3 * time.Second):
+				t.Fatal("RunNamed 未在整体超时后返回")
+			}
+			if !errors.Is(err, context.DeadlineExceeded) || !report.Results["slow"].TimedOut {
+				t.Fatal("汇总错误或未完成任务丢失超时状态")
+			}
+			result := report.Results["failed"]
+			if !result.Started || result.TimedOut {
+				t.Fatal("已完成任务未保留实际状态")
+			}
+			if panics {
+				var panicErr *PanicError
+				if !errors.As(err, &panicErr) || panicErr.Value != failure || result.Err != panicErr || len(panicErr.Stack) == 0 {
+					t.Fatal("聚合错误未保留原始 PanicError 及堆栈")
+				}
+			} else {
+				var taskErr *blockingTaskError
+				if !errors.Is(err, failure) || !errors.As(err, &taskErr) || taskErr != failure || result.Err != failure || result.Value != "部分结果" {
+					t.Fatal("聚合错误或任务结果未保留原始错误与部分结果")
+				}
+			}
+			finish()
+			message := err.Error()
+			if !strings.Contains(message, `conc: 任务 "failed": `) || !strings.Contains(message, "阻塞的任务错误") {
+				t.Fatalf("汇总错误丢失任务名或错误文本: %s", message)
+			}
+		})
 	}
 }
 

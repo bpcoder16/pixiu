@@ -120,6 +120,7 @@ func main() {
 | [`conc`](conc/doc.go) | 单次调用的命名并发任务、结果汇总、限流或整体超时 | 并行查询与结果聚合 |
 | [`jsonx`](jsonx/doc.go) | JSON 首值解码，保留解码期间观察到的读取错误 | 解析流中的一个 JSON 值 |
 | [`netx`](netx/doc.go) | 本机 IPv4 / IPv6 地址查询 | 获取符合筛选规则的网卡地址 |
+| [`validx`](validx/doc.go) | 手机号、邮箱、HTTP URL、IP、数字串与 rune 长度验证 | 请求参数的无状态格式检查 |
 
 以上基础模块的生产代码仅依赖 Go 标准库，彼此不互相导入。
 

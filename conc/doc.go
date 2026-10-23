@@ -38,6 +38,7 @@
 // 已完成任务的 Result.Duration 仅包含实际执行，Report.Duration 还包含调度与限流等待。
 // 未执行的任务以 Result.Started=false、Result.Duration=0 表示。
 // 即使部分任务失败，返回的结果仍包含各任务的 Result，调用方可逐项检查 Result.Err。
+// 汇总时不格式化任务错误或 panic 值；调用方读取错误文本时才格式化，errors.Is/As 仍可检查原始错误。
 // 默认任务失败不会取消其他任务；WithCancelOnError 可让任务失败后取消传给任务的派生 context。
 // 调用方传入的 context 不会因此被取消。
 // 未设置整体超时时，取消模式仍等待已启动的任务结束；任务函数需要自行响应 context。

@@ -14,6 +14,20 @@ type namedTask struct {
 	fn   Task
 }
 
+// taskError 保留原始错误链，延迟格式化以免错误汇总阻塞整体超时。
+type taskError struct {
+	name string
+	err  error
+}
+
+func (e *taskError) Error() string {
+	return fmt.Sprintf("conc: 任务 %q: %v", e.name, e.err)
+}
+
+func (e *taskError) Unwrap() error {
+	return e.err
+}
+
 type taskJob struct {
 	index int
 	item  namedTask
@@ -180,7 +194,10 @@ func collectResults(items []namedTask, results []Result) (Report, error) {
 		if result.TimedOut {
 			timedOut = true
 		} else if result.Err != nil {
-			taskErrors = append(taskErrors, fmt.Errorf("conc: 任务 %q: %w", item.name, result.Err))
+			taskErrors = append(taskErrors, &taskError{
+				name: item.name,
+				err:  result.Err,
+			})
 		}
 	}
 	if timedOut {

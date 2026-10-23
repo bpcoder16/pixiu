@@ -27,6 +27,15 @@ type Stack struct {
 	err          error
 }
 
+// closePanicError 延迟格式化 panic 值，避免用户的格式化方法阻塞总回收期限。
+type closePanicError struct {
+	value any
+}
+
+func (e *closePanicError) Error() string {
+	return fmt.Sprintf("lifecycle: close panic: %v", e.value)
+}
+
 // New 设置整个栈的回收期限；零值使用 20 秒，负值非法。期限创建后不可修改。
 func New(closeTimeout time.Duration) (*Stack, error) {
 	if closeTimeout < 0 {
@@ -121,7 +130,7 @@ func (s *Stack) Close() (err error) {
 			if firstPanic == nil {
 				firstPanic = recovered
 			}
-			errs = append(errs, fmt.Errorf("lifecycle: close panic: %v", recovered))
+			errs = append(errs, &closePanicError{value: recovered})
 		} else if closeErr != nil {
 			errs = append(errs, closeErr)
 		}
