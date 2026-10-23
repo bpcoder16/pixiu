@@ -1,5 +1,4 @@
 // Package logit 是 pixiu 的日志模块:门面与核心同包,零第三方依赖,性能优先。
-// 设计文档见 docs/log-module-design.md。
 //
 // 日常使用(不需要轮转时只需 import logit 一个包):
 //

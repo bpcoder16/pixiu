@@ -1,5 +1,5 @@
 // Package apprun 提供实例式常驻服务监督、统一停收和并行排空，依赖标准库与 logit。
-// 设计见 docs/apprun-design.md。Manager 零值默认 30 秒，New 可设置整个停收与排空期限。
+// Manager 零值默认 30 秒，New 可设置整个停收与排空期限。
 // Stop 只封闭入口，Wait(ctx) 等待实际工作与收尾，Cancel 必须立即发出取消通知并返回。
 // 全部回调必填，停收可先于 Run；未停收时 Run 返回 nil 视为 ErrUnexpectedExit。
 //

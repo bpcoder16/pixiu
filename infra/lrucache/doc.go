@@ -1,5 +1,5 @@
 // Package lrucache 提供有界 LRU 缓存，支持独立实例和命名共享实例，可设置实例默认 TTL 和单条目 TTL。
-// 它位于基础功能层，使用 ttlcache v3；设计与边界见 docs/lrucache-design.md。
+// 它位于基础功能层，使用 ttlcache v3。
 //
 // 应用启动时可创建独立实例并注入业务服务，也可按名称注册进程内共享实例。
 // 以下示例需导入 time 和 github.com/bpcoder16/pixiu/infra/lrucache：

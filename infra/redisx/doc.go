@@ -1,5 +1,5 @@
 // Package redisx 管理单机 Redis 客户端的创建、验活、关闭和可配置的命令结果日志。
-// 设计与边界见 docs/redisx-design.md。配置文件由应用解析；一个实例对应一个逻辑 Redis 目标。
+// 配置文件由应用解析；一个实例对应一个逻辑 Redis 目标。
 //
 // 以下两个示例需导入 errors、time、github.com/redis/go-redis/v9、
 // github.com/bpcoder16/pixiu/infra/redisx、github.com/bpcoder16/pixiu/lifecycle

@@ -1,5 +1,4 @@
 // Package clickhousex 提供基于 GORM 的 ClickHouse 连接池、显式主从选择和统一查询日志。
-// 配置、日志及 ClickHouse 写入语义见 docs/clickhousex-design.md。
 //
 // 创建入口只接收 Config，客户端由应用通过 Close 或 CloseAll 显式关闭。
 // InitTimeout 为全部主从端点共用的初始化超时，默认 10 秒；实际操作仍由请求 context 控制。

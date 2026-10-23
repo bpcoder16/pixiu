@@ -1,6 +1,5 @@
 // Package jwtx 提供独立的 HS256、RS256、ES256、PS256 JWT 签发器与验签器，复用 golang-jwt/jwt v5。
 // 实例固定算法与密钥并可并发使用；声明的业务含义、刷新会话、撤销与 HTTP 适配由调用方负责。
-// 设计见 docs/jwtx-design.md。
 //
 // 以下示例需导入 crypto/rand、time、github.com/golang-jwt/jwt/v5 和
 // github.com/bpcoder16/pixiu/infra/jwtx。生产环境应从安全配置读取持久密钥，

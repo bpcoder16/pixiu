@@ -1,6 +1,5 @@
 // Package taskpool 提供本地异步任务池，依赖 logit 创建独立日志作用域并关联 logId。
 // 导入路径为 github.com/bpcoder16/pixiu/infra/taskpool，支持实例及进程级默认池。
-// 设计与边界见 docs/taskpool-design.md。
 //
 // 初始化时设置等待队列容量、消费者区间和失败重试次数；
 // MaxRetries 为 0 到 100，表示首次失败后最多再尝试的次数，零值不重试。

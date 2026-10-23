@@ -1,5 +1,4 @@
 // Package sqlitex 提供基于 GORM 的 SQLite 单库连接池和统一查询日志。
-// 配置、日志及关闭语义见 docs/sqlitex-design.md。
 //
 // 创建入口只接收 Config，客户端由应用通过 Close 或 CloseAll 显式关闭。
 // 应用启动时创建客户端，查询时传入请求 context；以下示例需导入

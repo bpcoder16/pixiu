@@ -8,7 +8,6 @@
 // 操作日志记录完整正文及 Header，不截断或脱敏；Request 同时记录收到的响应。
 // 正文按 UTF-8 字符串输出，非 UTF-8 数据使用 Base64，并记录对应的编码。
 // Stream/Consumer 使用官方配置；JetStream 消费统一通过 RegisterJetStreamConsumers 注册并自动确认。
-// 详细契约见 docs/natsx-design.md。
 // 第一版原样记录错误文本并保留原始错误链，不脱敏其中可能包含的 URL、密码或 Token。
 //
 // Config.Namespace 可选，空值保持原样；非空仅允许 ASCII 字母、数字、_、-，在拨号前校验并固定。

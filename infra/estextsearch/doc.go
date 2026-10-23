@@ -60,5 +60,5 @@
 // 入口选择与是否评分相互独立；空子句仍须省略，查询缓存是否命中由 ES 决定。
 //
 // templates/ 中的 JSON 由人工独立维护，用于创建索引；Go API 不生成或读取模板。
-// 模板使用说明见 templates/README.md，查询契约见 docs/estextsearch-design.md。
+// 模板使用说明见 templates/README.md。
 package estextsearch

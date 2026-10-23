@@ -1,7 +1,7 @@
 // Package elasticsearchx 提供 Elasticsearch 7、8、9 共用的结果日志和基础操作。
-// 版本适配包负责连接创建；配置、日志与结果约定见 docs/elasticsearchx-design.md。
+// 版本适配包负责连接创建。
 // v8/v9 使用官方 NewBase 和共用的 transport v8；启动验活只核对服务端主版本，
-// 不保证所有旧次版本均兼容，真实集群验收版本见设计文档。
+// 不保证所有旧次版本均兼容。
 //
 // Config 中只有 Name 和 Addresses 必填，其余字段均可省略。
 // 认证参数按服务端要求选择：APIKey 与 Username/Password 不能同时设置，

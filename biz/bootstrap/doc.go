@@ -1,5 +1,5 @@
 // Package bootstrap 提供日志、MySQL、Redis、Elasticsearch、OSS、阿里云 ES 和 NATS 多实例的通用初始化入口，
-// 以及应用运行管理器、Gin Engine、HTTP 和 Cron 服务的构造方法，供项目自己的 bootstrap 组装。设计见 docs/bootstrap-design.md。
+// 以及应用运行管理器、Gin Engine、HTTP 和 Cron 服务的构造方法，供项目自己的 bootstrap 组装。
 //
 // 应用负责加载配置、创建资源关闭栈，并在初始化前登记关闭流程。
 // 以下片段放在具名返回 runErr error 的 run 函数内；main 在返回错误后退出：
@@ -393,7 +393,7 @@
 // 只迁移显式登记的表，忽略模型关联及其外键；关联表和多对多中间表须单独登记。
 // 关闭或空清单不取数据库；迁移核心从 mysqlx.Named(name) 获取主库，失败返回错误与部分报告。
 // 迁移不会自动挂到 MustBaseInit 或连接构造中；没有迁移锁，发布时避免多实例同时执行。
-// 模板见 conf.example/migrate.example.yaml，详细契约见 docs/schemamigrate-design.md。
+// 模板见 conf.example/migrate.example.yaml，详细契约见 infra/schemamigrate/doc.go。
 //
 // 需要显式设置运行期总关闭预算时，使用 StartWithConfig（另需导入标准库 time）：
 //

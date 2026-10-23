@@ -51,5 +51,4 @@
 //
 // RandomToken(32) 可生成不携带明文的分享凭证；有效期、撤销和一次性消费由服务端记录实现。
 // 本包不替代 HTTPS、业务授权、重放防护或密码存储方案，也不提供 JWT/JWE。
-// 完整线格式、安全约束与验证方式见 docs/cryptox-design.md。
 package cryptox

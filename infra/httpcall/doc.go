@@ -1,5 +1,5 @@
 // Package httpcall 提供可复用的 HTTP 下游客户端，统一记录调用日志与耗时。
-// 它位于基础功能层，依赖 logit 和 Resty v2；设计与边界见 docs/httpcall-design.md。
+// 它位于基础功能层，依赖 logit 和 Resty v2。
 //
 // 应用启动时通过 option 完成 Resty 配置，后续请求复用该实例和连接池；
 // 以下初始化示例需导入 net/http、time、github.com/go-resty/resty/v2 和

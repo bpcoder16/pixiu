@@ -1,5 +1,4 @@
 // Package lifecycle 提供实例式资源关闭栈，零第三方依赖且没有进程级全局状态。
-// 设计文档见 docs/lifecycle-design.md。
 //
 // Stack 零值总回收期限为 20 秒。使用 New(timeout) 可自定义整个栈的期限；0 沿用默认值，负值非法。调用方登记自己负责关闭的资源，Close 按登记的逆序执行；
 // 即使某个关闭函数返回错误或 panic，仍在剩余期限内尝试其余函数。首次 Close 在
