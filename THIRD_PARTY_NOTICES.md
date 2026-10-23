@@ -20,8 +20,8 @@
 
 | 模块 | 版本 | 对应版本源码 |
 | --- | --- | --- |
-| `github.com/go-sql-driver/mysql` | `v1.9.3` | [官方源码压缩包](https://codeload.github.com/go-sql-driver/mysql/zip/refs/tags/v1.9.3) |
-| `github.com/hashicorp/go-version` | `v1.8.0` | [官方源码压缩包](https://codeload.github.com/hashicorp/go-version/zip/refs/tags/v1.8.0) |
+| `github.com/go-sql-driver/mysql` | `v1.10.1` | [官方源码压缩包](https://codeload.github.com/go-sql-driver/mysql/zip/refs/tags/v1.10.1) |
+| `github.com/hashicorp/go-version` | `v1.9.0` | [官方源码压缩包](https://codeload.github.com/hashicorp/go-version/zip/refs/tags/v1.9.0) |
 
 Cron 的 Redis 锁适配还间接引入 `github.com/hashicorp/errwrap v1.1.0` 和 `github.com/hashicorp/go-multierror v1.1.1`，二者采用 MPL-2.0；源码分别见 [errwrap](https://github.com/hashicorp/errwrap/tree/v1.1.0)、[go-multierror](https://github.com/hashicorp/go-multierror/tree/v1.1.1)。gocron v2 和 gocron-redis-lock v2 自身采用 MIT。Cron 时区适配直接复用已有的 `github.com/robfig/cron/v3 v3.0.1` 解析器，该依赖也采用 MIT，版本未变。
 

@@ -106,7 +106,7 @@ Query 保留完整普通文本的全文分支，因此可应用跨词同义词�
 不能匹配 `PR PV02`、`PRPV02` 或跨数组元素拼出的编号；它不是 keyword 完整值相等。
 不识别业务编号格式，纯数字或字母数字片段仍走既有普通文本规则。
 例如单向规则 `mobile => phone` 会替换全文分支的原词，字面包含分支仍可能命中 mobile；
-最终召回由全文与包含组合决定，应使用业务样本验证。查询契约见包文档及 `docs/estextsearch-design.md`。
+最终召回由全文与包含组合决定，应使用业务样本验证。查询契约见[包文档](../doc.go)。
 
 ## 创建单个索引
 
@@ -266,6 +266,4 @@ P99 仍有小幅波动；热缓存下 filter 执行成本已低，关闭缓存�
 后续验收采用充分预热、交错采样，同时核对 CPU、缓存和 GC/节流状态；生产表现仍需实际数据与并发压测。
 节点 query cache 的适用条件见 [ES 缓存说明](https://www.elastic.co/guide/en/elasticsearch/reference/7.17/query-cache.html)。
 
-完整方法、评分日志及复测原始数据见本地[双入口验证记录](../../../docs/perf-estextsearch-expanded-20261016/README.md)，
-优化前历史数据见[三路径验证记录](../../../docs/perf-estextsearch-mixed-20261016/README.md)。
-`docs/` 按仓库规则被 Git 忽略，主要行为与结果已同时保留在本 README。
+主要验证条件、结果与适用边界见上文[双入口与去重验证结果](#双入口与去重验证结果2026-10-16)。
