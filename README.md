@@ -119,6 +119,7 @@ func main() {
 | [`lifecycle`](lifecycle/doc.go) | 实例式资源关闭栈，逆序执行并汇总错误 | 按依赖顺序关闭资源 |
 | [`conc`](conc/doc.go) | 单次调用的命名并发任务、结果汇总、限流或整体超时 | 并行查询与结果聚合 |
 | [`jsonx`](jsonx/doc.go) | JSON 首值解码，保留解码期间观察到的读取错误 | 解析流中的一个 JSON 值 |
+| [`cryptox`](cryptox/doc.go) | HMAC-SHA256、AES-GCM、用途绑定的分享 token、安全随机数 | 内部接口参数签名、分享凭证加解密；[设计与安全约束](cryptox/doc.go) |
 | [`netx`](netx/doc.go) | 本机 IPv4 / IPv6 地址查询 | 获取符合筛选规则的网卡地址 |
 | [`validx`](validx/doc.go) | 手机号、邮箱、HTTP URL、IP、数字串与 rune 长度验证 | 请求参数的无状态格式检查 |
 
@@ -201,6 +202,7 @@ pixiu/
 ├── lifecycle/             资源关闭栈
 ├── conc/                  单次调用的并发任务编排
 ├── jsonx/                 JSON 首值解码
+├── cryptox/               HMAC-SHA256、AES-GCM 与分享 token
 ├── netx/                  网络基础能力
 ├── validx/                参数格式验证
 ├── infra/                 通用技术能力与 SDK 适配
