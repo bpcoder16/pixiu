@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -420,6 +421,73 @@ func TestOriginAndNegotiatedSubprotocol(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRepeatedSubprotocolHeaders(t *testing.T) {
+	for _, required := range []bool{true, false} {
+		for _, tc := range []struct {
+			name   string
+			values []string
+			want   string
+		}{
+			{
+				name:   "later-match",
+				values: []string{"other.v1", "other.v2, raw.v1"},
+				want:   "raw.v1",
+			},
+			{
+				name:   "server-priority",
+				values: []string{"raw.v1", "raw.v2"},
+				want:   "raw.v2",
+			},
+			{
+				name:   "no-match",
+				values: []string{"other.v1", "other.v2"},
+			},
+		} {
+			t.Run(fmt.Sprintf("%s/required=%t", tc.name, required), func(t *testing.T) {
+				opened := make(chan *Session, 1)
+				e, server := newTestEndpoint(t, Config{
+					Subprotocols:       []string{"raw.v2", "raw.v1"},
+					RequireSubprotocol: required,
+					OnOpen: func(_ context.Context, s *Session) error {
+						opened <- s
+						return nil
+					},
+				})
+				headersAfter := make(chan []string, 1)
+				server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					e.ServeHTTP(w, r)
+					headersAfter <- slices.Clone(r.Header.Values("Sec-WebSocket-Protocol"))
+				})
+				c, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), http.Header{
+					"Sec-Websocket-Protocol": tc.values,
+				})
+				if c != nil {
+					defer c.Close()
+				}
+				if response != nil {
+					defer response.Body.Close()
+				}
+				if got := await(t, headersAfter); !slices.Equal(got, tc.values) {
+					t.Errorf("调用方请求头被改写: %q，期望 %q", got, tc.values)
+				}
+				if required && tc.want == "" {
+					if err == nil || response == nil || response.StatusCode != http.StatusBadRequest {
+						t.Fatalf("无匹配子协议时应拒绝升级: response=%+v err=%v", response, err)
+					}
+					return
+				}
+				if err != nil || response == nil || response.StatusCode != http.StatusSwitchingProtocols {
+					t.Fatalf("多行子协议握手失败: response=%+v err=%v", response, err)
+				}
+				s := await(t, opened)
+				if c.Subprotocol() != tc.want || s.Subprotocol() != tc.want {
+					t.Fatalf("子协议协商错误: client=%q server=%q，期望 %q", c.Subprotocol(), s.Subprotocol(), tc.want)
+				}
+			})
+		}
 	}
 }
 

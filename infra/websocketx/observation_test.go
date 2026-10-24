@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +71,11 @@ func TestReadFailuresKeepCloseClassification(t *testing.T) {
 		},
 		{
 			name: "read-limit",
+			code: websocket.CloseMessageTooBig,
+			err:  ErrMessageTooLarge,
+		},
+		{
+			name: "stopped-read-limit",
 			code: websocket.CloseMessageTooBig,
 			err:  ErrMessageTooLarge,
 		},
@@ -140,7 +146,10 @@ func TestReadFailuresKeepCloseClassification(t *testing.T) {
 				if err := c.WriteMessage(websocket.TextMessage, []byte{255}); err != nil {
 					t.Fatal(err)
 				}
-			case "read-limit":
+			case "read-limit", "stopped-read-limit":
+				if tc.name == "stopped-read-limit" {
+					_ = e.StopInput()
+				}
 				if err := c.WriteMessage(websocket.BinaryMessage, make([]byte, 33)); err != nil {
 					t.Fatal(err)
 				}
@@ -164,6 +173,48 @@ func TestReadFailuresKeepCloseClassification(t *testing.T) {
 				t.Fatalf("读取失败后预算未释放: %+v", e.Budget().Usage())
 			}
 		})
+	}
+}
+
+func TestCompressedReadFailureClassification(t *testing.T) {
+	opened := make(chan *Session, 1)
+	closed := make(chan Event, 1)
+	e, server := newTestEndpoint(t, Config{
+		EnableCompression: true,
+		OnOpen: func(_ context.Context, s *Session) error {
+			opened <- s
+			return nil
+		},
+		OnMessage: func(context.Context, *Session, Message) error {
+			t.Error("畸形压缩消息不应派发给业务")
+			return nil
+		},
+		Observe: func(_ context.Context, event Event) {
+			if event.Kind == EventClosed {
+				closed <- event
+			}
+		},
+	})
+	dialer := websocket.Dialer{EnableCompression: true}
+	c, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	s := await(t, opened)
+	// 正常接收仍检查解压错误；停收后的跳过行为由 TestStopInputSkipsCompressedMessages 覆盖。
+	writeMaskedFragment(t, c, 0xc2, []byte{0x07})
+	_ = c.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := c.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseProtocolError) {
+		t.Errorf("畸形压缩消息关闭码错误: %v", err)
+	}
+	event := await(t, closed)
+	await(t, s.Done())
+	if event.Code != websocket.CloseProtocolError || !errors.Is(event.Err, ErrInvalidMessage) || event.Err.Error() != ErrInvalidMessage.Error() {
+		t.Errorf("解压错误未保留脱敏协议分类: code=%d err=%v", event.Code, event.Err)
+	}
+	if s.Usage() != (Usage{}) || e.Budget().Usage() != (Usage{}) {
+		t.Fatalf("解压失败后预算未释放: session=%+v budget=%+v", s.Usage(), e.Budget().Usage())
 	}
 }
 

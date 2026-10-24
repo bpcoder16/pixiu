@@ -237,6 +237,11 @@ func (e *Endpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reject(http.StatusForbidden, ErrInvalidMessage)
 		return
 	}
+	if protocols := r.Header.Values("Sec-WebSocket-Protocol"); len(protocols) > 1 {
+		// Gorilla 只读取首个头值；在请求副本上合并，供校验和升级共用全部候选。
+		r = r.Clone(r.Context())
+		r.Header.Set("Sec-WebSocket-Protocol", strings.Join(protocols, ", "))
+	}
 	if e.config.RequireSubprotocol {
 		matched := false
 		for _, protocol := range websocket.Subprotocols(r) {
@@ -390,6 +395,8 @@ func (e *Endpoint) Budget() *Budget       { return e.config.Budget }
 func (e *Endpoint) Done() <-chan struct{} { return e.done }
 
 // StopInput 封闭新握手、数据接纳和新复核；存量业务和输出仍可运行。
+// 未接纳正文由底层跳过，不再解压或校验正文，控制帧继续处理。
+// 调用方必须在有限的整体关闭期限内继续 Stop/Wait，超时或失败时 Cancel；本方法不启动定时关闭。
 func (e *Endpoint) StopInput() error {
 	e.mu.Lock()
 	e.inputStopped.Store(true)

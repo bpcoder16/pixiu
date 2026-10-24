@@ -30,11 +30,93 @@ func writeMaskedFragment(t *testing.T, c *websocket.Conn, opcode byte, data []by
 	}
 }
 
-func TestStopInputKeepsCompressedMessageLimit(t *testing.T) {
+func TestStopInputSkipsCompressedMessages(t *testing.T) {
+	for _, mode := range []string{"oversize", "invalid-compression", "invalid-text"} {
+		t.Run(mode, func(t *testing.T) {
+			opened := make(chan *Session, 1)
+			closed := make(chan Event, 1)
+			e, server := newTestEndpoint(t, Config{
+				ReadLimit:         8192,
+				EnableCompression: true,
+				DisableHeartbeat:  true,
+				OnOpen: func(_ context.Context, s *Session) error {
+					opened <- s
+					return nil
+				},
+				OnMessage: func(context.Context, *Session, Message) error {
+					t.Error("停收后的正文不应派发给业务")
+					return nil
+				},
+				Observe: func(_ context.Context, event Event) {
+					if event.Kind == EventClosed {
+						closed <- event
+					}
+				},
+			})
+			dialer := websocket.Dialer{EnableCompression: true}
+			c, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			s := await(t, opened)
+			_ = e.StopInput()
+			switch mode {
+			case "oversize":
+				if err := c.WriteMessage(websocket.BinaryMessage, bytes.Repeat([]byte("a"), 8193)); err != nil {
+					t.Fatal(err)
+				}
+			case "invalid-compression":
+				// BTYPE=3 是非法 DEFLATE 块，仍能收到 Pong 即证明停收后没有读取解压正文。
+				writeMaskedFragment(t, c, 0xc2, []byte{0x07})
+			case "invalid-text":
+				writeMaskedFragment(t, c, 0x81, []byte{255})
+			}
+			if err := s.Send(context.Background(), Message{
+				Type: Text,
+				Data: []byte("draining"),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, data := readTest(t, c); string(data) != "draining" {
+				t.Fatalf("停收后输出不可用: %q", data)
+			}
+			pong := errors.New("test: pong received")
+			c.SetPongHandler(func(string) error { return pong })
+			if err := c.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			_ = c.SetReadDeadline(time.Now().Add(time.Second))
+			if _, _, err := c.ReadMessage(); !errors.Is(err, pong) {
+				t.Fatalf("跳过正文后未继续处理 Ping: %v", err)
+			}
+			usage := e.Budget().Usage()
+			if usage.ReceiveMessages != 0 || usage.ReceiveBytes != 0 {
+				t.Fatalf("停收后的正文不应保留接收预算: %+v", usage)
+			}
+			if err := c.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			event := await(t, closed)
+			if event.Code != websocket.CloseNormalClosure || event.Err != nil {
+				t.Fatalf("停收后的 Close 未正常处理: %+v", event)
+			}
+			_ = e.Stop()
+			if err := e.Wait(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if s.Usage() != (Usage{}) || e.Budget().Usage() != (Usage{}) {
+				t.Fatalf("连接收尾后预算未释放: %+v %+v", s.Usage(), e.Budget().Usage())
+			}
+		})
+	}
+}
+
+func TestStopInputSkipsPartialCompressedMessage(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		tail     int
-		oversize bool
+		name      string
+		tail      int
+		malformed bool
 	}{
 		{
 			name: "below",
@@ -45,9 +127,12 @@ func TestStopInputKeepsCompressedMessageLimit(t *testing.T) {
 			tail: 4096,
 		},
 		{
-			name:     "over",
-			tail:     4097,
-			oversize: true,
+			name: "over",
+			tail: 4097,
+		},
+		{
+			name:      "malformed",
+			malformed: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -58,6 +143,10 @@ func TestStopInputKeepsCompressedMessageLimit(t *testing.T) {
 				DisableHeartbeat:  true,
 				OnOpen: func(_ context.Context, s *Session) error {
 					opened <- s
+					return nil
+				},
+				OnMessage: func(context.Context, *Session, Message) error {
+					t.Error("停收时尚未读完的消息不应派发给业务")
 					return nil
 				},
 			})
@@ -86,22 +175,25 @@ func TestStopInputKeepsCompressedMessageLimit(t *testing.T) {
 				t.Fatal("没有进入第二块读取")
 			}
 			_ = e.StopInput()
-			_, _ = w.Write(bytes.Repeat([]byte("b"), tc.tail))
-			_ = w.Flush()
-			data := compressed.Bytes()
-			writeMaskedFragment(t, c, 0x80, data[split:len(data)-4]) // FIN + Continuation，去掉压缩尾标记。
-			// 服务端须先丢弃完整消息才能处理其后的 Ping；合法边界仍须保留连接。
+			if tc.malformed {
+				writeMaskedFragment(t, c, 0x80, []byte{0x07})
+			} else {
+				_, _ = w.Write(bytes.Repeat([]byte("b"), tc.tail))
+				_ = w.Flush()
+				data := compressed.Bytes()
+				writeMaskedFragment(t, c, 0x80, data[split:len(data)-4]) // FIN + Continuation，去掉压缩尾标记。
+			}
+			// 停收发生在一次读取阻塞期间；该读取返回后须跳过剩余正文并处理 Ping。
 			pong := errors.New("test: pong received")
 			c.SetPongHandler(func(string) error { return pong })
 			_ = c.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second))
 			_ = c.SetReadDeadline(time.Now().Add(time.Second))
 			_, _, err = c.ReadMessage()
-			if tc.oversize {
-				if !websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
-					t.Fatalf("StopInput 重置了解压限额: %v", err)
-				}
-			} else if !errors.Is(err, pong) {
-				t.Fatalf("限额内的消息不应关闭连接: %v", err)
+			if !errors.Is(err, pong) {
+				t.Fatalf("停收后的剩余正文不应再解压或检查大小: %v", err)
+			}
+			if s.Usage() != (Usage{}) || e.Budget().Usage() != (Usage{}) {
+				t.Fatalf("部分读取未释放: %+v %+v", s.Usage(), e.Budget().Usage())
 			}
 			_ = e.Stop()
 			if err := e.Wait(context.Background()); err != nil {
@@ -119,7 +211,7 @@ type stopOnProbeReader struct {
 	reader io.Reader
 	stop   func()
 	reads  int
-	eof    bool
+	err    error
 }
 
 func (r *stopOnProbeReader) Read(p []byte) (int, error) {
@@ -128,8 +220,8 @@ func (r *stopOnProbeReader) Read(p []byte) (int, error) {
 		r.stop()
 	}
 	n, err := r.reader.Read(p)
-	if r.reads == 2 && r.eof {
-		err = io.EOF
+	if r.reads == 2 && r.err != nil {
+		err = r.err
 	}
 	return n, err
 }
@@ -137,9 +229,10 @@ func (r *stopOnProbeReader) Read(p []byte) (int, error) {
 func TestStopInputDuringBudgetProbe(t *testing.T) {
 	// 精确停在零预算探测读取中，避免依赖 TCP 分包时机。
 	for _, tc := range []struct {
-		name   string
-		shared bool
-		eof    bool
+		name      string
+		shared    bool
+		readLimit int64
+		err       error
 	}{
 		{name: "local"},
 		{
@@ -148,11 +241,22 @@ func TestStopInputDuringBudgetProbe(t *testing.T) {
 		},
 		{
 			name: "complete",
-			eof:  true,
+			err:  io.EOF,
+		},
+		{
+			name:      "message-limit",
+			readLimit: 1,
+		},
+		{
+			name: "corrupt",
+			err:  flate.CorruptInputError(0),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := Config{ReceiveQueueBytes: 1}
+			cfg := Config{
+				ReceiveQueueBytes: 1,
+				ReadLimit:         tc.readLimit,
+			}
 			if tc.shared {
 				cfg.ReceiveQueueBytes = 0
 				cfg.Budget, _ = NewBudget(BudgetConfig{ReceiveBytes: 1})
@@ -169,16 +273,11 @@ func TestStopInputDuringBudgetProbe(t *testing.T) {
 			reader := &stopOnProbeReader{
 				reader: strings.NewReader("ab"),
 				stop:   func() { _ = e.StopInput() },
-				eof:    tc.eof,
+				err:    tc.err,
 			}
-			remaining := e.config.ReadLimit
-			_, err = s.readData(reader, make([]byte, 4), &remaining)
-			want := ErrClosed
-			if tc.eof {
-				want = io.EOF
-			}
-			if !errors.Is(err, want) {
-				t.Fatalf("停收后未接纳的输入不应再归因为队列满: %v", err)
+			_, err = s.readData(reader, make([]byte, 4))
+			if !errors.Is(err, ErrClosed) {
+				t.Fatalf("停收后未接纳的输入不应再按正文错误或过载终止: %v", err)
 			}
 			if s.Usage() != (Usage{}) || e.Budget().Usage() != (Usage{}) {
 				t.Fatalf("部分读取未释放: %+v %+v", s.Usage(), e.Budget().Usage())

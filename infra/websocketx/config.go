@@ -66,7 +66,8 @@ type Identity struct {
 type Config struct {
 	// HandshakeTimeout 是认证与升级共用的期限，默认 5 秒。
 	HandshakeTimeout time.Duration
-	// ReadLimit 限制客户端 → 服务端的单条消息字节数（含解压后），默认 1 MiB。
+	// ReadLimit 限制正常接收时客户端 → 服务端的单条消息字节数（含解压后），默认 1 MiB。
+	// 停收后跳过未接纳正文的解压和大小校验，仍保留底层线上限额。
 	ReadLimit int64
 	// MaxSendBytes 限制服务端 → 客户端的单条消息正文字节数（按压缩前计算），默认 1 MiB。
 	MaxSendBytes int64

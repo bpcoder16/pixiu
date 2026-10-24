@@ -1,6 +1,7 @@
 package websocketx
 
 import (
+	"compress/flate"
 	"context"
 	"errors"
 	"io"
@@ -36,27 +37,21 @@ func (s *Session) readLoop() {
 			s.failRead(err)
 			return
 		}
-		remaining := e.config.ReadLimit
 		if e.inputStopped.Load() {
-			if !s.discardInput(reader, scratch[:], remaining) {
-				return
-			}
+			// 下一次 NextReader 会跳过未消费的线上正文；不再调用解压读取器，控制帧仍正常处理。
 			continue
 		}
-		data, err := s.readData(reader, scratch[:], &remaining)
+		data, err := s.readData(reader, scratch[:])
 		if err != nil {
-			if err == io.EOF {
-				// 停收期间已经读完本条消息，不重复读取已归还池的解压器。
-				continue
-			}
 			if errors.Is(err, ErrClosed) && !isClosed(s.detached) && !e.canceled.Load() {
-				if !s.discardInput(reader, scratch[:], remaining) {
-					return
-				}
 				continue
 			}
 			s.failRead(err)
 			return
+		}
+		if e.inputStopped.Load() {
+			s.releaseReceive(int64(len(data)))
+			continue
 		}
 		if typ == websocket.TextMessage && !utf8.Valid(data) {
 			s.releaseReceive(int64(len(data)))
@@ -103,6 +98,7 @@ func (s *Session) failRead(err error) {
 	var cause error = net.ErrClosed
 	var closeErr *websocket.CloseError
 	var networkErr net.Error
+	var corruptErr flate.CorruptInputError
 	switch {
 	case errors.Is(err, ErrMessageTooLarge), errors.Is(err, websocket.ErrReadLimit):
 		code, cause = websocket.CloseMessageTooBig, ErrMessageTooLarge
@@ -116,6 +112,9 @@ func (s *Session) failRead(err error) {
 		if networkErr.Timeout() {
 			cause = context.DeadlineExceeded
 		}
+	case errors.As(err, &corruptErr):
+		// 解压器直接返回标准库错误，不能只按 Gorilla 错误前缀分类。
+		code, cause = websocket.CloseProtocolError, ErrInvalidMessage
 	case strings.HasPrefix(err.Error(), "websocket: "):
 		// Gorilla v1.5.3 的协议解析错误没有导出类型，仅识别固定前缀。
 		code, cause = websocket.CloseProtocolError, ErrInvalidMessage
@@ -123,38 +122,11 @@ func (s *Session) failRead(err error) {
 	s.terminateWithError(code, "receive failed", cause)
 }
 
-func (s *Session) discardInput(reader io.Reader, scratch []byte, remaining int64) bool {
-	// 沿用本条消息尚余的解压额度；停收不能让已读的部分重新获得额度。
-	for {
-		if remaining == 0 {
-			var probe [1]byte
-			n, err := reader.Read(probe[:])
-			if n == 0 && err == io.EOF {
-				return true
-			}
-			if err != nil && err != io.EOF {
-				s.failRead(err)
-				return false
-			}
-			s.failRead(ErrMessageTooLarge)
-			return false
-		}
-		n, err := reader.Read(scratch[:min(int64(len(scratch)), remaining)])
-		remaining -= int64(n)
-		if err == io.EOF {
-			return true
-		}
-		if err != nil {
-			s.failRead(err)
-			return false
-		}
-	}
-}
-
 // readData 在分配/保留数据前预留读取槽位和分块字节；出错时释放一次。
-// io.EOF 表示停收后的探测已到消息末尾；ErrClosed 表示仍需有界丢弃余下输入。
-func (s *Session) readData(reader io.Reader, scratch []byte, remaining *int64) (data []byte, result error) {
+// 发现停收时返回 ErrClosed，由读取循环通过 NextReader 跳过剩余正文。
+func (s *Session) readData(reader io.Reader, scratch []byte) (data []byte, result error) {
 	e := s.endpoint
+	remaining := e.config.ReadLimit
 	e.mu.RLock()
 	s.mu.Lock()
 	if e.inputStopped.Load() || s.closed {
@@ -162,6 +134,8 @@ func (s *Session) readData(reader io.Reader, scratch []byte, remaining *int64) (
 		e.mu.RUnlock()
 		return nil, ErrClosed
 	}
+	// 不在唯一读循环中等待空位，以免阻塞后续 Ping/Pong/Close 控制帧的处理。
+	// 队列满按过载策略拒绝新消息，返回 ErrQueueFull，由 failRead 以 1008 关闭连接。
 	if s.usage.ReceiveMessages >= int64(e.config.ReceiveQueueSize) {
 		s.mu.Unlock()
 		e.mu.RUnlock()
@@ -188,7 +162,7 @@ func (s *Session) readData(reader io.Reader, scratch []byte, remaining *int64) (
 			return data, ErrClosed
 		}
 		localAvailable := e.config.ReceiveQueueBytes - s.usage.ReceiveBytes
-		maximum := min(int64(len(scratch)), *remaining, localAvailable)
+		maximum := min(int64(len(scratch)), remaining, localAvailable)
 		reserved := e.config.Budget.reserveReadBytes(maximum)
 		s.usage.ReceiveBytes += reserved
 		s.mu.Unlock()
@@ -196,22 +170,19 @@ func (s *Session) readData(reader io.Reader, scratch []byte, remaining *int64) (
 			// 固定一个探测字节只区分 EOF 与超额，不进入消息缓冲或队列。
 			var probe [1]byte
 			n, err := reader.Read(probe[:])
-			*remaining -= int64(n)
+			// 本次探测期间若已停收，忽略未接纳正文的内容与大小，不再继续解压。
+			if e.inputStopped.Load() {
+				return data, ErrClosed
+			}
+			remaining -= int64(n)
 			if n == 0 && err == io.EOF {
 				return data, nil
 			}
 			if err != nil && err != io.EOF {
 				return data, err
 			}
-			if *remaining < 0 {
+			if remaining < 0 {
 				return data, ErrMessageTooLarge
-			}
-			// 停收若在探测读取期间生效，转为有界丢弃，不能再误报接收过载。
-			if e.inputStopped.Load() {
-				if err == io.EOF {
-					return data, io.EOF
-				}
-				return data, ErrClosed
 			}
 			if localAvailable == 0 {
 				return data, ErrQueueFull
@@ -219,12 +190,20 @@ func (s *Session) readData(reader io.Reader, scratch []byte, remaining *int64) (
 			return data, ErrBudgetExceeded
 		}
 		n, err := reader.Read(scratch[:reserved])
-		*remaining -= int64(n)
 		s.mu.Lock()
 		unused := reserved - int64(n)
+		stopped := s.closed || e.inputStopped.Load()
+		if stopped {
+			// 已开始的读取无法中断；返回后归还整块预留额度，不再复制或保留本次正文。
+			unused = reserved
+		}
 		s.usage.ReceiveBytes -= unused
 		e.config.Budget.release(true, 0, unused)
 		s.mu.Unlock()
+		if stopped {
+			return data, ErrClosed
+		}
+		remaining -= int64(n)
 		data = append(data, scratch[:n]...)
 		if err == io.EOF {
 			return data, nil
