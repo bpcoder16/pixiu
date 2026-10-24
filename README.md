@@ -137,6 +137,7 @@ func main() {
 | [`infra/env`](infra/env/doc.go) | 通用应用环境、IP 校验与补齐、一次初始化与全局读取 | 标准库、netx |
 | [`infra/httpcall`](infra/httpcall/doc.go) | 可复用 HTTP 下游客户端、结果日志、请求级耗时 | Resty v2、logit |
 | [`infra/httpserver`](infra/httpserver/doc.go) | 标准 `http.Handler` 服务端、监听、限时关闭 | 标准库 |
+| [`infra/websocketx`](infra/websocketx/doc.go) | 标准 Handler、认证与心跳、有界收发、不可变预制帧、独立连接生命周期 | Gorilla WebSocket、logit |
 | [`infra/ginx`](infra/ginx/doc.go) | 独立 Gin Engine、请求日志作用域、访问日志、Recovery 与 OpenAPI / Elements 文档 | Gin、Swag、logit |
 | [`infra/jwtx`](infra/jwtx/doc.go) | HS256 / RS256 / ES256 / PS256 JWT 签发、验签与声明校验 | golang-jwt/jwt v5 |
 | [`infra/taskpool`](infra/taskpool/doc.go) | 本地异步任务、有界队列、worker 扩缩容、重试与排空 | logit |
@@ -212,6 +213,7 @@ pixiu/
 │   ├── cronx/              Cron、固定/随机间隔与限时排空
 │   ├── httpcall/           HTTP 下游调用
 │   ├── httpserver/         HTTP 服务端
+│   ├── websocketx/         原始长连接、心跳、有界收发与排空
 │   ├── ginx/               Gin 请求处理
 │   ├── jwtx/               JWT 签发、验签与声明校验
 │   ├── taskpool/           本地异步任务池
