@@ -22,6 +22,11 @@ func ValidateConfig(name, region, endpoint string, requestTimeout, slowThreshold
 	if requestTimeout < 0 || slowThreshold < 0 {
 		return errors.New("negative timeout or slow threshold")
 	}
+	return ValidateEndpoint(endpoint)
+}
+
+// ValidateEndpoint 校验可选的 HTTP(S) 地址，错误不包含地址原值。
+func ValidateEndpoint(endpoint string) error {
 	if endpoint != "" {
 		u, err := url.Parse(endpoint)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(endpoint, "#") || (u.Path != "" && u.Path != "/") {
