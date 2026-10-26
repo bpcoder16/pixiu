@@ -1,6 +1,6 @@
-// Package ossx 封装官方 OSS SDK V2 的普通对象上传与本地文件上传。
+// Package ossx 封装官方 SDK 的对象上传、元数据查询和下载签名。
 // 导入路径为 github.com/bpcoder16/pixiu/infra/aliyun/ossx。
-// 配置、凭据、连接池和命名注册表独立于 esx，可分别使用不同账号。
+// 配置、凭据、连接池和命名注册表独立于 stsx、esx，可分别使用不同账号。
 // Name、Region、Bucket 必填；每个实例固定一个 Bucket，多 Bucket 创建多个实例。
 // New 按 SDK 规则校验 Region 语法和 Bucket 命名。
 // 固定 AK/SK 通过 AccessKeyID、AccessKeySecret 提供，New 内部构造凭据；
@@ -8,6 +8,9 @@
 // New 只构造，不联网验活；Endpoint 可选，须为不含凭据、查询或非根路径的 HTTP(S) URL。
 // 不自动重试或跟随重定向，保留 SDK 的 CRC64 校验；PutObject 不关闭调用方的 Reader。
 // 普通 PUT 遵循 OSS 单对象上传限制，不提供分片上传；Key 原样传递，不改变对象 ACL。
+// HeadObject 返回大小、MIME 和 ETag，对象缺失用 errors.Is(err, ErrObjectNotFound) 识别；桶错误原样保留。
+// PresignGetObject 本地签发 GET URL，有效期还受所用临时凭据的剩余期限限制。
+// STS 临时凭据由独立的 stsx.AssumeRole 签发，上传策略和响应组合由业务负责。
 // SDK 错误可用 errors.As 识别；失败时保留 context 取消或超时原因供 errors.Is 判定，超时不代表远端没有写入。
 //
 // OptLogRequests(true) 开启脱敏结果日志，默认关闭；不提供正文日志。
@@ -133,16 +136,17 @@
 //
 // 在 RAM 控制台的权限管理 → 权限策略中创建自定义策略，选择脚本编辑并粘贴替换后的 JSON；
 // 创建后还须在身份管理 → 用户中给实际使用 AccessKey 的 RAM 用户添加该策略，仅创建策略不会生效。
-// 当前 ossx 只提供 PutObject、PutFile 上传接口，两者只需 oss:PutObject；
-// oss:GetObject、oss:DeleteObject 可按其他业务需求保留或移除。
+// PutObject、PutFile 需要 oss:PutObject；HeadObject 和 PresignGetObject 需要 oss:GetObject。
+// stsx.AssumeRole 需要 sts:AssumeRole；业务应通过 Policy 将上传凭据限制到指定对象的 oss:PutObject。
 // 固定 AK/SK 直接上传时，可移除整条 STS 规则，仅将 OSS 规则授予该 AK 所属 RAM 用户。
 //
 // 如需通过 STS 临时凭证上传，还须完成以下配置：
 //   - 将第二条 sts:AssumeRole 规则授予发起调用的 RAM 用户或 RAM 角色；AssumeRole 不允许主账号调用。
 //   - 给目标角色单独授予第一条 OSS 规则，并在该角色的信任策略 Principal 中允许调用者扮演。
 //     用户具有 OSS 权限不会自动使目标角色具有相同权限；上述 JSON 是权限策略，不是角色信任策略。
-//   - 由调用方构造支持角色扮演的 credentials.Credential，并通过 Config.Credential 注入 ossx。
-//     Config.AccessKeyID、AccessKeySecret 和 biz/bootstrap 的固定 AK/SK 配置不会自动执行 AssumeRole。
+//   - 独立初始化 stsx.Client，将角色 ARN、会话名和对象策略传给 AssumeRole。
+//     STS 连接配置见 aliyunstsx.<name>.yaml；OSS 配置不再包含 STS 字段。
+//     服务端上传、查询、下载签名仍使用 OSS 实例自身的凭据。
 //
 // 官方参考：
 //   - OSS RAM Policy：https://help.aliyun.com/zh/oss/user-guide/ram-policy

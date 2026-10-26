@@ -152,7 +152,8 @@ func main() {
 | [`infra/natsx`](infra/natsx/doc.go) | Core / JetStream 消息收发、启动期批量消费注册、Handler 注册表、命名空间与统一日志 | nats.go、logit |
 | [`infra/elasticsearchx`](infra/elasticsearchx/doc.go) | Elasticsearch 通用操作、Bulk、默认及命名实例、结果日志与版本适配 | 官方 Elasticsearch SDK、logit |
 | [`infra/estextsearch`](infra/estextsearch/doc.go) | Elasticsearch 短文本查询 DSL、基础召回与混合输入扩展召回 | 标准库 |
-| [`infra/aliyun/ossx`](infra/aliyun/ossx/doc.go) | OSS 固定 Bucket 的流与文件上传、独立账号、结果日志与生命周期 | 阿里云 OSS SDK V2、credentials-go、logit |
+| [`infra/aliyun/ossx`](infra/aliyun/ossx/doc.go) | OSS 固定 Bucket 的上传、对象查询、下载签名与生命周期 | 阿里云 OSS SDK V2、credentials-go、logit |
+| [`infra/aliyun/stsx`](infra/aliyun/stsx/doc.go) | STS AssumeRole、临时凭据与独立生命周期 | 阿里云 STS SDK、credentials-go、logit |
 | [`infra/aliyun/esx`](infra/aliyun/esx/doc.go) | 阿里云 ES 固定 InstanceID 的同义词清单、完整清单更新、实例查询 | 阿里云 Elasticsearch 管理 SDK、credentials-go、logit |
 
 Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/doc.go)、[`v8`](infra/elasticsearchx/v8/doc.go) 或 [`v9`](infra/elasticsearchx/v9/doc.go) 适配包；共用操作位于 `infra/elasticsearchx`。各版本的 `NewDefault` / `NewNamed` 共用注册表，通过 `elasticsearchx.Default()` / `Named(name)` 获取实例，应用统一调用 `CloseAll()` 关闭；独立 `New` 创建的实例仍需自行关闭。
@@ -161,7 +162,7 @@ Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/d
 
 `infra/estextsearch` 独立构建查询子句，不执行网络请求：`Query(field, text)` 提供基础召回，`QueryExpanded(field, text)` 扩展跨词同义词与编号等符号片段的组合召回，可能增加查询成本并改变评分或排名。调用方须准备主字段及 `.contains`、`.contains_unigram` 子字段，索引配置见 [模板说明](infra/estextsearch/templates/README.md)；空输入返回 `nil, nil`，合并请求时应省略该条件。
 
-`infra/aliyun/ossx` 和 `infra/aliyun/esx` 独立持有配置、凭据、连接池和命名注册表，可使用不同账号。两者均支持成对配置 `AccessKeyID` / `AccessKeySecret`，或注入与其互斥的 `Credential`；`New` 只构造，不联网验活，结果日志默认关闭。共享实例使用 `NewNamed` / `NewDefault` 创建并统一 `CloseAll`；独立 `New` 创建的实例自行关闭。
+`infra/aliyun/ossx`、`infra/aliyun/stsx` 和 `infra/aliyun/esx` 独立持有配置、凭据、连接池和命名注册表，可使用不同账号。三者均支持成对配置 `AccessKeyID` / `AccessKeySecret`，或注入与其互斥的 `Credential`；`New` 只构造，不联网验活，结果日志默认关闭。共享实例使用 `NewNamed` / `NewDefault` 创建并统一 `CloseAll`；独立 `New` 创建的实例自行关闭。
 
 OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实例固定一个 `Config.InstanceID`。`UpdateSynonymsDicts` 提交完整目标清单，遗漏已有文件会删除它；API 成功不代表分发或索引加载完成。凭据、上传及词典更新的完整边界见对应包文档。
 
@@ -178,7 +179,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 
 `biz/appconfig` 直接定义应用共用的环境与日志配置；HTTP、Cron 各自独立配置，由 bootstrap 显式装配。原 httpconfig 和 baseconfig 已删除，不保留兼容入口。
 
-`appconfig.MustLoadAppConfig` 使用 `configx.Parse`，支持 YAML / TOML / JSON，拒绝未知字段和弱类型转换；配置只返回给调用方，环境由 `env.Init` 一次性发布。应用配置文件所在目录作为 `env.ConfigDirPath()`，供 bootstrap 查找实例配置。加载配置不会初始化日志或修改 `time.Local`；`bootstrap.MustBaseInit` 在日志创建前应用环境时区，再依次初始化日志、OSS、阿里云 ES、MySQL、Redis、Elasticsearch 和 NATS，共享客户端仅初始化已声明的实例。
+`appconfig.MustLoadAppConfig` 使用 `configx.Parse`，支持 YAML / TOML / JSON，拒绝未知字段和弱类型转换；配置只返回给调用方，环境由 `env.Init` 一次性发布。应用配置文件所在目录作为 `env.ConfigDirPath()`，供 bootstrap 查找实例配置。加载配置不会初始化日志或修改 `time.Local`；`bootstrap.MustBaseInit` 在日志创建前应用环境时区，再依次初始化日志、OSS、STS、阿里云 ES、MySQL、Redis、Elasticsearch 和 NATS，共享客户端仅初始化已声明的实例。
 
 HTTP、Cron 和 NATS 统一停收，共享默认 30 秒并行排空；超时取消剩余任务。正常和超时路径都执行资源回收，lifecycle.Stack 默认整体 20 秒，可用 `lifecycle.New(timeout)` 设置；到期停止发起后续关闭，入口退出。资源逆序回收，日志最后关闭；同一模块的多命名实例不保证关闭顺序。初始化前登记收尾 defer，初始化失败同样有界回收。
 
@@ -230,6 +231,7 @@ pixiu/
 │   ├── estextsearch/       Elasticsearch 短文本查询 DSL
 │   ├── aliyun/             阿里云 SDK 适配
 │   │   ├── ossx/           阿里云 OSS 上传
+│   │   ├── stsx/           阿里云 STS 临时凭据
 │   │   └── esx/            阿里云 ES 管理 API
 │   └── internal/           infra 内部共用实现
 ├── biz/
@@ -345,6 +347,7 @@ NewHTTPService 构造不监听，Start 接管服务与信号；Stop 统一封闭
 | `MustRegisterRedis("cache", true)` | `conf/redis.cache.yaml` | [Redis](biz/bootstrap/conf.example/redis.example.yaml) |
 | `MustRegisterElasticsearch("search", true)` | `conf/elasticsearch.search.yaml` | [Elasticsearch](biz/bootstrap/conf.example/elasticsearch.example.yaml) |
 | `MustRegisterAliyunOSS("assets", true)` | `conf/aliyunossx.assets.yaml` | [阿里云 OSS](biz/bootstrap/conf.example/aliyunossx.example.yaml) |
+| `MustRegisterAliyunSTS("upload", true)` | `conf/aliyunstsx.upload.yaml` | [阿里云 STS](biz/bootstrap/conf.example/aliyunstsx.example.yaml) |
 | `MustRegisterAliyunES("search-control", true)` | `conf/aliyunesx.search-control.yaml` | [阿里云 ES 管理端](biz/bootstrap/conf.example/aliyunesx.example.yaml) |
 | `MustRegisterNATS("events", true)` | `conf/nats.events.yaml` | [NATS](biz/bootstrap/conf.example/nats.example.yaml) |
 
@@ -403,7 +406,9 @@ func main() {
 
 NATS 消费者可在启动时保存客户端引用，也可在消费排空期间查询 `Default` / `Named` 并继续发布。关闭完成后查询仍按原约定 panic；其他客户端的关闭与查询行为不变。先停止并等待外部生产者，再由资源栈排空 NATS，随后关闭数据库等依赖，日志最后关闭。
 
-OSS 文件必填 `region`、`bucket`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`requestTimeout` 默认 60s，`slowThreshold` 默认 500ms，`logRequests` 默认关闭。初始化不联网校验 Bucket 或权限，业务通过 `ossx.Default()` / `Named(name)` 取得固定 Bucket 的实例。
+OSS 文件必填 `region`、`bucket`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`HeadObject` 查询元数据，`PresignGetObject` 签发下载 URL。`requestTimeout` 默认 60s，`slowThreshold` 默认 500ms，`logRequests` 默认关闭。初始化不联网校验 Bucket 或权限，业务通过 `ossx.Default()` / `Named(name)` 取得固定 Bucket 的实例。
+
+STS 文件必填 `region`、`accessKeyID`、`accessKeySecret`，`endpoint` 留空时使用地域公网地址；`requestTimeout` 默认 60s，`slowThreshold` 默认 500ms，`logRequests` 默认关闭。业务通过 `stsx.Default()` / `Named(name)` 调用 `AssumeRole`，在请求中提供角色 ARN、会话名、时长和可选策略。OSS 上传的对象授权策略由业务构造，STS 模块不依赖 Bucket。迁移旧配置时，从 OSS 文件移除 `stsRoleARN`、`stsSessionName`、`stsEndpoint`；前两项转入业务配置，`stsEndpoint` 改为 STS 文件的 `endpoint`。
 
 阿里云 ES 管理端文件必填 `region`、`instanceID`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`requestTimeout` 默认 60s，`slowThreshold` 默认 200ms，`logRequests` 默认关闭。初始化不联网验证实例或权限，业务通过 `esx.Default()` / `Named(name)` 取得固定 InstanceID 的客户端。
 

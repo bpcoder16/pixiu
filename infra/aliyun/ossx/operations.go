@@ -15,6 +15,8 @@ import (
 
 const downstreamType = "AliyunOSS"
 
+var ErrObjectNotFound = errors.New("ossx: object not found")
+
 // PutObjectRequest 上传原始字节流；Body 由调用方关闭，调用完成前不得并发读写。
 type PutObjectRequest struct {
 	Key         string
@@ -119,6 +121,80 @@ func (c *Client) put(ctx context.Context, operation string, req PutObjectRequest
 		return result, fmt.Errorf("ossx: %s: %w", operation, err)
 	}
 	return result, nil
+}
+
+// ObjectInfo 是 HEAD 返回的对象元数据，不下载文件正文。
+type ObjectInfo struct {
+	ContentLength int64  // 对象大小（字节）。
+	ContentType   string // 对象 MIME 类型。
+	ETag          string // 对象标识，不保证等于内容 MD5。
+}
+
+// HeadObject 将对象缺失映射为 ErrObjectNotFound，保留桶不存在、鉴权及网络错误。
+func (c *Client) HeadObject(ctx context.Context, key string) (result ObjectInfo, err error) {
+	if err = c.check(ctx); err != nil {
+		return
+	}
+	if key == "" {
+		return result, errors.New("ossx: key is required")
+	}
+	callCtx, cancel := context.WithTimeout(ctx, c.requestTimeout)
+	defer cancel()
+	start := time.Now()
+	status := 0
+	requestID := ""
+	defer func() {
+		c.finish(ctx, "HeadObject", PutObjectRequest{Key: key}, requestID, status, err, time.Since(start))
+	}()
+	response, err := c.sdk.HeadObject(callCtx, &oss.HeadObjectRequest{
+		Bucket: new(c.bucket),
+		Key:    new(key),
+	}, func(opts *oss.Options) {
+		opts.ResponseHandlers = append(opts.ResponseHandlers, func(r *http.Response) error {
+			status = r.StatusCode
+			requestID = r.Header.Get("x-oss-request-id")
+			return nil
+		})
+	})
+	if err != nil {
+		if serviceErr, ok := errors.AsType[*oss.ServiceError](err); ok {
+			status = serviceErr.StatusCode
+			// HEAD 无错误体时 SDK 使用 BadErrorResponse；显式桶错误不能视为对象缺失。
+			if serviceErr.Code == "NoSuchKey" || (status == http.StatusNotFound && serviceErr.Code == "BadErrorResponse") {
+				err = errors.Join(ErrObjectNotFound, err)
+			}
+		}
+		if callCtx.Err() != nil {
+			err = errors.Join(err, callCtx.Err())
+		}
+		return result, fmt.Errorf("ossx: HeadObject: %w", err)
+	}
+	return ObjectInfo{
+		response.ContentLength,
+		oss.ToString(response.ContentType),
+		oss.ToString(response.ETag),
+	}, nil
+}
+
+// PresignGetObject 本地签发 GET URL；调用方不得将签名 URL 写入日志。
+// URL 有效期也受动态凭据自身的剩余有效期限制。
+func (c *Client) PresignGetObject(ctx context.Context, key string, expires time.Duration) (string, error) {
+	if err := c.check(ctx); err != nil {
+		return "", err
+	}
+	if key == "" || expires < time.Second || expires > 7*24*time.Hour {
+		return "", errors.New("ossx: key and expiry between 1s and 7d are required")
+	}
+	callCtx, cancel := context.WithTimeout(ctx, c.requestTimeout)
+	defer cancel()
+	result, err := c.sdk.Presign(callCtx, &oss.GetObjectRequest{
+		Bucket: new(c.bucket),
+		Key:    new(key),
+	}, oss.PresignExpires(expires))
+	if err != nil {
+		return "", fmt.Errorf("ossx: PresignGetObject: %w", err)
+	}
+	return result.URL, nil
 }
 
 func (c *Client) finish(ctx context.Context, operation string, req PutObjectRequest, requestID string, status int, err error, duration time.Duration) {

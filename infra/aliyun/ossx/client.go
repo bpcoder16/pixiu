@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
-	osscredentials "github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss/credentials"
 	"github.com/aliyun/credentials-go/credentials"
 	"github.com/bpcoder16/pixiu/infra/internal/aliyun"
 )
@@ -48,6 +48,8 @@ func OptLogRequests(enabled bool) Option {
 // Client 可并发使用；配置在 New 返回后固定。
 type Client struct {
 	name           string
+	region         string
+	endpoint       string
 	bucket         string
 	sdk            *oss.Client
 	transport      *http.Transport
@@ -55,6 +57,23 @@ type Client struct {
 	slowThreshold  time.Duration
 	logRequests    bool
 	closed         atomic.Bool
+}
+
+// Info 只包含非敏感的连接信息，不暴露凭据。
+type Info struct {
+	Name     string
+	Region   string
+	Bucket   string
+	Endpoint string
+}
+
+func (c *Client) Info() Info {
+	return Info{
+		Name:     c.name,
+		Region:   c.region,
+		Bucket:   c.bucket,
+		Endpoint: c.endpoint,
+	}
 }
 
 // New 只校验和构造独立客户端，不发起网络验活，也不登记为共享实例。
@@ -84,42 +103,18 @@ func New(cfg Config, opts ...Option) (*Client, error) {
 	}
 	c := &Client{
 		name:           cfg.Name,
+		region:         cfg.Region,
+		endpoint:       strings.TrimRight(cfg.Endpoint, "/"),
 		bucket:         cfg.Bucket,
 		transport:      transport,
 		requestTimeout: cfg.RequestTimeout,
 		slowThreshold:  cfg.SlowThreshold,
 	}
-	// 显式构造配置，避免 LoadDefaultConfig 从环境开启请求调试输出。
-	sdkConfig := &oss.Config{
-		Region: new(cfg.Region),
-		CredentialsProvider: osscredentials.CredentialsProviderFunc(func(ctx context.Context) (osscredentials.Credentials, error) {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return osscredentials.Credentials{}, ctxErr
-			}
-			value, credentialErr := credential.GetCredential()
-			if credentialErr != nil {
-				return osscredentials.Credentials{}, credentialErr
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return osscredentials.Credentials{}, ctxErr
-			}
-			if value == nil {
-				return osscredentials.Credentials{}, errors.New("ossx: empty credential")
-			}
-			return osscredentials.Credentials{
-				AccessKeyID:     oss.ToString(value.AccessKeyId),
-				AccessKeySecret: oss.ToString(value.AccessKeySecret),
-				SecurityToken:   oss.ToString(value.SecurityToken),
-			}, nil
-		}),
-		HttpClient:       httpClient,
-		RetryMaxAttempts: new(1),
-		LogLevel:         oss.Ptr[int](oss.LogOff),
+	// 先确定实际地址，确保 SDK 与 Info 使用同一个 Endpoint。
+	if c.endpoint == "" {
+		c.endpoint = "https://oss-" + cfg.Region + ".aliyuncs.com"
 	}
-	if cfg.Endpoint != "" {
-		sdkConfig.Endpoint = new(cfg.Endpoint)
-	}
-	c.sdk = oss.NewClient(sdkConfig)
+	c.sdk = newOSSClient(cfg.Region, c.endpoint, credential, httpClient)
 	for _, opt := range opts {
 		if opt != nil {
 			opt(c)

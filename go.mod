@@ -7,6 +7,7 @@ require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.49.0
 	github.com/alibabacloud-go/darabonba-openapi/v2 v2.2.4
 	github.com/alibabacloud-go/elasticsearch-20170613/v6 v6.4.0
+	github.com/alibabacloud-go/sts-20150401/v2 v2.1.0
 	github.com/alibabacloud-go/tea v1.5.2
 	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v1.6.0
 	github.com/aliyun/credentials-go v1.4.13

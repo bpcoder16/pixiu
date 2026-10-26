@@ -269,3 +269,31 @@ func TestClientDefaults(t *testing.T) {
 		t.Fatalf("默认超时或慢阈值发生变化: %v, %v", c.requestTimeout, c.slowThreshold)
 	}
 }
+
+func TestClientEndpointConsistency(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		endpoint      string
+		wantEndpoint  string
+		wantObjectURL string
+	}{
+		{"default", "", "https://oss-cn-hangzhou.aliyuncs.com", "https://dict-bucket.oss-cn-hangzhou.aliyuncs.com/test.txt"},
+		{"custom", "https://oss.example.test:8443/", "https://oss.example.test:8443", "https://dict-bucket.oss.example.test:8443/test.txt"},
+		{"ip", "http://127.0.0.1:9000/", "http://127.0.0.1:9000", "http://127.0.0.1:9000/dict-bucket/test.txt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestClient(t, testConfig(tc.endpoint))
+			if got := c.Info().Endpoint; got != tc.wantEndpoint {
+				t.Fatalf("Info endpoint = %q, want %q", got, tc.wantEndpoint)
+			}
+			// 通过本地签名检查 SDK 实际使用的地址，不向外部 OSS 发起请求。
+			signed, err := c.PresignGetObject(context.Background(), "test.txt", time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(signed, tc.wantObjectURL+"?") {
+				t.Fatal("SDK endpoint does not match Info endpoint")
+			}
+		})
+	}
+}
