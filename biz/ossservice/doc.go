@@ -1,4 +1,4 @@
-// Package ossservice 提供 multipart 文件上传和限定 OSS 对象的 STS 凭据签发。
+// Package ossservice 提供 multipart 文件上传、限定 OSS 对象的 STS 凭据签发及 URL 内容摘要。
 // 本包只依赖现有客户端，不创建或关闭连接，不读全局配置，不管理上传记录。
 // 场景选择、身份检查、文件校验、ObjectKey 生成和 HTTP 响应由应用负责。
 // New(ossClient) 仅要求 OSS 客户端；需要签发凭据时通过 WithSTSClient 注入 STS 客户端。
@@ -59,4 +59,22 @@
 // 均属于 HTTP 调用方，须在参数绑定前登记 MultipartForm.RemoveAll 清理，
 // 确保绑定失败或上传失败时仍可回收临时文件。
 // 上传成功后再由应用保存记录；落库失败时本包不会自动删除已经上传的对象。
+//
+// # URL 内容 MD5
+//
+// MD5FromURL 是独立包函数，无需创建 Service，也不要求 OSS 或 STS 客户端。
+// 示例中的 ctx 带有调用方设置的总期限，fileURL 可为 CDN 地址或私有桶签名地址：
+//
+//	digest, err := ossservice.MD5FromURL(ctx, fileURL)
+//	if err != nil {
+//	    return err
+//	}
+//	_ = digest
+//
+// 使用 http.DefaultClient 发起 GET，保留其连接和重定向设置，不增加重试或固定超时。
+// 仅对 HTTP 200 的完整正文流式计算 MD5，返回 32 位小写十六进制摘要；不解析内容或使用 ETag。
+// 响应正文总会关闭，关闭错误不改变结果。HTTP 404 返回 ossx.ErrObjectNotFound，
+// 其余状态、请求或读取失败可用 errors.Is(err, ErrFileRead) 判断；失败不返回部分摘要。
+// 错误仅包含稳定错误、HTTP 状态码及 Context 取消/超时语义，不透传可能含签名 URL 的底层错误。
+// 本函数不查询上传记录、不签发 URL；调用方应让 URL 查询、签名和下载共享同一个 Context 总期限。
 package ossservice

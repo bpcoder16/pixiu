@@ -172,7 +172,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | --- | --- | --- |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
 | [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin / HTTP / Cron 服务构造、NATS 消费配置装配与显式 MySQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
-| [`biz/ossservice`](biz/ossservice/doc.go) | multipart 文件流式上传、指定对象的上传 Policy 与 STS 凭据签发 | 上传只需 OSS 客户端，签发凭据另需注入 STS；业务自行校验文件、生成 Key 和保存记录 |
+| [`biz/ossservice`](biz/ossservice/doc.go) | multipart 上传、指定对象的 STS 凭据签发、URL 内容 MD5 | 上传需要 OSS，签发另需 STS；MD5FromURL 为独立包函数，无需客户端 |
 | [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
 | [`biz/appconfig`](biz/appconfig/doc.go) | 直接定义 env/log，严格解析应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/appconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
@@ -238,7 +238,7 @@ pixiu/
 ├── biz/
 │   ├── bootstrap/          组件初始化、运行管理器与 HTTP/Cron 服务构造
 │   ├── elasticsearchservice/ 同义词库索引验证与临时资源清理
-│   ├── ossservice/         multipart 上传、OSS 精确对象授权与 STS 凭据签发
+│   ├── ossservice/         multipart 上传、OSS 授权与 URL 内容 MD5
 │   ├── appconfig/          应用 env/log 配置加载与环境初始化
 │   ├── httpauth/           命名认证方案与统一身份
 │   │   └── ginauth/        Gin 认证中间件
