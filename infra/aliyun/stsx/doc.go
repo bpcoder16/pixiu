@@ -15,8 +15,8 @@
 // Policy 为可选 JSON，最多 2048 字节；留空继承角色权限，非空时取与角色权限的交集。
 // 调用者须有目标角色的 sts:AssumeRole 权限，目标角色的信任策略须允许调用者扮演。
 //
-// OSS 上传业务应自行构造只含指定对象 oss:PutObject 的策略，再调用 AssumeRole；
-// 返回的 Credentials 与 ossx.Info 由业务组合成响应。资源 Key 不应包含 RAM 通配符，
+// OSS 上传可使用 biz/ossservice，或自行构造只含指定对象 oss:PutObject 的策略调用 AssumeRole；
+// 返回的 Credentials 与 ossx.Info 由应用组合成响应。资源 Key 不应包含 RAM 通配符，
 // 策略不能限制实际文件大小，业务须在上传确认时核验对象元数据。
 // 角色 ARN、会话名和上传策略由业务管理，不放入 OSS 或 STS 的连接配置。
 //

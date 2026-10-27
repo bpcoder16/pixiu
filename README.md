@@ -172,6 +172,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | --- | --- | --- |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
 | [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin / HTTP / Cron 服务构造、NATS 消费配置装配与显式 MySQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
+| [`biz/ossservice`](biz/ossservice/doc.go) | 按指定对象构造上传 Policy 并签发 STS 凭据 | 借用 OSS、STS 客户端，业务自行校验文件、生成 Key 和保存记录 |
 | [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
 | [`biz/appconfig`](biz/appconfig/doc.go) | 直接定义 env/log，严格解析应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/appconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
@@ -237,6 +238,7 @@ pixiu/
 ├── biz/
 │   ├── bootstrap/          组件初始化、运行管理器与 HTTP/Cron 服务构造
 │   ├── elasticsearchservice/ 同义词库索引验证与临时资源清理
+│   ├── ossservice/         OSS 精确对象上传授权与 STS 凭据签发
 │   ├── appconfig/          应用 env/log 配置加载与环境初始化
 │   ├── httpauth/           命名认证方案与统一身份
 │   │   └── ginauth/        Gin 认证中间件
@@ -408,7 +410,7 @@ NATS 消费者可在启动时保存客户端引用，也可在消费排空期间
 
 OSS 文件必填 `region`、`bucket`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`HeadObject` 查询元数据，`PresignGetObject` 签发下载 URL。`requestTimeout` 默认 60s，`slowThreshold` 默认 500ms，`logRequests` 默认关闭。初始化不联网校验 Bucket 或权限，业务通过 `ossx.Default()` / `Named(name)` 取得固定 Bucket 的实例。
 
-STS 文件必填 `region`、`accessKeyID`、`accessKeySecret`，`endpoint` 留空时使用地域公网地址；`requestTimeout` 默认 60s，`slowThreshold` 默认 500ms，`logRequests` 默认关闭。业务通过 `stsx.Default()` / `Named(name)` 调用 `AssumeRole`，在请求中提供角色 ARN、会话名、时长和可选策略。OSS 上传的对象授权策略由业务构造，STS 模块不依赖 Bucket。迁移旧配置时，从 OSS 文件移除 `stsRoleARN`、`stsSessionName`、`stsEndpoint`；前两项转入业务配置，`stsEndpoint` 改为 STS 文件的 `endpoint`。
+STS 文件必填 `region`、`accessKeyID`、`accessKeySecret`，`endpoint` 留空时使用地域公网地址；`requestTimeout` 默认 60s，`slowThreshold` 默认 500ms，`logRequests` 默认关闭。业务通过 `stsx.Default()` / `Named(name)` 调用 `AssumeRole`，在请求中提供角色 ARN、会话名、时长和可选策略。OSS 上传可通过 [`biz/ossservice`](biz/ossservice/doc.go) 组合已有 OSS、STS 客户端，按指定对象构造上传策略并签发凭据；文件校验、Key 生成和记录保存由应用负责，STS 模块不依赖 Bucket。迁移旧配置时，从 OSS 文件移除 `stsRoleARN`、`stsSessionName`、`stsEndpoint`；前两项转入业务配置，`stsEndpoint` 改为 STS 文件的 `endpoint`。
 
 阿里云 ES 管理端文件必填 `region`、`instanceID`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`requestTimeout` 默认 60s，`slowThreshold` 默认 200ms，`logRequests` 默认关闭。初始化不联网验证实例或权限，业务通过 `esx.Default()` / `Named(name)` 取得固定 InstanceID 的客户端。
 
