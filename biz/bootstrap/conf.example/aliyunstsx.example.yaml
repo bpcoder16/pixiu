@@ -1,0 +1,13 @@
+# 复制为 aliyunstsx.<name>.yaml，放在 app.yaml 同目录下。
+# name 和 isDefault 由 MustRegisterAliyunSTS(name, isDefault) 声明。
+region: "cn-hangzhou"
+# 固定 AK/SK，两项必填；部署时填写实际值，不替换环境变量占位符。
+accessKeyID: "<部署时填写 AK>"
+accessKeySecret: "<部署时填写 SK>"
+# HTTP(S) 地址；留空使用当前地域公网 STS 地址。
+endpoint: ""
+# 零值采用以下默认值；初始化不联网验活，调用方更短的 Context 期限优先。
+requestTimeout: "60s"
+slowThreshold: "500ms"
+# 默认关闭；开启后不记录凭据、策略或原始错误。
+logRequests: false
