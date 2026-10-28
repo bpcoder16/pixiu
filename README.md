@@ -122,6 +122,7 @@ func main() {
 | [`cryptox`](cryptox/doc.go) | HMAC-SHA256、AES-GCM、用途绑定的分享 token、安全随机数 | 内部接口参数签名、分享凭证加解密；[设计与安全约束](cryptox/doc.go) |
 | [`netx`](netx/doc.go) | 本机 IPv4 / IPv6 地址查询 | 获取符合筛选规则的网卡地址 |
 | [`validx`](validx/doc.go) | 手机号、邮箱、HTTP URL、IP、数字串与 rune 长度验证 | 请求参数的无状态格式检查 |
+| [`moneyx`](moneyx/doc.go) | 元字符串与 int64 分金额精确转换，支持负数、格式及溢出错误 | 金额输入解析与固定两位小数输出 |
 
 以上基础模块的生产代码仅依赖 Go 标准库，彼此不互相导入。
 
@@ -210,6 +211,7 @@ pixiu/
 ├── cryptox/               HMAC-SHA256、AES-GCM 与分享 token
 ├── netx/                  网络基础能力
 ├── validx/                参数格式验证
+├── moneyx/                元字符串与分金额转换，支持负数
 ├── infra/                 通用技术能力与 SDK 适配
 │   ├── apprun/             常驻服务运行监督与关闭
 │   ├── configx/            结构体配置解析与命名获取
