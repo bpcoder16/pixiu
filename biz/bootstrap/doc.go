@@ -402,6 +402,12 @@
 // 关闭或空清单不取数据库；迁移核心从 mysqlx.Named(name) 获取主库，失败返回错误与部分报告。
 // 迁移不会自动挂到 MustBaseInit 或连接构造中；没有迁移锁，发布时避免多实例同时执行。
 // 模板见 conf.example/migrate.example.yaml，详细契约见 infra/schemamigrate/doc.go。
+// 需要 SQL 种子时调用 RunMySQLInitialization(name, tables, SeedOptions{Files: files, Seeds: seeds, Timeout: 2*time.Minute})。
+// Files 是项目的 fs.FS，Seeds 是 []schemamigrate.Seed；表清单和 SQL 文件继续由项目维护。
+// enabled 同时控制两阶段，迁移成功后才执行 seeds；表清单为空仍允许校准已有表的种子。
+// 种子整批使用独立 Timeout，从种子阶段开始计时；零值默认 2m，负值非法，配置 timeout 仅约束结构迁移。
+// 记录数与有效 SQL 行数相同时保留内容，不同时事务删除 Where 范围再导入；空 Where 作用于整表。
+// 返回报告仅包含结构迁移结果；任一阶段失败均应停止业务启动，详见 schemamigrate 包文档中的重建边界。
 //
 // 需要显式设置运行期总关闭预算时，使用 StartWithConfig（另需导入标准库 time）：
 //

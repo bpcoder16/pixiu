@@ -144,7 +144,7 @@ func main() {
 | [`infra/lrucache`](infra/lrucache/doc.go) | 泛型有界 LRU、默认 / 单条目 TTL、独立及命名实例 | ttlcache v3 |
 | [`infra/mysqlx`](infra/mysqlx/doc.go) | MySQL 连接池、显式主从选择、查询日志 | GORM、MySQL 驱动、logit |
 | [`infra/gormx`](infra/gormx/doc.go) | Repository 主、从库会话依赖 Sessions | GORM |
-| [`infra/schemamigrate`](infra/schemamigrate/doc.go) | 统一 AutoMigrate 入口、物理分表与 MySQL 表注释 | GORM |
+| [`infra/schemamigrate`](infra/schemamigrate/doc.go) | AutoMigrate、物理分表、MySQL 表注释及按数量校准 SQL 种子 | GORM |
 | [`infra/pgsqlx`](infra/pgsqlx/doc.go) | PostgreSQL 连接池、显式主从选择、查询日志 | GORM、pgx、logit |
 | [`infra/clickhousex`](infra/clickhousex/doc.go) | ClickHouse 连接池、显式主从选择、查询日志 | GORM、ClickHouse 驱动、logit |
 | [`infra/sqlitex`](infra/sqlitex/doc.go) | SQLite 单库连接池、常用参数配置、查询日志 | GORM、go-sqlite3、logit |
@@ -222,7 +222,7 @@ pixiu/
 │   ├── lrucache/           LRU / TTL 缓存
 │   ├── mysqlx/             MySQL
 │   ├── gormx/              Repository 主、从库会话依赖
-│   ├── schemamigrate/      显式表结构迁移与 MySQL 表注释
+│   ├── schemamigrate/      显式表结构迁移、MySQL 表注释与 SQL 种子校准
 │   ├── pgsqlx/             PostgreSQL
 │   ├── clickhousex/        ClickHouse
 │   ├── sqlitex/            SQLite
@@ -423,6 +423,24 @@ Elasticsearch 经 bootstrap 创建时，省略 `logRequests` 默认开启结果�
 将 [`migrate.example.yaml`](biz/bootstrap/conf.example/migrate.example.yaml) 复制为 `conf/migrate.orders.yaml`。调用迁移入口时文件必须存在，`enabled` 默认 false，显式开启后执行；`timeout` 默认 5 分钟。迁移不会自动挂到 `MustBaseInit` 或连接构造中，关闭或空清单不获取数据库。
 
 每张表通过 `Model` 登记，可选 `Name` 指定物理表名、`Comment` 管理 MySQL 表注释。只迁移显式登记的表，关联表和多对多中间表须单独登记，不自动创建关联外键。没有跨实例迁移锁，发布时应避免多实例同时执行；DDL 失败或超时可能已部分生效，不能保证整批回滚。完整样例与报告语义见 [`schemamigrate` 包文档](infra/schemamigrate/doc.go)。
+
+需要同时初始化 SQL 种子时使用组合入口，原 `RunMySQLMigration` 调用保持兼容：
+
+```go
+report, err := bootstrap.RunMySQLInitialization("orders", tables, bootstrap.SeedOptions{
+    Files: seedFiles, // 项目内嵌的 embed.FS。
+    Seeds: []schemamigrate.Seed{
+        {Model: &OrderStatus{}, Where: map[string]any{"category": "default"}, File: "seeds/statuses.sql"},
+    },
+    Timeout: 3 * time.Minute,
+})
+```
+
+项目保留 Model、表清单、种子声明和 SQL 文件。`enabled` 同时控制迁移与 seeds；关闭时不访问数据库或读取 SQL，迁移失败不会执行 seeds。表清单为空仍可对已有表执行种子。YAML 的 `timeout` 仅限制表结构迁移；`SeedOptions.Timeout` 从种子阶段开始独立计时，限制整批 seeds，零值默认 2 分钟、负值非法。返回的报告仅记录结构迁移结果，调用方必须处理任一阶段的错误。
+
+种子 SQL 每个有效行必须是一条以分号结束、插入一行的 `INSERT INTO`；关键字不区分大小写，空行与 `--` 整行注释不计数。空文件、跨行 SQL 及其他语句报错。有效行数与 `Where` 范围内的物理记录数（含软删除记录）相同则保留内容；不同则事务 DELETE 该范围并重建，空 `Where` 明确作用于整表。每条 INSERT 必须影响一行，完成后再次核对范围内数量；失败回滚当前项的删除与插入并停止，之前完成的项保留。
+
+SQL 是可信部署代码，调用方负责其目标表及条件正确，并使用支持事务的表；本组件不解析 SQL 或隔离权限。不重置自增序列，重建可能改变 ID 和覆盖自定义数据，只适用于可整体重建的受管数据。数量相同不会发现内容差异。底层可直接调用 `schemamigrate.ApplySeeds(ctx, masterDB, files, seeds)`，由调用方提供带期限的 Context；没有跨实例锁，须由单个实例在业务流量进入前执行。
 
 ### 日志写入轮转文件
 

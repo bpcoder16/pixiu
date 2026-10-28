@@ -57,23 +57,10 @@ func Apply(ctx context.Context, masterDB func(context.Context) *gorm.DB, tables 
 	if len(tables) == 0 {
 		return Report{}, nil
 	}
-	if masterDB == nil {
-		return Report{}, fmt.Errorf("schemamigrate: nil master provider")
+	db, err := masterSession(ctx, masterDB)
+	if err != nil {
+		return Report{}, err
 	}
-	base := masterDB(ctx)
-	if base == nil {
-		return Report{}, fmt.Errorf("schemamigrate: nil master session")
-	}
-	if base.Error != nil {
-		return Report{}, base.Error
-	}
-	if base.DryRun {
-		return Report{}, fmt.Errorf("schemamigrate: DryRun cannot confirm migration success")
-	}
-	if _, ok := base.Statement.ConnPool.(gorm.TxCommitter); ok {
-		return Report{}, fmt.Errorf("schemamigrate: external transaction is not supported")
-	}
-	db := base.Session(&gorm.Session{NewDB: true, Context: ctx})
 	// Session 已复制 Config；仅在本次迁移中禁止关联展开和关联外键 DDL。
 	db.IgnoreRelationshipsWhenMigrating = true
 	declarations, err := prepare(db, tables)
@@ -107,6 +94,27 @@ func Apply(ctx context.Context, masterDB func(context.Context) *gorm.DB, tables 
 		}
 	}
 	return report, nil
+}
+
+// masterSession 隔离历史查询条件，并保证成功意味着实际执行且提交由本包管理。
+func masterSession(ctx context.Context, masterDB func(context.Context) *gorm.DB) (*gorm.DB, error) {
+	if masterDB == nil {
+		return nil, fmt.Errorf("schemamigrate: nil master provider")
+	}
+	base := masterDB(ctx)
+	if base == nil {
+		return nil, fmt.Errorf("schemamigrate: nil master session")
+	}
+	if base.Error != nil {
+		return nil, base.Error
+	}
+	if base.DryRun {
+		return nil, fmt.Errorf("schemamigrate: DryRun cannot confirm execution success")
+	}
+	if _, ok := base.Statement.ConnPool.(gorm.TxCommitter); ok {
+		return nil, fmt.Errorf("schemamigrate: external transaction is not supported")
+	}
+	return base.Session(&gorm.Session{NewDB: true, Context: ctx}), nil
 }
 
 func prepare(db *gorm.DB, tables []Table) ([]declaration, error) {

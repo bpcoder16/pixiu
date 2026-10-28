@@ -1,8 +1,11 @@
 # 命名 MySQL 实例 example 对应 migrate.example.yaml。
-# 项目显式调用 RunMySQLMigration 时读取，文件必需；{} 默认关闭迁移。
+# 项目显式调用 RunMySQLMigration 或 RunMySQLInitialization 时读取，文件必需；{} 默认关闭。
 # 开启后每次启动交给 GORM AutoMigrate 检查所有登记表。
 # 只迁移显式登记的表；不自动迁移关联表、中间表或创建关联外键。
 # 没有跨实例迁移锁，发布时避免多个实例同时迁移。
+# RunMySQLInitialization 在迁移成功后校准 seeds；enabled 同时控制两阶段。
+# seeds 记录数与有效 INSERT 行数不同时事务删除 Where 范围再导入，空 Where 作用于整表。
+# seeds 独立期限由调用方 SeedOptions.Timeout 设置，零值默认 2m，不读取本文件 timeout。
 enabled: false
-# 整体期限；零值默认 5m。MySQL DDL 超时不保证回滚。
+# 表结构迁移期限；零值默认 5m。MySQL DDL 超时不保证回滚。
 timeout: "5m"
