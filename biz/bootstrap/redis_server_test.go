@@ -21,7 +21,7 @@ type bootstrapRedisServer struct {
 }
 
 // 模拟多连接握手、Ping 和 Get，支持模板中的预建空闲连接池。
-func newBootstrapRedisServer(t *testing.T, value, pingReply string) *bootstrapRedisServer {
+func newBootstrapRedisServer(t *testing.T, value, pingReply string, commands ...func([]string) string) *bootstrapRedisServer {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -64,7 +64,7 @@ func newBootstrapRedisServer(t *testing.T, value, pingReply string) *bootstrapRe
 					case <-done:
 					}
 				}()
-				serveBootstrapRedis(conn, value, pingReply)
+				serveBootstrapRedis(conn, value, pingReply, commands...)
 			}()
 		}
 	}()
@@ -82,7 +82,7 @@ func (s *bootstrapRedisServer) requireClosed(t *testing.T) {
 	}
 }
 
-func serveBootstrapRedis(conn net.Conn, value, pingReply string) {
+func serveBootstrapRedis(conn net.Conn, value, pingReply string, commands ...func([]string) string) {
 	reader := bufio.NewReader(conn)
 	for {
 		args, err := readBootstrapRedisCommand(reader)
@@ -104,6 +104,10 @@ func serveBootstrapRedis(conn net.Conn, value, pingReply string) {
 			reply = fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
 			if len(args) > 1 && args[1] == "missing" {
 				reply = "$-1\r\n"
+			}
+		default:
+			if len(commands) > 0 {
+				reply = commands[0](args)
 			}
 		}
 		if _, err := io.WriteString(conn, reply); err != nil {

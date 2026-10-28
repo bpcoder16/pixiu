@@ -175,7 +175,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | [`biz/ossservice`](biz/ossservice/doc.go) | multipart 上传、指定对象的 STS 凭据签发、URL 内容 MD5 | 上传需要 OSS，签发另需 STS；MD5FromURL 为独立包函数，无需客户端 |
 | [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
 | [`biz/appconfig`](biz/appconfig/doc.go) | 直接定义 env/log，严格解析应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/appconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
-| [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
+| [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，默认及命名执行器，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
 
 `biz/appconfig` 直接定义应用共用的环境与日志配置；HTTP、Cron 各自独立配置，由 bootstrap 显式装配。原 httpconfig 和 baseconfig 已删除，不保留兼容入口。
@@ -183,6 +183,8 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 `appconfig.MustLoadAppConfig` 使用 `configx.Parse`，支持 YAML / TOML / JSON，拒绝未知字段和弱类型转换；配置只返回给调用方，环境由 `env.Init` 一次性发布。应用配置文件所在目录作为 `env.ConfigDirPath()`，供 bootstrap 查找实例配置。加载配置不会初始化日志或修改 `time.Local`；`bootstrap.MustBaseInit` 在日志创建前应用环境时区，再依次初始化日志、OSS、STS、阿里云 ES、MySQL、Redis、Elasticsearch 和 NATS，共享客户端仅初始化已声明的实例。
 
 HTTP、Cron 和 NATS 统一停收，共享默认 30 秒并行排空；超时取消剩余任务。正常和超时路径都执行资源回收，lifecycle.Stack 默认整体 20 秒，可用 `lifecycle.New(timeout)` 设置；到期停止发起后续关闭，入口退出。资源逆序回收，日志最后关闭；同一模块的多命名实例不保证关闭顺序。初始化前登记收尾 defer，初始化失败同样有界回收。
+
+共享业务锁通过 `bootstrap.MustRegisterRedisLock(name, isDefault, redisName, redislock.Config{...})` 在代码中声明，无需锁配置文件。`MustBaseInit` 在 Redis 就绪后装配执行器，业务使用 `lockx.Default().Do/TryDo` 或 `lockx.Named(name).Do/TryDo`。多个锁实例可共享同一个 Redis，分别设置租期与等待参数；默认执行器也是对应的命名实例。Redis 须设置 `maxRetries: -1`，执行器不创建或关闭连接池，实例名不改变业务 key。独立装配可使用 `lockx.New/NewNamed/NewDefault`，具体示例见 [bootstrap](biz/bootstrap/doc.go) 和 [lockx](biz/lockx/doc.go)。
 
 初始化完成后可调用 bootstrap.NewAppManager() 创建默认 30 秒管理器，也可传入不小于 5 秒的自定义时长。NewHTTPService(handler) 严格读取 http.yaml，并适配 Run/Stop/Wait/Cancel。登记后调用 RunSignals，返回后关闭资源栈。
 

@@ -19,6 +19,20 @@ var redisInstances = instanceGroup[redisFileConfig, redisx.Config, *redisx.Clien
 	closeAll:   redisx.CloseAll,
 }
 
+// redisx 的命名读取采用 panic 契约；只在查询边界将它转成构造错误，不恢复其他初始化 panic。
+func namedRedis(name string) (client *redisx.Client, err error) {
+	defer func() {
+		if value := recover(); value != nil {
+			if cause, ok := value.(error); ok {
+				err = fmt.Errorf("Redis %q: %w", name, cause)
+			} else {
+				err = fmt.Errorf("Redis %q: %v", name, value)
+			}
+		}
+	}()
+	return redisx.Named(name), nil
+}
+
 // MustRegisterRedis 声明一个 Redis 实例，不读配置或建立连接。
 // 仅在 MustBaseInit 前串行调用；name 只允许非空 ASCII 字母、数字、下划线和连字符。
 // 重复名称、第二个默认实例或初始化开始后注册均 panic；允许不设置默认实例。

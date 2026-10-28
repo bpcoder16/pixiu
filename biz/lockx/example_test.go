@@ -25,3 +25,19 @@ func ExampleDo() {
 	}
 	_ = confirm
 }
+
+func ExampleNewNamed() {
+	// 后端由启动流程创建；两个后端可以共享 Redis 并持有不同的租期配置。
+	configure := func(normal, longTask lockx.Backend) error {
+		if _, err := lockx.NewDefault("default", normal); err != nil {
+			return err
+		}
+		_, err := lockx.NewNamed("long-task", longTask)
+		return err
+	}
+	run := func(ctx context.Context, key string, work func(context.Context) error) error {
+		return lockx.Named("long-task").Do(ctx, key, work)
+	}
+	_ = configure
+	_ = run
+}

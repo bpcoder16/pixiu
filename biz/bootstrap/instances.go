@@ -30,13 +30,8 @@ func (g *instanceGroup[FileConfig, Config, Client]) mustRegister(name string, is
 	if baseInitStarted {
 		panic(fmt.Errorf("bootstrap: initialization has started; cannot register %s %q", g.kind, name))
 	}
-	if name == "" {
-		panic(fmt.Errorf("bootstrap: invalid %s name %q", g.kind, name))
-	}
-	for _, ch := range name {
-		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '_' || ch == '-') {
-			panic(fmt.Errorf("bootstrap: invalid %s name %q: only ASCII letters, digits, '_' and '-' are allowed", g.kind, name))
-		}
+	if err := validateInstanceName(g.kind, name); err != nil {
+		panic(err)
 	}
 	for _, registered := range g.registrations {
 		if registered.name == name {
@@ -50,6 +45,18 @@ func (g *instanceGroup[FileConfig, Config, Client]) mustRegister(name string, is
 		name:      name,
 		isDefault: isDefault,
 	})
+}
+
+func validateInstanceName(kind, name string) error {
+	if name == "" {
+		return fmt.Errorf("bootstrap: invalid %s name %q", kind, name)
+	}
+	for _, ch := range name {
+		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '_' || ch == '-') {
+			return fmt.Errorf("bootstrap: invalid %s name %q: only ASCII letters, digits, '_' and '-' are allowed", kind, name)
+		}
+	}
+	return nil
 }
 
 func (g *instanceGroup[FileConfig, Config, Client]) configPath(name string) string {

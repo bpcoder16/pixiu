@@ -12,6 +12,12 @@
 //	bootstrap.MustRegisterMySQL("orders", true)
 //	bootstrap.MustRegisterMySQL("reports", false)
 //	bootstrap.MustRegisterRedis("orders", true)
+//	bootstrap.MustRegisterRedisLock("default", true, "orders", redislock.Config{
+//		TTL: time.Minute,
+//	})
+//	bootstrap.MustRegisterRedisLock("long-task", false, "orders", redislock.Config{
+//		TTL: 5 * time.Minute,
+//	})
 //	bootstrap.MustRegisterElasticsearch("orders", true)
 //	bootstrap.MustRegisterAliyunOSS("assets", true)
 //	bootstrap.MustRegisterAliyunES("search-control", true)
@@ -20,13 +26,20 @@
 //	moduleLogger := logit.With(logit.Str("mod", "orders"))
 //	moduleLogger.Info(context.Background(), "application initialized")
 //
-// 示例使用标准库 context、errors，以及 pixiu 的 biz/appconfig、biz/bootstrap、
+// 示例使用标准库 context、errors、time，以及 pixiu 的 biz/appconfig、biz/bootstrap、biz/lockx/redislock、
 // lifecycle、logit。初始化 panic 原样传播，已创建资源由应用的 defer 关闭。
 // 通用入口接收 *appconfig.AppConfig；HTTP 与 Cron 共用 env/log 配置及初始化流程。
 // 先应用 env 时区，再依次初始化日志、OSS、STS、阿里云 ES、MySQL、Redis、Elasticsearch 和 NATS；
 // 共享客户端仅初始化已声明的实例。HTTP、Cron 和 NATS 消费者完成排空或超时取消后，
 // 资源栈依次关闭 NATS、Elasticsearch、Redis、MySQL、阿里云 ES、STS、OSS、日志。
 // 该顺序按组件类别描述，不保证同一组件内多个命名实例的关闭顺序。
+//
+// MustRegisterRedisLock(name, isDefault, redisName, cfg) 只保存代码声明，不读取锁配置文件。
+// Redis 初始化后按 redisName 解析已就绪的命名客户端，构造并发布 lockx.Default()/Named(name)。
+// 不要求 Redis 自身是默认实例；多个锁实例可共享连接池，TTL、WaitTimeout、RetryInterval 各自独立。
+// Redis 客户端须禁用命令自动重试（maxRetries: -1）；依赖缺失、配置或登记失败会中止启动。
+// 执行器不新增连接池或关闭动作，业务排空后仍由 Redis 原有资源登记回收。
+// 锁实例名不参与 key 构造，默认执行器与同名 Named 实例共享；未声明锁时跳过该装配阶段。
 //
 // 新项目应先完成 MustBaseInit，再通过 logit.Default、logit.With 或 logit.Named 创建和保存模块 Logger，
 // 如上例所示；不要在先于 bootstrap 执行的包变量初始化或 Go 的 init() 中缓存这些 Logger。

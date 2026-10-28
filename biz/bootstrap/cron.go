@@ -11,7 +11,6 @@ import (
 	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/cronx"
 	"github.com/bpcoder16/pixiu/infra/env"
-	"github.com/bpcoder16/pixiu/infra/redisx"
 	"github.com/bpcoder16/pixiu/logit"
 	redislock "github.com/go-co-op/gocron-redis-lock/v2"
 	"github.com/go-co-op/gocron/v2"
@@ -172,7 +171,7 @@ func (c cronLockConfig) locker() (gocron.Locker, error) {
 	if c.RenewInterval <= 0 || c.RenewInterval >= c.TTL {
 		return nil, errors.New("renewInterval must be positive and less than ttl")
 	}
-	client, err := cronRedis(c.RedisName)
+	client, err := namedRedis(c.RedisName)
 	if err != nil {
 		return nil, err
 	}
@@ -182,18 +181,4 @@ func (c cronLockConfig) locker() (gocron.Locker, error) {
 		redislock.WithAutoExtendDuration(c.RenewInterval),
 		redislock.WithRedsyncOptions(redislock.WithExpiry(c.TTL), redislock.WithTries(1)),
 	)
-}
-
-// redisx 的命名读取采用 panic 契约；只在查询边界将它转成构造错误，不恢复其他初始化 panic。
-func cronRedis(name string) (client *redisx.Client, err error) {
-	defer func() {
-		if value := recover(); value != nil {
-			if cause, ok := value.(error); ok {
-				err = fmt.Errorf("Redis %q: %w", name, cause)
-			} else {
-				err = fmt.Errorf("Redis %q: %v", name, value)
-			}
-		}
-	}()
-	return redisx.Named(name), nil
 }
