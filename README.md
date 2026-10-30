@@ -171,6 +171,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 
 | 包 | 能力 | 典型用途 |
 | --- | --- | --- |
+| [`biz/common`](biz/common/doc.go) | 按应用时区生成 ID、格式化时间，int64 万分之一整数与百分比精确互转 | 常规业务工具；ID 与时间依赖 env，百分比支持负数 |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
 | [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin / HTTP / Cron 服务构造、NATS 消费配置装配与显式 MySQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
 | [`biz/ossservice`](biz/ossservice/doc.go) | multipart 上传、指定对象的 STS 凭据签发、URL 内容 MD5 | 上传需要 OSS，签发另需 STS；MD5FromURL 为独立包函数，无需客户端 |
@@ -240,6 +241,7 @@ pixiu/
 │   │   └── esx/            阿里云 ES 管理 API
 │   └── internal/           infra 内部共用实现
 ├── biz/
+│   ├── common/             应用时区 ID、时间格式化与百分比转换
 │   ├── bootstrap/          组件初始化、运行管理器与 HTTP/Cron 服务构造
 │   ├── elasticsearchservice/ 同义词库索引验证与临时资源清理
 │   ├── ossservice/         multipart 上传、OSS 授权与 URL 内容 MD5
