@@ -2,9 +2,9 @@ package common
 
 import (
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
-
-	"github.com/bpcoder16/pixiu/moneyx"
 )
 
 var (
@@ -17,7 +17,14 @@ var (
 // FormatPercent 将万分之一整数转换为百分比字符串，最多两位小数并去除末尾零。
 // 例如 1000 返回 10%，-1001 返回 -10.01%；支持 int64 完整范围，不使用浮点运算。
 func FormatPercent(value int64) string {
-	percentage := moneyx.CentToYuan(value)
+	whole, fraction := value/100, value%100
+	sign := ""
+	if value < 0 {
+		// 拆分后再取反，避免直接对 int64 最小值取反溢出，并保留不足 1% 时的负号。
+		sign = "-"
+		whole, fraction = -whole, -fraction
+	}
+	percentage := fmt.Sprintf("%s%d.%02d", sign, whole, fraction)
 	return strings.TrimRight(strings.TrimRight(percentage, "0"), ".") + "%"
 }
 
@@ -30,13 +37,27 @@ func ParsePercent(value string) (int64, error) {
 	if !ok {
 		return 0, ErrInvalidPercent
 	}
-	// 百分数到万分之一整数也是两位定点缩放，复用 moneyx 保留 int64 边界精度。
-	result, err := moneyx.YuanToCent(percentage)
-	if errors.Is(err, moneyx.ErrOverflow) {
-		return 0, ErrPercentOverflow
-	}
-	if err != nil {
+	digits, negative := strings.CutPrefix(percentage, "-")
+	whole, fraction, hasDot := strings.Cut(digits, ".")
+	if whole == "" || (hasDot && (fraction == "" || len(fraction) > 2)) {
 		return 0, ErrInvalidPercent
+	}
+	for _, part := range []string{whole, fraction} {
+		for i := range len(part) {
+			if part[i] < '0' || part[i] > '9' {
+				return 0, ErrInvalidPercent
+			}
+		}
+	}
+	// 小数补齐两位后直接解析为万分之一整数；保留负号以覆盖 int64 最小值。
+	fraction += strings.Repeat("0", 2-len(fraction))
+	scaled := whole + fraction
+	if negative {
+		scaled = "-" + scaled
+	}
+	result, err := strconv.ParseInt(scaled, 10, 64)
+	if err != nil {
+		return 0, ErrPercentOverflow
 	}
 	return result, nil
 }
