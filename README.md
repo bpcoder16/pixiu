@@ -144,7 +144,7 @@ func main() {
 | [`infra/taskpool`](infra/taskpool/doc.go) | 本地异步任务、有界队列、worker 扩缩容、重试与排空 | logit |
 | [`infra/lrucache`](infra/lrucache/doc.go) | 泛型有界 LRU、默认 / 单条目 TTL、独立及命名实例 | ttlcache v3 |
 | [`infra/mysqlx`](infra/mysqlx/doc.go) | MySQL 连接池、显式主从选择、查询日志 | GORM、MySQL 驱动、logit |
-| [`infra/gormx`](infra/gormx/doc.go) | Repository 主、从库会话依赖 Sessions | GORM |
+| [`infra/gormx`](infra/gormx/doc.go) | Repository 主、从库会话依赖 Sessions，按关键词原文进行 LIKE 包含匹配 | GORM |
 | [`infra/schemamigrate`](infra/schemamigrate/doc.go) | AutoMigrate、物理分表、MySQL 表注释及按数量校准 SQL 种子 | GORM |
 | [`infra/pgsqlx`](infra/pgsqlx/doc.go) | PostgreSQL 连接池、显式主从选择、查询日志 | GORM、pgx、logit |
 | [`infra/clickhousex`](infra/clickhousex/doc.go) | ClickHouse 连接池、显式主从选择、查询日志 | GORM、ClickHouse 驱动、logit |
@@ -226,7 +226,7 @@ pixiu/
 │   ├── taskpool/           本地异步任务池
 │   ├── lrucache/           LRU / TTL 缓存
 │   ├── mysqlx/             MySQL
-│   ├── gormx/              Repository 主、从库会话依赖
+│   ├── gormx/              Repository 主、从库会话依赖与 LIKE 包含匹配
 │   ├── schemamigrate/      显式表结构迁移、MySQL 表注释与 SQL 种子校准
 │   ├── pgsqlx/             PostgreSQL
 │   ├── clickhousex/        ClickHouse
