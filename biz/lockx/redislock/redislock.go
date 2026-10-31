@@ -15,18 +15,18 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Config 配置阻塞锁（Lock）与非阻塞锁（TryLock），不自动续租。
+// Config 配置单 key 阻塞锁及单 key、整批非阻塞锁，不自动续租。
 type Config struct {
-	// TTL 是阻塞锁（Lock）和非阻塞锁（TryLock）共用的持有租期。
+	// TTL 是 Lock、TryLock 和 TryLockMany 共用的持有租期。
 	// 零值默认 1 分钟，负值无效。
 	// Redis 无条件按租期失效；长任务须显式配置足够的时间。
 	TTL time.Duration
 	// WaitTimeout 仅用于阻塞锁（Lock），限制获取阶段的总等待时间。
-	// 零值默认 5 秒，负值无效；非阻塞锁（TryLock）不使用此字段。
+	// 零值默认 5 秒，负值无效；TryLock / TryLockMany 不使用此字段。
 	// 包含连接池、网络与日志耗时，不进入成功后的工作预算。
 	WaitTimeout time.Duration
 	// RetryInterval 仅用于阻塞锁（Lock），控制竞争失败后的等待间隔。
-	// 零值默认 50ms，负值无效；非阻塞锁（TryLock）不使用此字段。
+	// 零值默认 50ms，负值无效；TryLock / TryLockMany 不使用此字段。
 	// 实际等待加入小幅随机抖动。
 	RetryInterval time.Duration
 }
@@ -42,15 +42,14 @@ type Locker struct {
 
 type lock struct {
 	client   *redis.Client
-	key      string
+	keys     []string
 	token    string
 	deadline time.Time
 }
 
 var (
-	_ lockx.Locker    = (*Locker)(nil)
-	_ lockx.TryLocker = (*Locker)(nil)
-	_ lockx.Lock      = (*lock)(nil)
+	_ lockx.Backend = (*Locker)(nil)
+	_ lockx.Lock    = (*lock)(nil)
 )
 
 // 比较与删除在同一脚本内完成，避免旧持有者删除过期后新建的锁。
@@ -141,6 +140,11 @@ func (l *Locker) Lock(ctx context.Context, key string) (lockx.Lock, error) {
 // key 原样使用，配置的 TTL 向上取整到毫秒；租期不从返回时重新起算。
 // 已确认成功但因取消或超时无法交付时，使用独立的 1 秒预算尽力释放。
 func (l *Locker) TryLock(ctx context.Context, key string) (lockx.Lock, bool, error) {
+	return l.tryLock(ctx, []string{key})
+}
+
+// tryLock 统一单 key 和批量获取的租期与清理流程，只在命令层区分数量。
+func (l *Locker) tryLock(ctx context.Context, keys []string) (lockx.Lock, bool, error) {
 	start := time.Now()
 	if l == nil || l.client == nil {
 		return nil, false, errors.New("redislock: uninitialized locker")
@@ -148,8 +152,28 @@ func (l *Locker) TryLock(ctx context.Context, key string) (lockx.Lock, bool, err
 	if ctx == nil {
 		return nil, false, errors.New("redislock: nil context")
 	}
-	if strings.TrimSpace(key) == "" {
-		return nil, false, errors.New("redislock: empty key")
+	if len(keys) == 0 {
+		return nil, false, errors.New("redislock: empty keys")
+	}
+	var unique []string
+	if len(keys) == 1 {
+		if strings.TrimSpace(keys[0]) == "" {
+			return nil, false, errors.New("redislock: empty key")
+		}
+		// 单 key 不创建去重 map，仍需快照以免调用方修改切片影响释放。
+		unique = []string{keys[0]}
+	} else {
+		unique = make([]string, 0, len(keys))
+		seen := make(map[string]struct{}, len(keys))
+		for _, key := range keys {
+			if strings.TrimSpace(key) == "" {
+				return nil, false, errors.New("redislock: empty key")
+			}
+			if _, exists := seen[key]; !exists {
+				seen[key] = struct{}{}
+				unique = append(unique, key)
+			}
+		}
 	}
 	deadline := start.Add(l.ttl)
 	attemptCtx, cancel := context.WithDeadline(ctx, deadline)
@@ -163,37 +187,62 @@ func (l *Locker) TryLock(ctx context.Context, key string) (lockx.Lock, bool, err
 		milliseconds++
 	}
 	token := rand.Text()
-	result, err := l.client.Do(attemptCtx, "SET", key, token, "NX", "PX", milliseconds).Text()
-	if err != nil && !errors.Is(err, redis.Nil) {
+	acquired, err := l.acquire(attemptCtx, unique, token, milliseconds)
+	if err != nil {
 		return nil, false, fmt.Errorf("redislock: try lock: %w", errors.Join(err, lockctx.Err(attemptCtx)))
+	}
+	var held *lock
+	if acquired {
+		held = &lock{
+			client:   l.client,
+			keys:     unique,
+			token:    token,
+			deadline: deadline,
+		}
 	}
 	// 包括网络及日志耗时；晚到的成功不能交付为仍可使用的锁。
 	if ctxErr := lockctx.Err(attemptCtx); ctxErr != nil {
-		if err == nil && result == "OK" {
+		if held != nil {
 			// 上层拿不到句柄，必须在此按本次身份清理，并脱离已失效的获取预算。
 			unlockCtx, unlockCancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 			defer unlockCancel()
-			held := lock{
-				client: l.client,
-				key:    key,
-				token:  token,
-			}
 			ctxErr = errors.Join(ctxErr, held.Unlock(unlockCtx))
 		}
 		return nil, false, fmt.Errorf("redislock: try lock: %w", ctxErr)
 	}
-	if errors.Is(err, redis.Nil) {
+	if !acquired {
 		return nil, false, nil
 	}
-	if result != "OK" {
-		return nil, false, errors.New("redislock: unexpected SET result")
+	return held, true, nil
+}
+
+// acquire 将两种原子命令归一成成功、竞争、错误，绝不逐个获取多 key。
+func (l *Locker) acquire(ctx context.Context, keys []string, token string, milliseconds int64) (bool, error) {
+	if len(keys) == 1 {
+		result, err := l.client.Do(ctx, "SET", keys[0], token, "NX", "PX", milliseconds).Text()
+		if errors.Is(err, redis.Nil) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if result != "OK" {
+			return false, errors.New("redislock: unexpected SET result")
+		}
+		return true, nil
 	}
-	return &lock{
-		client:   l.client,
-		key:      key,
-		token:    token,
-		deadline: deadline,
-	}, true, nil
+	result, err := l.client.Eval(ctx, acquireManyScript, keys, token, milliseconds).Int64()
+	if err != nil {
+		return false, err
+	}
+	switch result {
+	case 0:
+		return false, nil
+	case 1:
+		return true, nil
+	default:
+		return false, errors.New("redislock: unexpected batch acquire result")
+	}
 }
 
 func (l *lock) Deadline() (time.Time, bool) {
@@ -209,17 +258,17 @@ func (l *lock) Unlock(ctx context.Context) error {
 	if err := lockctx.Err(ctx); err != nil {
 		return fmt.Errorf("redislock: unlock: %w", err)
 	}
-	result, err := l.client.Eval(ctx, unlockScript, []string{l.key}, l.token).Int64()
+	script := unlockScript
+	if len(l.keys) > 1 {
+		script = unlockManyScript
+	}
+	result, err := l.client.Eval(ctx, script, l.keys, l.token).Int64()
 	if err != nil {
 		return fmt.Errorf("redislock: unlock: %w", errors.Join(err, lockctx.Err(ctx)))
 	}
-	switch result {
-	case 1:
-		return nil
-	case 0:
-		// key 已过期、已释放或身份已改变时，本次释放已完成；不能删除新锁。
-		return nil
-	default:
+	if result < 0 || result > int64(len(l.keys)) {
 		return errors.New("redislock: unexpected unlock result")
 	}
+	// 已过期、已释放或身份改变的 key 视为完成；批量中其余 key 继续清理。
+	return nil
 }

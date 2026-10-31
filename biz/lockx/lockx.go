@@ -48,7 +48,10 @@ func Do(ctx context.Context, locker Locker, key string, fn func(context.Context)
 	if locker == nil {
 		return errors.New("lockx: nil locker")
 	}
-	_, err := run(ctx, key, fn, func() (Lock, bool, error) {
+	if strings.TrimSpace(key) == "" {
+		return errors.New("lockx: empty key")
+	}
+	_, err := run(ctx, fn, func() (Lock, bool, error) {
 		lock, err := locker.Lock(ctx, key)
 		return lock, err == nil, err
 	})
@@ -61,14 +64,16 @@ func TryDo(ctx context.Context, locker TryLocker, key string, fn func(context.Co
 	if locker == nil {
 		return false, errors.New("lockx: nil locker")
 	}
-	return run(ctx, key, fn, func() (Lock, bool, error) {
+	if strings.TrimSpace(key) == "" {
+		return false, errors.New("lockx: empty key")
+	}
+	return run(ctx, fn, func() (Lock, bool, error) {
 		return locker.TryLock(ctx, key)
 	})
 }
 
 func run(
 	ctx context.Context,
-	key string,
 	fn func(context.Context) error,
 	acquire func() (Lock, bool, error),
 ) (executed bool, err error) {
@@ -77,9 +82,6 @@ func run(
 	}
 	if fn == nil {
 		return false, errors.New("lockx: nil function")
-	}
-	if strings.TrimSpace(key) == "" {
-		return false, errors.New("lockx: empty key")
 	}
 	if err := lockctx.Err(ctx); err != nil {
 		return false, err

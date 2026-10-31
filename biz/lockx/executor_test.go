@@ -14,6 +14,7 @@ import (
 type executorBackend struct {
 	Locker
 	TryLocker
+	TryManyLocker
 }
 
 func isolatedExecutor(t *testing.T, run func()) {

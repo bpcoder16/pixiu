@@ -6,10 +6,11 @@ import (
 	"reflect"
 )
 
-// Backend 同时支持阻塞与非阻塞获取，供执行器绑定；共享使用时须支持并发调用。
+// Backend 同时支持单 key 阻塞、单 key 非阻塞及整批非阻塞获取；共享使用时须支持并发调用。
 type Backend interface {
 	Locker
 	TryLocker
+	TryManyLocker
 }
 
 // Executor 绑定可复用的锁后端，调用时只需传入请求 context、业务 key 和回调。

@@ -41,3 +41,11 @@ func ExampleNewNamed() {
 	_ = configure
 	_ = run
 }
+
+// 批量竞争只尝试一次；业务 key 由应用按资源构造。
+func ExampleExecutor_TryDoMany() {
+	publish := func(ctx context.Context, keys []string, work func(context.Context) error) (bool, error) {
+		return lockx.Default().TryDoMany(ctx, keys, work)
+	}
+	_ = publish
+}

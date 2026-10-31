@@ -1,5 +1,9 @@
 // Package redislock 通过 infra/redisx 实现单机 Redis 上的阻塞与非阻塞锁。
-// 获取以 SET NX PX 原子写入随机令牌及 TTL，释放以 Lua 原子比较令牌并删除。
+// TryLock 与 TryLockMany 共用获取和释放流程；去重后一个 key 使用 SET NX PX，
+// 多个 key 通过一次 Lua 逐个 SET NX PX，不额外进行 EXISTS 预检查。
+// 任一 key 被占用时清理此前已获取的锁，不交付部分句柄；各 key 保存同一本次令牌和 TTL。
+// 单 key 与批量协议互斥；竞争且清理成功才作为普通竞争失败，清理失败返回错误。
+// 批量释放逐个校验令牌，单个 key 已到期或更换持有者不影响其余占用的释放。
 //
 // 以下示例需导入 context、time、github.com/redis/go-redis/v9、
 // github.com/bpcoder16/pixiu/infra/redisx、github.com/bpcoder16/pixiu/biz/lockx
@@ -46,6 +50,26 @@
 //	    return nil
 //	}
 //	return nil
+//
+// 批量获取使用相同的实例与 TTL，仅尝试一次；下面的 keys 由应用构造：
+//
+//	executed, err := lockx.TryDoMany(ctx, locker, []string{
+//	    "orders:lock:confirm:123",
+//	    "orders:lock:confirm:456",
+//	}, confirm)
+//	if err != nil {
+//	    return err
+//	}
+//	if !executed {
+//	    return nil
+//	}
+//
+// TryLockMany 也可直接取得一个管理整批 key 的 lockx.Lock。输入按原值复制去重，
+// 空列表或包含空白 key 均返回错误；使用者应限制批次大小，Lua 执行会占用 Redis 主线程。
+// Lua 错误不自动回滚；竞争或写入错误时清理已写入的本次占用，不交付部分句柄。
+// 清理遇到错误仍继续处理其余 key，返回首个清理错误，并保留已有的写入错误；遗留占用由 TTL 回收。
+// 批量解锁遇到某个 key 的错误仍尝试处理其余 key，最终返回错误；无法清理的占用依靠 TTL 回收。
+// 本实现仅支持单机 Redis，不提供跨 Cluster 槽的多 key 锁。
 //
 // confirm 为应用提供的业务函数。Locker 复用并可并发使用传入的客户端，
 // 不负责连接池的创建和关闭。New 要求创建客户端时设置 MaxRetries=-1，

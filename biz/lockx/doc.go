@@ -33,8 +33,22 @@
 //	    return lockx.TryDo(ctx, locker, "orders:confirm:123", confirm)
 //	}
 //
-// TryDo 的 false、nil 表示竞争失败，true 只表示进入过回调，不代表业务已提交。
-// 两个函数同步执行回调最多一次，工作期限取请求与 Lock.Deadline 的较早者。
+// 批量非阻塞执行使用 TryDoMany 或 executor.TryDoMany，Backend 已要求实现 TryManyLocker：
+//
+//	func tryConfirmBatch(
+//	    ctx context.Context,
+//	    keys []string,
+//	    confirm func(context.Context) error,
+//	) (bool, error) {
+//	    return lockx.Default().TryDoMany(ctx, keys, confirm)
+//	}
+//
+// keys 必须非空且不能包含空白 key；复制并按原值去重，不修剪、不改大小写。
+// 整批获取成功后才执行一次回调；任一冲突时整批失败。单 key 与批量使用相同 key 时互斥。
+// Backend 内嵌 Locker、TryLocker 和 TryManyLocker，三种能力在编译期约束，执行器直接调用。
+// 仅增加非阻塞批量能力，不提供 DoMany / LockMany。应用应限制单次 key 数量，避免过大批次占用后端。
+// TryDo / TryDoMany 的 false、nil 表示竞争失败，true 只表示进入过回调，不代表业务已提交。
+// 上述执行函数同步执行回调最多一次，工作期限取请求与 Lock.Deadline 的较早者。
 // 获取阶段等待预算不会带入工作；内置 Redis 租期锁不自动续租。
 // 回调返回或 panic 后使用独立的 1 秒期限尽力释放；正常返回合并错误，保留原始 panic。
 //
