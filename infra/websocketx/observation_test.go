@@ -303,3 +303,88 @@ func TestCallbackDeadlineClassification(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalCloseCallbackDrainResult(t *testing.T) {
+	for _, kind := range []EventKind{EventOpened, EventHandled, EventRevalidated} {
+		for _, mode := range []string{"success", "callback-error", "endpoint-cancel", "late-return"} {
+			t.Run(string(kind)+"/"+mode, func(t *testing.T) {
+				entered := make(chan *Session, 1)
+				release := make(chan struct{})
+				observed := make(chan Event, 1)
+				var e *Endpoint
+				callback := func(ctx context.Context, s *Session) error {
+					entered <- s
+					<-release
+					if _, err := s.Close(websocket.CloseNormalClosure, "completed"); err != nil {
+						return err
+					}
+					if mode == "endpoint-cancel" {
+						e.Cancel()
+					}
+					if mode == "late-return" {
+						deadline, _ := ctx.Deadline()
+						time.Sleep(time.Until(deadline) + time.Millisecond)
+					}
+					if mode == "callback-error" {
+						return errors.New("business failure")
+					}
+					return nil
+				}
+				cfg := Config{
+					RevalidateInterval: time.Millisecond,
+					Observe: func(_ context.Context, event Event) {
+						if event.Kind == kind {
+							observed <- event
+						}
+					},
+				}
+				if mode == "late-return" {
+					cfg.MessageTimeout = 100 * time.Millisecond
+					cfg.RevalidateTimeout = 100 * time.Millisecond
+				}
+				switch kind {
+				case EventOpened:
+					cfg.OnOpen = callback
+				case EventHandled:
+					cfg.OnMessage = func(ctx context.Context, s *Session, _ Message) error {
+						return callback(ctx, s)
+					}
+				case EventRevalidated:
+					cfg.Revalidate = callback
+				}
+				e, server := newTestEndpoint(t, cfg)
+				defer func() {
+					if !isClosed(release) {
+						close(release)
+					}
+				}()
+				c := dialTest(t, server)
+				if kind == EventHandled {
+					if err := c.WriteMessage(websocket.TextMessage, []byte("finish")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				s := await(t, entered)
+				_ = e.Stop()
+				close(release)
+				event := await(t, observed)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				err := e.Wait(ctx)
+				if mode == "success" {
+					if event.Err != nil || err != nil {
+						t.Errorf("成功回调正常关闭不应报错: event=%v wait=%v", event.Err, err)
+					}
+				} else {
+					var failures *DrainError
+					if event.Err == nil || !errors.As(err, &failures) || failures.CallbackErrors != 1 {
+						t.Errorf("真实回调失败被正常关闭掩盖: event=%v wait=%v", event.Err, err)
+					}
+				}
+				if s.Usage() != (Usage{}) || e.Budget().Usage() != (Usage{}) {
+					t.Fatalf("关闭后预算未释放: session=%+v budget=%+v", s.Usage(), e.Budget().Usage())
+				}
+			})
+		}
+	}
+}

@@ -106,7 +106,8 @@ func (e *Endpoint) checkOrigin(r *http.Request) bool {
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	return origin == scheme+"://"+strings.ToLower(r.Host)
+	requestOrigin, err := originKey(scheme + "://" + r.Host)
+	return err == nil && origin == requestOrigin
 }
 
 // ServeHTTP 的握手同步执行，返回后不再保存或使用 HTTP/Gin 请求对象。

@@ -424,6 +424,65 @@ func TestOriginAndNegotiatedSubprotocol(t *testing.T) {
 	}
 }
 
+func TestOriginDefaultPorts(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		target  string
+		allowed string
+		origin  string
+		accept  bool
+	}{
+		{"allow-http", "http://service.test/ws", "http://EXAMPLE.com:80", "http://example.com", true},
+		{"allow-https", "https://service.test/ws", "https://example.com:443", "https://example.com", true},
+		{"origin-port", "https://service.test/ws", "https://example.com", "https://example.com:443", true},
+		{"host-http", "http://example.com:80/ws", "", "http://example.com", true},
+		{"host-https", "https://example.com:443/ws", "", "https://example.com", true},
+		{"same-origin-port", "https://example.com/ws", "", "https://example.com:443", true},
+		{"ipv6", "http://[::1]:80/ws", "", "http://[::1]", true},
+		{"allow-nondefault", "https://service.test/ws", "https://example.com:8443", "https://example.com", false},
+		{"host-nondefault", "https://example.com:8443/ws", "", "https://example.com", false},
+		{"matching-nondefault", "https://example.com:8443/ws", "", "https://example.com:8443", true},
+		{"different-scheme", "http://example.com:80/ws", "", "https://example.com:443", false},
+		{"different-host", "https://example.com:443/ws", "", "https://other.test", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var authenticated bool
+			cfg := Config{
+				Authenticate: func(context.Context, *http.Request) (Identity, error) {
+					authenticated = true
+					return Identity{}, errors.New("stop before upgrade")
+				},
+			}
+			if tc.allowed != "" {
+				cfg.AllowedOrigins = []string{tc.allowed}
+			}
+			e, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				e.Cancel()
+				_ = e.Wait(context.Background())
+			}()
+			r := httptest.NewRequest(http.MethodGet, tc.target, nil)
+			r.Header.Set("Connection", "Upgrade")
+			r.Header.Set("Upgrade", "websocket")
+			r.Header.Set("Sec-WebSocket-Version", "13")
+			r.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+			r.Header.Set("Origin", tc.origin)
+			w := httptest.NewRecorder()
+			e.ServeHTTP(w, r)
+			want := http.StatusForbidden
+			if tc.accept {
+				want = http.StatusUnauthorized
+			}
+			if authenticated != tc.accept || w.Code != want {
+				t.Fatalf("Origin 校验错误: authenticated=%t status=%d，期望 %t/%d", authenticated, w.Code, tc.accept, want)
+			}
+		})
+	}
+}
+
 func TestRepeatedSubprotocolHeaders(t *testing.T) {
 	for _, required := range []bool{true, false} {
 		for _, tc := range []struct {

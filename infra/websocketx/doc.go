@@ -36,6 +36,7 @@
 //
 // 原始传输默认允许匿名，生产应用可配置 Authenticate 校验凭据并返回不可变 Identity。
 // AllowedOrigins 默认为完整 scheme/host/port 同源匹配；缺失 Origin 的非浏览器客户端默认允许。
+// HTTP 的 80、HTTPS 的 443 默认端口省略与显式填写等价；非默认端口仍须匹配。
 // 代理后的外部 Origin 应显式配置，组件不信任 X-Forwarded-*。
 // RequireSubprotocol 要求至少一个配置子协议被客户端提供，握手失败不会执行业务消息回调。
 //
@@ -149,6 +150,7 @@
 // 组件日志/观察仅含元信息，回调错误和 panic 值不会原样进入组件日志。
 // 关闭观察区分正常停机、传输断开、读取超时及协议错误；1006 仅作本地异常断开状态，不发送到网络。
 // 回调自身超时保留 context.DeadlineExceeded，先发生的主动取消保留 context.Canceled。
+// 1000 正常关闭后按时返回 nil 的回调仍算成功；Endpoint.Cancel、关闭故障及实际队列丢弃仍按失败处理。
 //
 // HTTP Shutdown 不回收已 Hijack 的连接。应用应先完成服务 Stop/Wait 或超时 Cancel，
 // 然后按既有资源栈顺序回收共享客户端，最后关闭日志；不要在资源阶段再次无限等待 Endpoint。

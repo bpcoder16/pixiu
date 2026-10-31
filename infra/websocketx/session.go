@@ -225,8 +225,18 @@ func (s *Session) invoke(deadline time.Time, code int, fn func(context.Context) 
 	if !timer.Stop() {
 		<-timedOut
 	}
-	if ctx.Err() != nil || !time.Now().Before(deadline) {
-		err = ctx.Err()
+	ctxErr := ctx.Err()
+	expired := !time.Now().Before(deadline)
+	if err == nil && errors.Is(ctxErr, context.Canceled) && !expired && !s.endpoint.canceled.Load() {
+		s.mu.Lock()
+		// 正常关闭也会取消 context，不能把按时成功的回调误报为排空失败。
+		if s.closeCode == websocket.CloseNormalClosure && s.closeCause == nil {
+			ctxErr = nil
+		}
+		s.mu.Unlock()
+	}
+	if ctxErr != nil || expired {
+		err = ctxErr
 		if err == nil {
 			err = context.DeadlineExceeded
 		}

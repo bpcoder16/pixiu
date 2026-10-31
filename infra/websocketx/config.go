@@ -111,6 +111,7 @@ type Config struct {
 	// RevalidateTimeout 是单次资格复核期限，默认 5 秒。
 	RevalidateTimeout time.Duration
 	// AllowedOrigins 是允许的完整 Origin 列表，空列表默认按 scheme/host/port 校验同源。
+	// HTTP 的 80、HTTPS 的 443 默认端口可省略，非默认端口须匹配。
 	AllowedOrigins []string
 	// AllowAnyOrigin 允许任意合法 Origin，与非空 AllowedOrigins 互斥。
 	AllowAnyOrigin bool
@@ -257,5 +258,12 @@ func originKey(value string) (string, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
 		return "", errors.New("invalid origin")
 	}
-	return u.Scheme + "://" + strings.ToLower(u.Host), nil
+	host := strings.ToLower(u.Host)
+	// 浏览器序列化 Origin 时省略默认端口，配置和请求 Host 使用同一规则。
+	if u.Scheme == "http" {
+		host = strings.TrimSuffix(host, ":80")
+	} else {
+		host = strings.TrimSuffix(host, ":443")
+	}
+	return u.Scheme + "://" + host, nil
 }
