@@ -109,14 +109,13 @@ type webSocketService struct {
 	http     apprun.Service
 	realtime *realtime.Server
 
-	mu       sync.Mutex // 协调 Run 工作登记与 Stop，停收后不能再 Add。
-	started  bool
-	stopping bool
-	runs     sync.WaitGroup
-	runsDone chan struct{}
-	runErrs  [2]error // 每个 Run 独占一项，Wait 在 runsDone 后读取。
-	stopOnce sync.Once
-	stopErr  error
+	mu         sync.Mutex // 协调 Run 与 Stop；先停收时由 Stop 直接关闭 runsDone。
+	started    bool
+	stopping   bool
+	runsDone   chan struct{}
+	lateRunErr error // 第二个 Run 的结果，在 runsDone 关闭后读取。
+	stopOnce   sync.Once
+	stopErr    error
 }
 
 func (s *webSocketService) run() error {
@@ -130,23 +129,23 @@ func (s *webSocketService) run() error {
 		s.mu.Unlock()
 		return nil
 	}
-	s.runs.Add(2)
 	s.mu.Unlock()
 	results := make(chan error, 2)
 	for i, run := range []func() error{s.http.Run, s.realtime.Run} {
 		go func() {
-			defer s.runs.Done()
 			component := s.http.Name
 			if i == 1 {
 				component = s.name + ":realtime"
 			}
-			err := callServiceCleanup(component, "run", run)
-			s.runErrs[i] = err
-			results <- err
+			results <- callServiceCleanup(component, "run", run)
 		}()
 	}
 	// 任一侧退出即停收另一侧；不能在此等待排空，否则会遮蔽监听失败并阻止管理器启动关闭。
 	err := <-results
+	go func() {
+		s.lateRunErr = <-results
+		close(s.runsDone)
+	}()
 	return errors.Join(err, s.stop())
 }
 
@@ -154,13 +153,12 @@ func (s *webSocketService) stop() error {
 	s.stopOnce.Do(func() {
 		s.mu.Lock()
 		s.stopping = true
+		if !s.started {
+			close(s.runsDone)
+		}
 		s.mu.Unlock()
 		// 先封闭升级门，再停监听；两侧 Stop 都不等待在途业务。
 		s.stopErr = errors.Join(s.realtime.Stop(), s.http.Stop())
-		go func() {
-			s.runs.Wait()
-			close(s.runsDone)
-		}()
 	})
 	return s.stopErr
 }
@@ -173,15 +171,18 @@ func (s *webSocketService) wait(ctx context.Context) error {
 	err := errors.Join(s.http.Wait(ctx), s.realtime.Wait(ctx))
 	select {
 	case <-s.runsDone:
-		return errors.Join(err, s.runErrs[0], s.runErrs[1])
 	default:
+		select {
+		case <-s.runsDone:
+		case <-ctx.Done():
+			return errors.Join(err, ctx.Err())
+		}
 	}
-	select {
-	case <-s.runsDone:
-		return errors.Join(err, s.runErrs[0], s.runErrs[1])
-	case <-ctx.Done():
-		return errors.Join(err, ctx.Err())
+	// realtime.Run 本身也等待排空；Wait 已返回同一错误时只保留一份。
+	if s.lateRunErr != nil && !errors.Is(err, s.lateRunErr) {
+		return errors.Join(err, s.lateRunErr)
 	}
+	return err
 }
 
 func (s *webSocketService) cancel() {

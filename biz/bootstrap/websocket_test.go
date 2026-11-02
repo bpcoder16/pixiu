@@ -144,6 +144,8 @@ func TestWebSocketServicesIndependent(t *testing.T) {
 		initHTTPConfigDir(t)
 		var services []apprun.Service
 		var clients []*websocket.Conn
+		// 路由检查结束即关闭普通 HTTP 连接，排空测试只保留显式建立的 WebSocket。
+		routeClient := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 		for i, name := range []string{"app", "web", "admin"} {
 			addr := wsAddress(t)
 			switch name {
@@ -189,7 +191,7 @@ func TestWebSocketServicesIndependent(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					response, err := http.DefaultClient.Do(req)
+					response, err := routeClient.Do(req)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -201,7 +203,7 @@ func TestWebSocketServicesIndependent(t *testing.T) {
 			}
 			for _, path := range []string{"/ws", "/ready/ws"} {
 				req, _ := http.NewRequest(http.MethodHead, "http://"+addr+path, nil)
-				response, err := http.DefaultClient.Do(req)
+				response, err := routeClient.Do(req)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -304,8 +306,8 @@ func TestWebSocketServiceFailureCleanup(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if err := service.Wait(ctx); errors.Is(err, context.DeadlineExceeded) {
-			t.Fatal("监听失败未回收另一侧")
+		if err := service.Wait(ctx); err != nil {
+			t.Fatalf("监听失败已通过 Run 上报，两侧排空应成功: %v", err)
 		}
 	})
 }

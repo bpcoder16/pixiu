@@ -11,6 +11,64 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestCancelIdleSessionWithoutOnClose(t *testing.T) {
+	opened := make(chan string, 1)
+	cfg := baseConfig()
+	cfg.Transport.Observe = func(_ context.Context, event websocketx.Event) {
+		if event.Kind == websocketx.EventOpened {
+			opened <- event.ConnectionID
+		}
+	}
+	server, h := startTestServer(t, cfg)
+	dial(t, h, SubprotocolJSON)
+	raw, ok := server.endpoint.Get(await(t, opened))
+	if !ok {
+		t.Fatal("找不到已完成初始化的连接")
+	}
+	server.Cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := server.Wait(ctx); err != nil {
+		t.Fatalf("空闲连接没有业务清理回调，排空应成功: %v", err)
+	}
+	if _, exists := server.sessions.Load(raw); exists {
+		t.Fatal("断开后仍保留业务会话")
+	}
+}
+
+func TestDetachDuringNewStateWithoutOnClose(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+	cfg := baseConfig()
+	cfg.NewState = func(ClientInfo) any {
+		close(entered)
+		<-release
+		return nil
+	}
+	server, h := startTestServer(t, cfg)
+	dial(t, h, SubprotocolJSON)
+	await(t, entered)
+	var raw *websocketx.Session
+	server.endpoint.Range(func(session *websocketx.Session) bool {
+		raw = session
+		return false
+	})
+	if raw == nil {
+		t.Fatal("找不到正在初始化的连接")
+	}
+	// Close 同步完成摘除，再放行 NewState，保证摘除先于会话登记。
+	if closed, err := raw.Close(websocket.CloseNormalClosure, "done"); err != nil || !closed {
+		t.Fatalf("断开连接失败: closed=%v err=%v", closed, err)
+	}
+	unblock()
+	await(t, raw.Done())
+	if _, exists := server.sessions.Load(raw); exists {
+		t.Fatal("初始化期间已摘除的连接被重新登记")
+	}
+}
+
 // 正常断连与停收都允许业务使用清理 ctx；Done 必须等待清理真实返回。
 func TestOnCloseIndependentContext(t *testing.T) {
 	for _, mode := range []string{"peer-close", "server-stop"} {
