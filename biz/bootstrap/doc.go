@@ -1,5 +1,5 @@
 // Package bootstrap 提供日志、MySQL、Redis、Elasticsearch、OSS、STS、阿里云 ES 和 NATS 多实例的通用初始化入口，
-// 以及应用运行管理器、Gin Engine、HTTP 和 Cron 服务的构造方法，供项目自己的 bootstrap 组装。
+// 以及应用运行管理器、Gin Engine、HTTP、realtime 和 Cron 服务的构造方法，供项目自己的 bootstrap 组装。
 //
 // 应用负责加载配置、创建资源关闭栈，并在初始化前登记关闭流程。
 // 以下片段放在具名返回 runErr error 的 run 函数内；main 在返回错误后退出：
@@ -434,4 +434,40 @@
 //
 // StartWithConfig 要求显式预算至少 5s；Start/NewAppManager 默认仍为 30s。
 // 总预算不包含资源栈、Client.Close 和日志；这些由应用随后调用 lifecycle.Stack.Close 回收，默认整体 20 秒，日志最后关闭。
+//
+// NewWebSocketService(name, factory) 构造独立端口的 WebSocket 服务。
+// 严格读取 websocket.<name>.yaml，顶层 addr 和 path 必填，监听字段与 http.yaml 相同。
+// HTTP 监听字段均放在顶层，http 嵌套块按未知字段拒绝。
+// 认证、端状态、JSON/PB 和连接限额仍由 factory 中的 realtime.Config 提供；每次返回全新、未 Run 的 Server。
+// 例如（另需导入 biz/realtime，先准备 websocket.app.yaml，模板见 conf.example/websocket.example.yaml）：
+//
+//	func startWebSocket(newServer func() (*realtime.Server, error)) error {
+//		return bootstrap.Start(func() (apprun.Service, error) {
+//			return bootstrap.NewWebSocketService("app", newServer)
+//		})
+//	}
+//
+// 可与 NewGinHTTPService 并列登记；app/web/admin 使用不同名称、端口和工厂即可独立运行。
+// 对外只有 websocket:<name> 一个 Service，内部直接管理 Server 和 HTTP 监听；不能重复登记内部服务。
+// 保留 GET /ready/ws（就绪 204、未就绪 503），升级路径与此探针仅允许 GET，其他方法含 HEAD 返回 405。
+// 只处理上述升级入口和就绪探针，其他路径返回 404，不提供普通 HTTP 路由扩展。
+// HTTP 与 realtime 并发 Run，探针确认当前可接纳；一个内部 Run 退出会封闭两侧入口并上报错误。
+// Stop/Cancel 支持先于 Run；Wait 共用外层期限，等待握手、会话回调、OnClose 及内部 Run 全部结束。
+// Wait 超时不取消清理，Cancel 同时通知 HTTP 与 realtime；OnClose 使用原有独立有界 Context。
+// 构造成功后服务取得 Server 所有权；构造失败回收已返回的部分对象，登记失败由 Start 回收。
+// 同进程实例仍共享进程资源与管理器统一停机策略；独立端口不自动隔离鉴权或提供独立进程扩缩容。
+//
+// 共用已有 HTTP 端口时，应用显式构造 apprun.Service，将 Server 的生命周期方法填入对应字段。
+// 同一个 server 挂到 Gin 或 ServeMux，再独立登记 HTTP 服务。
+// Start 工厂可按对象依赖顺序构造；运行与关闭并发进行，注册顺序不是生命周期依赖。
+// 完整 Gin/ServeMux 用法见 Example_realtimeGin 和 Example_realtimeServeMux；原始 Endpoint 不重复登记。
+// 例如已构造的 server 可在 Start 的一个工厂中交接：
+//
+//	return apprun.Service{
+//		Name:   "realtime:app",
+//		Run:    server.Run,
+//		Stop:   server.Stop,
+//		Wait:   server.Wait,
+//		Cancel: server.Cancel,
+//	}, nil
 package bootstrap

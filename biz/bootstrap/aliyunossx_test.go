@@ -142,7 +142,7 @@ func TestAliyunOSSTemplateInstancesLoggingAndShutdown(t *testing.T) {
 		}
 		cfg := loadLogConfig(t, "debug", "log:\n  format: json\n  hookStd: false\n")
 		var calls atomic.Int32
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			calls.Add(1)
 			body, err := io.ReadAll(r.Body)
 			if err != nil || string(body) != "data" || r.Method != http.MethodPut {
@@ -155,12 +155,14 @@ func TestAliyunOSSTemplateInstancesLoggingAndShutdown(t *testing.T) {
 			w.Header().Set("x-oss-request-id", "rid")
 		}))
 		defer server.Close()
+		// 先占用端口供配置引用，完成默认时区初始化后再启动 HTTP goroutine。
+		endpoint := "http://" + server.Listener.Addr().String()
 		for _, name := range []string{"assets", "archive"} {
 			content := strings.NewReplacer(
 				"example-assets", name+"-bucket",
 				"<部署时填写 AK>", name+"-bucket",
 				"<部署时填写 SK>", "test-secret",
-				`endpoint: ""`, `endpoint: "`+server.URL+`"`,
+				`endpoint: ""`, `endpoint: "`+endpoint+`"`,
 				`slowThreshold: "500ms"`, `slowThreshold: "1h"`,
 			).Replace(string(template))
 			if name == "assets" {
@@ -172,6 +174,7 @@ func TestAliyunOSSTemplateInstancesLoggingAndShutdown(t *testing.T) {
 		var resources lifecycle.Stack
 		defer resources.Close()
 		bootstrap.MustBaseInit(cfg, &resources)
+		server.Start()
 		if calls.Load() != 0 || ossx.Default() != ossx.Named("assets") {
 			t.Fatal("初始化不得发请求，默认与命名实例必须相同")
 		}

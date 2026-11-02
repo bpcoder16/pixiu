@@ -22,12 +22,17 @@ func NewHTTPService(handler http.Handler) (apprun.Service, error) {
 	if err != nil {
 		return apprun.Service{}, fmt.Errorf("bootstrap: load HTTP config: %w", err)
 	}
-	server, err := httpserver.New(*config, handler)
+	return newHTTPService("http", *config, handler)
+}
+
+// 共用监听适配，配置来源与服务名由外层装配决定。
+func newHTTPService(name string, config httpserver.Config, handler http.Handler) (apprun.Service, error) {
+	server, err := httpserver.New(config, handler)
 	if err != nil {
 		return apprun.Service{}, fmt.Errorf("bootstrap: create HTTP server: %w", err)
 	}
 	return apprun.Service{
-		Name: "http",
+		Name: name,
 		Run: func() error {
 			runErr := server.Run()
 			// 停机可先于 Run 进入；适配预期关闭错误，保留真实监听和排空错误。

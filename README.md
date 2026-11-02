@@ -173,7 +173,8 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | --- | --- | --- |
 | [`biz/common`](biz/common/doc.go) | 按应用时区生成 ID、格式化时间，int64 万分之一整数与百分比精确互转 | 常规业务工具；ID 与时间依赖 env，百分比支持负数 |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
-| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin / HTTP / Cron 服务构造、NATS 消费配置装配与显式 MySQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
+| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin / HTTP / WebSocket / Cron 服务构造、NATS 消费配置装配与显式 MySQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
+| [`biz/realtime`](biz/realtime/doc.go) | WebSocket 身份、独立业务状态、ProtoJSON/PB 编解码、响应与主动事件 | 通过 bootstrap.NewWebSocketService 使用具名独立端口，或挂载到已有 HTTP 并显式管理生命周期；Router 和跨节点推送待后续阶段 |
 | [`biz/ossservice`](biz/ossservice/doc.go) | multipart 上传、指定对象的 STS 凭据签发、URL 内容 MD5 | 上传需要 OSS，签发另需 STS；MD5FromURL 为独立包函数，无需客户端 |
 | [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
 | [`biz/appconfig`](biz/appconfig/doc.go) | 直接定义 env/log，严格解析应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/appconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
@@ -198,7 +199,7 @@ HTTP、Cron 不再保留独立关闭计时器；http.yaml 的 shutdownTimeout �
 
 ### 规划中的能力
 
-本地设计文档还规划了 `websocketx` 等模块；尚未实现的包不属于当前可用 API。实际可用能力以上述模块导航为准。
+`biz/realtime` 当前提供 Session、JSON/PB 和 bootstrap 接入；场景路由与 Redis/NATS 推送来源在首期 review 后继续实现。其他尚未实现的包不属于当前可用 API，实际能力以上述模块导航为准。
 
 ## 分层架构
 
@@ -242,7 +243,8 @@ pixiu/
 │   └── internal/           infra 内部共用实现
 ├── biz/
 │   ├── common/             应用时区 ID、时间格式化与百分比转换
-│   ├── bootstrap/          组件初始化、运行管理器与 HTTP/Cron 服务构造
+│   ├── bootstrap/          组件初始化、运行管理器与 HTTP/realtime/Cron 服务构造
+│   ├── realtime/           WebSocket 身份、业务状态与 JSON/PB 双向消息
 │   ├── elasticsearchservice/ 同义词库索引验证与临时资源清理
 │   ├── ossservice/         multipart 上传、OSS 授权与 URL 内容 MD5
 │   ├── appconfig/          应用 env/log 配置加载与环境初始化

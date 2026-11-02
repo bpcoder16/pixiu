@@ -1,0 +1,23 @@
+# 复制到 app.yaml 所在配置目录，命名为 websocket.<name>.yaml。
+# 例如 NewWebSocketService("app", factory) 读取 websocket.app.yaml。
+# HTTP 监听字段与 http.yaml 同名、同层。时间使用 Go 时长单位，如 "5s"。
+
+# WebSocket 独立监听地址，必填。每个实例使用独立端口，例如 app :8889、web :8890、admin :8891。
+addr: ":8889"
+# WebSocket 升级路径，必填。使用绝对字面路径，/ready/ws 保留给内置探针。
+path: "/ws/app"
+
+# 请求头读取期限，零值默认 5s，负值无效。
+readHeaderTimeout: "5s"
+# 完整 HTTP 请求读取期限，零值默认 10s，负值表示不限时。
+readTimeout: "10s"
+# HTTP 响应写入期限，零值默认 15s，负值表示不限时。
+writeTimeout: "15s"
+# HTTP 空闲连接等待下一次请求的期限，零值默认 60s，负值表示不限时。
+idleTimeout: "60s"
+
+# 请求行与请求头总大小上限（字节），零值默认 64 KiB，负值无效。
+maxHeaderBytes: 65536
+
+# 认证、Origin 校验、会话状态、心跳和消息限额由 factory 中的 realtime.Config 提供。
+# 服务排空使用管理器的共享期限（bootstrap.Start 默认 30s）。

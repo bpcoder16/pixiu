@@ -1,120 +1,101 @@
-// Package realtime 组合 websocketx，提供静态 proto 类型绑定、JSON/PB 双协议、
-// 同步/异步响应、本机用户/设备/组寻址和 Memory 在线广播。
-// 业务负责认证授权、持久状态、任务队列、幂等及重连恢复。
+// Package realtime 基于 websocketx 提供连接身份、独立业务状态和 JSON/PB 双向消息。
+// 首期通过统一 OnMessage 回调处理请求；场景路由和 Redis/NATS 推送来源尚未实现。
 //
-// # 最小接入
+// # 构造与消息处理
 //
-// 业务请求、响应和事件均由 .proto 定义。下面用标准 protobuf 消息演示类型注册：
+// 业务消息由业务项目的 .proto 定义。下例使用标准 protobuf 消息展示公开 API，
+// 需导入 context、net/http、realtime 和 wrapperspb；代码放在返回 error 的函数中：
 //
-//	schema := realtime.NewSchema()
-//	if err := schema.Request("profile.read", &emptypb.Empty{}, &wrapperspb.StringValue{}); err != nil {
-//		return err
-//	}
-//	if err := schema.Event("profile.changed", &wrapperspb.StringValue{}); err != nil {
-//		return err
-//	}
-//	router := realtime.NewRouter()
-//	if err := router.Handle("profile.read", func(ctx context.Context, request *realtime.Request) (realtime.Result, error) {
-//		return realtime.Reply(wrapperspb.String(request.Principal().UserID)), nil
-//	}); err != nil {
-//		return err
-//	}
-//	bus, err := realtime.NewMemoryBus(realtime.MemoryConfig{})
-//	if err != nil {
-//		return err
-//	}
 //	server, err := realtime.NewServer(realtime.Config{
-//		Environment: "production",
-//		Application: "shop",
-//		Portal:      "browser",
-//		Bus:         bus,
-//		Schema:      schema,
-//		Router:      router,
-//		WebSocket: realtime.WebSocketConfig{
-//			Authenticate: authenticate, // 业务验证凭据后返回不可变 Principal。
+//		Authenticate: func(ctx context.Context, r *http.Request) (realtime.ClientInfo, error) {
+//			// 示例显式允许匿名；生产业务应校验凭据并返回用户、设备等可信信息。
+//			return realtime.ClientInfo{}, nil
+//		},
+//		OnMessage: func(ctx context.Context, session *realtime.Session, message *realtime.Message) error {
+//			var request wrapperspb.StringValue
+//			if err := message.Decode(&request); err != nil {
+//				return session.ReplyError(ctx, message, "INVALID_ARGUMENT", "请求参数错误")
+//			}
+//			return session.Reply(ctx, message, wrapperspb.String("hello "+request.Value))
 //		},
 //	})
 //	if err != nil {
 //		return err
 //	}
+//	// Server 同时作为 HTTP Handler 和常驻服务；两者的生命周期分别管理。
 //	mux := http.NewServeMux()
 //	mux.Handle("GET /ws", server)
-//	// 由应用运行 server.Run，Status().Ready 为 true 后才可接入。
-//	// HTTP 与 Server 各自管理生命周期；Server 已拥有内部 websocketx，无需重复登记。
+//	// 应用运行 server.Run，并由 HTTP 服务监听 mux；Ready 为 true 后接受连接。
+//	// 使用 bootstrap 时，显式将 Server 的生命周期方法填入 apprun.Service，与 HTTP 服务分别登记。
 //
-// 构造成功才冻结 Schema/Router，可供多个 Server/Publisher 共享。Schema 只保存类型，
-// 每个请求创建独立消息。Middleware 包装只在首次构造时编译，next 至多同步调用一次。
-// Config.WebSocket.Transport 的内部回调、接纳门和子协议由 Server 管理，不允许覆盖。
+// Authenticate、OnMessage 必填；NewServer 无后台任务。Run 一次并阻塞到真实收尾，
+// Run 前或 Stop 后拒绝握手。HTTP 关闭不自动关闭已升级连接。
+// 独立端口可用 bootstrap.NewWebSocketService(name, factory) 一并管理 HTTP 与 realtime，
+// factory 返回全新 Server，调用方不得再单独运行或登记内部 Server；各端使用不同名称和配置文件。
+// 关闭时 Stop 全部服务，再以同一总期限 Wait；失败时 Cancel，共享资源随后回收，日志最后关闭。
+// Stop 不取消已经接纳的业务，Wait 超时只结束等待，Done 只在回调和网络实际结束后关闭。
 //
-// # 协议与请求
+// # 协议
 //
-// 客户端握手选择 SubprotocolJSON 或 SubprotocolProtobuf，分别使用 Text 和 Binary；
-// 双方同时支持两者时优先 JSON。同一连接不能切换编码。
-// JSON 外层是公共信封，data 是业务消息的 ProtoJSON 值：
+// 握手提供 SubprotocolJSON 或 SubprotocolProtobuf，分别使用 Text/Binary；
+// 同时提供时优先 JSON。无协议或无交集拒绝升级，同连接上下行编码一致且不可切换。
+// JSON 请求示例，data 是 wrapperspb.StringValue 的 ProtoJSON 标量：
 //
-//	{"kind":"request","route":"profile.read","requestId":"r1","data":{}}
+//	{"kind":"request","requestId":"r1","scene":"home","action":"hello","data":"world"}
 //
-// PB 使用 protocol.Envelope，data 存放业务消息的 protobuf bytes。
-// response 回显 requestId/route，event 不含 requestId；正文和 error 互斥。
-// JSON 外层按精确键读取，拒绝重复协议字段；未知可选字段忽略。
-// requestId 最长 128 字节，允许 ASCII 字母/数字/-/_；route 另允许点且保留 sys.*。
-// 最大客户端消息 64 KiB、内部投递 128 KiB、解码递归深度 32；Limits 只能收紧。
-// 业务 JSON 使用 protojson，包含 int64 字符串、bytes base64、枚举和 oneof 的标准语义。
+// PB 使用 protocol.Envelope，data 为业务 proto.Marshal 字节。JSON 信封的 data
+// 直接嵌入 ProtoJSON 值，不能将整个 protobuf 正文改为 base64；业务 bytes 字段本身仍
+// 遵循 base64、int64/uint64 字段遵循字符串等标准 ProtoJSON 规则。业务 JSON 未知字段报错。
+// requestId、scene、action 各为 1–128 字节，允许 ASCII 字母/数字/点/下划线/短横线。
+// JSON 信封字段名精确匹配，未知、重复、缺失字段及尾随内容均拒绝，正文容器深度最多 32。
+// PB 与业务 ProtoJSON 解码递归深度为 32。错误帧类型关闭 1003，非法信封关闭 1007。
+// Send/Reply 在正文编码后按同编码、同类型的新对象执行一次有界解码校验，超限返回 ErrInvalidMessage，不入队。
+// JSON 同时受容器深度与 ProtoJSON 递归限制；PB 沿用原生解码规则，不额外展开 Any.value 或 bytes。
+// 两种编码的深度计数分别遵循各自解析器，不保证同一对象跨编码接纳边界相同；没有业务深度配置。
+// 出站校验会增加一次正文解码及临时对象分配，不修改调用方对象；错误响应没有此开销。
+// 正文长度下界和含信封完整帧的 MaxSendBytes 检查均早于额外解码；尺寸超限返回 websocketx.ErrMessageTooLarge。
+// 业务 Decode 错误由 Handler 显式处理；普通 Handler error 只脱敏观察，不自动回复或断连。
+// panic/超时由 websocketx 处理。ReplyError 内容由业务授权公开，不应传入内部错误原文。
 //
-// Handler 返回 Reply(message) 或 Deferred()；零值、nil、错类型及编码失败安全回退 INTERNAL。
-// 只有合法 PublicError 可公开内容；普通错误固定脱敏。Handler panic/真实消息超时由
-// websocketx 关闭连接，迟到结果不再发送。总并发默认 256，覆盖解码、执行和响应接纳；
-// 等待使用原始 MessageTimeout，不新增 goroutine/执行池。请求令牌桶默认关闭，启用时
-// RequestsPerSecond/RequestBurst 必须同时为正，超过速率返回 RATE_LIMITED。
+// Message 和其正文只在 OnMessage 回调期间有效，每次 Decode 使用独立可写对象。
+// Reply/ReplyError 检查所属 Session 和原请求 ctx，回调结束/超时后拒绝迟到回复。
+// 每个请求的回复次数由业务保证，库不维护 pending 表、响应去重或远端任务句柄。
 //
-// Deferred 仅在业务确认任务提交后使用：将 Request.ReplyRef() 和所需业务数据序列化到任务，
-// worker 用 Publisher.Reply/ReplyError 回原连接。也可同步 Reply 表示受理，再 Push 事件；
-// 业务负责选择，不为同一请求发送第二次 response。Server 不托管远程任务、不维护 pending 表。
-// Request.Data 仅在回调期间只读，异步任务自行复制；不得保留 Request/Session 或继承请求期限。
+// # 身份与业务状态
 //
-// # 身份和寻址
+// ClientInfo 在认证后固定，Info 返回值副本；其中 Value 的深层对象必须保持不可变，
+// 不能携带原始凭据、HTTP 请求、Gin Context 或可变共享状态。身份变化通过重新连接完成。
+// 同用户/设备可有多个独立连接，ID 是连接 ID，不是 DeviceID，不自动踢出或覆盖。
 //
-// Scope 的 Application/Portal/Tenant 精确匹配，空 Tenant 是明确域。UserID/DeviceID 可选，
-// 由认证决定；一用户可对应多连接。Device 按 (Scope, UserID, DeviceID) 精确索引，
-// 空 UserID 只命中无用户的同名设备。ConnectionID 每次重连重新生成，身份不带内更换。
-// Principal.Value 是业务维护的不可变授权快照，GetLocal/OnConnect 返回只读副本。
+// NewState 为每个连接返回独立的业务对象，State 返回对象本身，不做深拷贝或自动加锁。
+// 工厂仅做快速内存初始化；业务自定义结构负责并发安全，可在 OnClose 中释放资源。
+// OnOpen 与 OnMessage 同连接串行，Revalidate 基于固定身份并发执行。
+// OnClose 等待网络和在途回调完成，OnOpen 失败也会清理已发布的业务会话；
+// 初始化前断开或 NewState panic 时可能不创建业务会话，因此不调用业务 OnClose。
+// 清理 I/O 使用 OnClose 的 ctx，不使用已取消的 Session.Context；它独立于断连取消，
+// 受 Transport.OnCloseTimeout（默认 5 秒）及 Server.Cancel 约束，Stop/Wait 超时不取消它。
+// 回调必须配合取消，Session.Done/Server.Done 等待实际返回；停收期间清理失败计入 ErrDrainFailed。
+// 每个业务回调使用自己的 ctx；不可同步等待自身或所属 Server.Done。
 //
-// OnConnect 在身份登记后、首条请求前运行，可在锁外调用 Join；失败/超时由 websocketx 摘除。
-// Join/Leave 由业务授权后调用；组名不含库内业务规则。默认每连接 64 组、每 Server 总计
-// 100000 条成员关系。断连清理所有索引；Leave 不撤回已选中/排队消息，立即撤权可 CloseLocal。
-// CountLocal/CloseLocal 只针对本机；CloseLocal 发起 1008 关闭，不能据数量判断集群在线状态。
+// # 主动下发与容量
 //
-// # 推送与广播
+// 业务持有当前 Session 时可以直接下发事件，以下代码放在返回 error 的函数中：
 //
-// Publisher 只需要 Schema 和 Bus，不需要 Router/HTTP/Server。Push 指定事件 route 和消息；
-// Reply/ReplyError 指定 ReplyRef，原连接失效后不重定向到同用户的新连接。
-// Target 显式选择 Connection/User/Device/Users/Group/All，完整 Scope 必填；Users 去重最多 256。
-// 所有发布只走一次 Bus，各节点只做本机分发。默认 topic 为
-// rt.<environment>.<application>.<portal>.v1.events，TTL 默认 60 秒，范围 1 秒到 24 小时。
+//	return session.Send(ctx, realtime.Outgoing{
+//		Kind:   realtime.Event,
+//		Scene:  "home",
+//		Action: "changed",
+//		Data:   wrapperspb.String("new value"),
+//	})
 //
-// 发布调用内完成编码，返回后可复用输入；成功表示 Bus 接纳，错误可能发生在提交之后，
-// 不自动重试、不保证送达或离线重放。业务版本、事件幂等键由业务 proto 定义。
-// 内部 PB 正文每条只解码一次，按实际命中连接各编码/Prepare 一次；同编码共用不可变帧。
-// JSON 展开超限只拒绝对应连接，不向它发送 PB。各连接仍扣完整逻辑发送预算。
-//
-// 分发和 Memory 每订阅 pending 默认各 1024 项/16 MiB，包含当前工作项。单连接慢仅关闭
-// 受影响连接；共享过载撤销 Ready，低于 75% 水位持续 1 秒后恢复。已知目标丢失只影响目标；
-// 订阅 GapCount 表示连续性不确定时关闭当时旧连接 1013，重连后业务重新授权并拉取快照。
-// 非法总线输入只记录协议错误。Observe 须快速且并发安全，不等待所属 Server；日志不含正文。
-//
-// # 生命周期
-//
-// NewServer 无后台工作；Run 一次，订阅建立期限默认 10 秒。Stop 幂等且非阻塞，可先于 Run。
-// Stop 先停新请求/握手/Join 和订阅输入，保留已接纳请求的 context；订阅真实完成后封闭
-// 并排空分发，最后 Endpoint 排空请求及网络发送。Run 返回不是完成，Done 才表示真实结束。
-// Wait(ctx) 只等待，超时不取消工作；Cancel 通知订阅、分发与连接取消，忽略取消的回调仍占
-// 预算并延迟 Done。排空期已知损失汇总到 Wait。Server 只关闭自己的订阅，绝不关闭共享 Bus。
-//
-// 应用在同一总期限下停止/等待 HTTP 与 Server；失败时 Cancel，再回收共享资源，日志最后关。
-// 第一阶段只保证本机已接纳工作，不等待远程异步任务；订阅停收后完成的结果可能错过旧连接，
-// 由业务持久状态和重连查询恢复。目前仅实现 Memory；Redis/NATS 和 bootstrap 装配分阶段交付。
-//
-// 公共与内部 PB 的固定工具版本及再生成命令见 generate.sh。
+// Send 并发安全，调用内完成编码，返回后可复用输入；调用期间不得修改输入。
+// 成功表示本地队列接纳，不代表网络写完或客户端收到；不自动重试。
+// 队列满、共享预算不足、过期、关闭等错误保留 websocketx 的 errors.Is 语义。
+// ExpiresAt 可限制消息入队和实际写出的有效期，ctx 在入队后取消不会撤回消息。
+// Transport.ReadLimit/MaxSendBytes 零值各默认 64 KiB，按含信封的完整消息计量；
+// 其他心跳、连接数、队列和共享 Budget 默认值沿用 websocketx。
+// Transport 的接纳门、认证、子协议与生命周期回调由 Server 管理，误填返回构造错误。
+// Observe/Logger 及容量参数可以注入。Server 不关闭借用的日志或业务共享资源。
 package realtime
 
 //go:generate sh generate.sh

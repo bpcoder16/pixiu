@@ -74,9 +74,6 @@ func TestLockWaitingCanBeInterrupted(t *testing.T) {
 			waitTimeout := 30 * time.Millisecond
 			want := context.DeadlineExceeded
 			if mode == "更短请求期限" {
-				var stop context.CancelFunc
-				ctx, stop = context.WithTimeout(ctx, 30*time.Millisecond)
-				defer stop()
 				waitTimeout = time.Second
 			} else if mode == "请求取消" {
 				waitTimeout = time.Second
@@ -98,6 +95,12 @@ func TestLockWaitingCanBeInterrupted(t *testing.T) {
 			})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if mode == "更短请求期限" {
+				// 初始化不计入请求期限，避免首次锁命令前就耗尽短超时。
+				var stop context.CancelFunc
+				ctx, stop = context.WithTimeout(ctx, 30*time.Millisecond)
+				defer stop()
 			}
 			start := time.Now()
 			h, err := locker.Lock(ctx, "key")

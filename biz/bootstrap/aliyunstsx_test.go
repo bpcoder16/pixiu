@@ -25,7 +25,7 @@ func TestAliyunSTSConfig(t *testing.T) {
 		}
 
 		cfg := loadLogConfig(t, "debug", "log:\n  format: json\n  hookStd: false\n")
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_ = r.ParseForm()
 			if _, exists := r.Form["Policy"]; exists {
 				t.Error("empty optional policy should be omitted")
@@ -37,7 +37,9 @@ func TestAliyunSTSConfig(t *testing.T) {
 			_, _ = w.Write([]byte(`{"Credentials":{"AccessKeyId":"temp-id","AccessKeySecret":"temp-secret","SecurityToken":"temp-token","Expiration":"2030-01-01T00:00:00Z"}}`))
 		}))
 		defer server.Close()
-		content := strings.Replace(string(template), `endpoint: ""`, `endpoint: "`+server.URL+`"`, 1)
+		// 先占用端口供配置引用，完成默认时区初始化后再启动 HTTP goroutine。
+		endpoint := "http://" + server.Listener.Addr().String()
+		content := strings.Replace(string(template), `endpoint: ""`, `endpoint: "`+endpoint+`"`, 1)
 		if err := os.WriteFile(filepath.Join(env.ConfigDirPath(), "aliyunstsx.upload.yaml"), []byte(content), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -45,6 +47,7 @@ func TestAliyunSTSConfig(t *testing.T) {
 		var resources lifecycle.Stack
 		defer resources.Close()
 		bootstrap.MustBaseInit(cfg, &resources)
+		server.Start()
 		c := stsx.Named("upload")
 		if c != stsx.Default() {
 			t.Fatal("default STS alias mismatch")

@@ -1,0 +1,198 @@
+package realtime
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/bpcoder16/pixiu/biz/realtime/protocol"
+	"github.com/bpcoder16/pixiu/infra/websocketx"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/runtime/protoiface"
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+)
+
+// 通过 proto.Message 的公开反射接口观察校验对象创建，不改变生产代码的测试入口。
+type countingMessage struct {
+	proto.Message
+	created *int
+}
+
+func (m countingMessage) ProtoReflect() protoreflect.Message {
+	return countingReflect{Message: m.Message.ProtoReflect(), created: m.created}
+}
+
+type countingReflect struct {
+	protoreflect.Message
+	created *int
+}
+
+// 包装后的 Message 使用标准反射路径，不能复用依赖具体生成类型的快速方法。
+func (m countingReflect) ProtoMethods() *protoiface.Methods { return nil }
+
+func (m countingReflect) New() protoreflect.Message {
+	*m.created++
+	return m.Message.New()
+}
+
+func outboundSize(t *testing.T, protocolName string, payload proto.Message) int64 {
+	t.Helper()
+	var wire []byte
+	var err error
+	if protocolName == SubprotocolJSON {
+		body, marshalErr := protojson.Marshal(payload)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		wire, err = json.Marshal(map[string]any{
+			"kind":   "event",
+			"scene":  "home",
+			"action": "refresh",
+			"data":   json.RawMessage(body),
+		})
+	} else {
+		body, marshalErr := proto.Marshal(payload)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		wire, err = proto.Marshal(&protocol.Envelope{
+			Kind:   protocol.Kind_EVENT,
+			Scene:  "home",
+			Action: "refresh",
+			Body:   &protocol.Envelope_Data{Data: body},
+		})
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return int64(len(wire))
+}
+
+func TestSendSizeCheckedBeforeDecode(t *testing.T) {
+	for _, protocolName := range []string{SubprotocolJSON, SubprotocolProtobuf} {
+		for _, mode := range []string{"body", "spaces", "envelope", "exact", "default"} {
+			t.Run(protocolName+"/"+mode, func(t *testing.T) {
+				var payload proto.Message = wrapperspb.String("<>&sample")
+				limit := outboundSize(t, protocolName, payload)
+				switch mode {
+				case "body":
+					payload = wrapperspb.Bytes(make([]byte, 4096))
+					limit = 64
+				case "spaces":
+					payload = wrapperspb.String(strings.Repeat(" ", 4096))
+					limit = 64
+				case "envelope":
+					limit--
+				case "default":
+					payload = wrapperspb.Bytes(make([]byte, 64<<10))
+					limit = 0 // 验证 Server 归一化的默认上限也传到了发送路径。
+				}
+				opened := make(chan *Session, 1)
+				cfg := baseConfig()
+				cfg.Transport.MaxSendBytes = limit
+				cfg.OnOpen = func(_ context.Context, s *Session) error {
+					opened <- s
+					return nil
+				}
+				_, h := startTestServer(t, cfg)
+				client := dial(t, h, protocolName)
+				session := await(t, opened)
+				created := 0
+				message := Outgoing{
+					Kind:   Event,
+					Scene:  "home",
+					Action: "refresh",
+					Data:   countingMessage{Message: payload, created: &created},
+				}
+				err := session.Send(context.Background(), message)
+				want := payload
+				if mode == "exact" {
+					if err != nil || created != 1 {
+						t.Fatalf("恰好达到上限应保留解码校验并发送: err=%v created=%d", err, created)
+					}
+				} else {
+					if !errors.Is(err, websocketx.ErrMessageTooLarge) || created != 0 {
+						t.Fatalf("超限应在额外解码前拒绝: err=%v created=%d", err, created)
+					}
+					want = wrapperspb.String("ok")
+					message.Data = want
+					if err := session.Send(context.Background(), message); err != nil {
+						t.Fatal(err)
+					}
+				}
+				// 拒绝后仍能发送，且客户端看到的首条消息不能是超限正文。
+				body := responseBody(t, client, "event")
+				got := want.ProtoReflect().New().Interface()
+				if protocolName == SubprotocolJSON {
+					err = protojson.Unmarshal(body, got)
+				} else {
+					err = proto.Unmarshal(body, got)
+				}
+				if err != nil || !proto.Equal(got, want) {
+					t.Fatalf("发送正文错误: %v", err)
+				}
+			})
+		}
+	}
+}
+
+// JSON 空白压缩不能改变是否接纳；覆盖原始正文可能比含信封帧还长的重复标量。
+func TestSendJSONCompactSize(t *testing.T) {
+	payload := &structpb.ListValue{}
+	for range 512 {
+		payload.Values = append(payload.Values, structpb.NewNumberValue(0))
+	}
+	limit := outboundSize(t, SubprotocolJSON, payload)
+	opened := make(chan *Session, 1)
+	cfg := baseConfig()
+	cfg.Transport.MaxSendBytes = limit
+	cfg.OnOpen = func(_ context.Context, s *Session) error {
+		opened <- s
+		return nil
+	}
+	_, h := startTestServer(t, cfg)
+	client := dial(t, h, SubprotocolJSON)
+	session := await(t, opened)
+	if err := session.Send(context.Background(), Outgoing{
+		Kind:   Event,
+		Scene:  "home",
+		Action: "refresh",
+		Data:   payload,
+	}); err != nil {
+		t.Fatalf("压缩后完整帧恰好达到上限，应允许发送: %v", err)
+	}
+	var got structpb.ListValue
+	if err := protojson.Unmarshal(responseBody(t, client, "event"), &got); err != nil || !proto.Equal(&got, payload) {
+		t.Fatalf("正文错误: %v", err)
+	}
+}
+
+// ProtoJSON 是否插入空白随构建变化，用固定合法 JSON 覆盖可压缩空白的下界约束。
+func TestBodyLengthLowerBound(t *testing.T) {
+	for _, body := range []string{
+		"[0, 0, 0]",
+		"\n {\t\"v\": 1 \r}\n",
+		`{"v": "  a b  "}`,
+		`{"v": "\" \\ \t 雪"}`,
+	} {
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+		if bodyExceedsLimit(SubprotocolJSON, []byte(body), int64(compact.Len())) {
+			t.Fatalf("JSON 下界不能高于压缩后的实际长度: %q", body)
+		}
+		if !bodyExceedsLimit(SubprotocolProtobuf, []byte(body), int64(len(body)-1)) {
+			t.Fatal("PB 下界应计入全部原始字节")
+		}
+	}
+	if !bodyExceedsLimit(SubprotocolJSON, []byte(`"abcdef"`), 3) {
+		t.Fatal("明显超限的 JSON 正文未被预检查拒绝")
+	}
+}
