@@ -89,8 +89,8 @@ func (e *Endpoint) recordDrainFailure(kind string) {
 		// 数据消息设置写期限或实际写入失败，不包含 Ping/Close 控制帧写入。
 		e.failures.WriteErrors++
 	case drainFailureCallback:
-		// OnOpen/OnMessage/Revalidate 执行失败（含超时、取消或 panic），
-		// 或握手、关闭钩子、观察流程中捕获到 panic；不汇总普通认证拒绝。
+		// OnOpen/OnMessage/Revalidate 执行失败，或 OnClose 清理超时、取消、panic，
+		// 以及握手、OnDetach、观察流程中捕获到 panic；不汇总普通认证拒绝。
 		e.failures.CallbackErrors++
 	}
 }

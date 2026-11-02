@@ -112,6 +112,7 @@
 // 1 GiB 发送预算可覆盖一轮 10000×64 KiB（625 MiB）逻辑积压；同时多轮仍可能超额。
 // 单条 1 MiB 上限不代表能同时为全部连接积压 1 MiB，预算和连接数须按部署资源显式配置。
 // 默认每 20 秒 Ping、60 秒 Pong 期限、10 秒写入期限、1 秒网络关闭期限。
+// OnCloseTimeout 默认 5 秒，从清理回调开始执行计时，不是网络关闭期限。
 // DisableHeartbeat 可显式禁用心跳。MessageTimeout 默认 30 秒，排队时间计入；复核默认每 60 秒执行，期限 5 秒。
 // 数值负值非法；CompressionLevel 零值默认 1，可设置 1–9，压缩仅在 EnableCompression 时协商。
 //
@@ -146,6 +147,8 @@
 // Session.Close 发起单连接关闭并丢弃未写消息。Detached 表示连接已经不可路由，Done 表示全部收尾完成。
 // OnDetach 在内部锁外同步执行，只能做快速内存索引清理；它可早于 OnOpen 返回。
 // 网络回收不等待用户钩子，OnClose 等在途业务、读写和复核真实结束后运行一次。
+// OnClose 的 ctx 不继承会话断连取消；普通断连、Stop 和 Wait 超时不取消清理，Endpoint.Cancel 会取消它。
+// 清理须使用回调 ctx 并配合 OnCloseTimeout/Cancel，实际返回前 Done 不关闭；停收期间清理失败计入 DrainError。
 // 所有回调都不能同步 Wait 自身或所属 Endpoint；Observe 应快速、并发安全，不能代替持久化业务审计。
 // 组件日志/观察仅含元信息，回调错误和 panic 值不会原样进入组件日志。
 // 关闭观察区分正常停机、传输断开、读取超时及协议错误；1006 仅作本地异常断开状态，不发送到网络。

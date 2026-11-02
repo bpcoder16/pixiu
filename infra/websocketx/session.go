@@ -171,17 +171,24 @@ func (s *Session) run() {
 	<-s.dispatchDone
 	<-s.revalidateDone
 	<-s.detachDone
-	ctx := scope(s.ctx)
+	// 会话 ctx 已在断连时取消；清理从 Endpoint 的取消根派生，给正常断连留下清理时间。
+	ctx := scope(s.endpoint.sessionCtx)
 	closeErr = errors.Join(closeErr, s.detachErr)
 	if s.endpoint.config.OnClose != nil {
 		func() {
+			closeCtx, cancel := context.WithTimeout(ctx, s.endpoint.config.OnCloseTimeout)
+			defer cancel()
 			defer func() {
+				callbackErr := closeCtx.Err()
 				if recover() != nil {
-					closeErr = errors.Join(closeErr, ErrPanic)
+					callbackErr = errors.Join(callbackErr, ErrPanic)
+				}
+				if callbackErr != nil {
+					closeErr = errors.Join(closeErr, callbackErr)
 					s.endpoint.recordDrainFailure(drainFailureCallback)
 				}
 			}()
-			s.endpoint.config.OnClose(ctx, s)
+			s.endpoint.config.OnClose(closeCtx, s)
 		}()
 	}
 	s.endpoint.observe(ctx, Event{

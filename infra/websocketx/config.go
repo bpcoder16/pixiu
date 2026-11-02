@@ -102,6 +102,9 @@ type Config struct {
 	// CloseTimeout 是发起连接关闭后发送 Close 控制帧（关闭通知）的期限，默认 1 秒。
 	// 通知发送完成、超时或失败后均关闭底层连接；仅控制通知发送，不是整个关闭流程的超时。
 	CloseTimeout time.Duration
+	// OnCloseTimeout 是 OnClose 清理 context 的期限，默认 5 秒，从回调开始执行计时。
+	// 清理不继承会话断连取消，但响应 Endpoint.Cancel；回调须配合取消，实际返回前不关闭 Done。
+	OnCloseTimeout time.Duration
 	// MessageTimeout 是 OnOpen 初始化和入站消息业务处理的期限，默认 30 秒，不是网络读取超时。
 	// OnOpen 从开始执行计时；消息从完整接纳至 OnMessage 返回计时，包含接收队列等待时间。
 	// 消息过期或回调超时会发起关闭连接；正在执行的回调须响应 ctx 取消，不能被强制终止。
@@ -149,7 +152,7 @@ type Config struct {
 	OnMessage func(context.Context, *Session, Message) error
 	// OnDetach 只做快速内存索引清理，可与 OnOpen 并发，不执行 I/O。
 	OnDetach func(*Session)
-	// OnClose 在网络和在途工作收尾后执行一次。
+	// OnClose 在网络和在途工作收尾后执行一次，使用受 OnCloseTimeout 及 Endpoint.Cancel 约束的独立 ctx。
 	OnClose func(context.Context, *Session)
 	// Revalidate 可与消息处理并发，返回错误时关闭连接；nil 时不启用复核。
 	Revalidate func(context.Context, *Session) error
@@ -160,7 +163,7 @@ type Config struct {
 }
 
 func normalize(cfg Config) (Config, error) {
-	for _, d := range []time.Duration{cfg.HandshakeTimeout, cfg.PingInterval, cfg.PongTimeout, cfg.WriteTimeout, cfg.CloseTimeout, cfg.MessageTimeout, cfg.RevalidateInterval, cfg.RevalidateTimeout} {
+	for _, d := range []time.Duration{cfg.HandshakeTimeout, cfg.PingInterval, cfg.PongTimeout, cfg.WriteTimeout, cfg.CloseTimeout, cfg.OnCloseTimeout, cfg.MessageTimeout, cfg.RevalidateInterval, cfg.RevalidateTimeout} {
 		if d < 0 {
 			return cfg, errors.New("websocketx: negative timeout")
 		}
@@ -180,6 +183,7 @@ func normalize(cfg Config) (Config, error) {
 	defaultDuration(&cfg.PongTimeout, time.Minute)
 	defaultDuration(&cfg.WriteTimeout, 10*time.Second)
 	defaultDuration(&cfg.CloseTimeout, time.Second)
+	defaultDuration(&cfg.OnCloseTimeout, 5*time.Second)
 	defaultDuration(&cfg.MessageTimeout, 30*time.Second)
 	defaultDuration(&cfg.RevalidateInterval, time.Minute)
 	defaultDuration(&cfg.RevalidateTimeout, 5*time.Second)
