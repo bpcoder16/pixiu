@@ -12,34 +12,9 @@ import (
 	"github.com/bpcoder16/pixiu/infra/websocketx"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/runtime/protoiface"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
-
-// 通过 proto.Message 的公开反射接口观察校验对象创建，不改变生产代码的测试入口。
-type countingMessage struct {
-	proto.Message
-	created *int
-}
-
-func (m countingMessage) ProtoReflect() protoreflect.Message {
-	return countingReflect{Message: m.Message.ProtoReflect(), created: m.created}
-}
-
-type countingReflect struct {
-	protoreflect.Message
-	created *int
-}
-
-// 包装后的 Message 使用标准反射路径，不能复用依赖具体生成类型的快速方法。
-func (m countingReflect) ProtoMethods() *protoiface.Methods { return nil }
-
-func (m countingReflect) New() protoreflect.Message {
-	*m.created++
-	return m.Message.New()
-}
 
 func outboundSize(t *testing.T, protocolName string, payload proto.Message) int64 {
 	t.Helper()
@@ -74,9 +49,9 @@ func outboundSize(t *testing.T, protocolName string, payload proto.Message) int6
 	return int64(len(wire))
 }
 
-func TestSendSizeCheckedBeforeDecode(t *testing.T) {
+func TestSendSizeBoundary(t *testing.T) {
 	for _, protocolName := range []string{SubprotocolJSON, SubprotocolProtobuf} {
-		for _, mode := range []string{"body", "spaces", "envelope", "exact", "default"} {
+		for _, mode := range []string{"body", "spaces", "envelope", "exact", "default", "depth-and-size"} {
 			t.Run(protocolName+"/"+mode, func(t *testing.T) {
 				var payload proto.Message = wrapperspb.String("<>&sample")
 				limit := outboundSize(t, protocolName, payload)
@@ -92,6 +67,13 @@ func TestSendSizeCheckedBeforeDecode(t *testing.T) {
 				case "default":
 					payload = wrapperspb.Bytes(make([]byte, 64<<10))
 					limit = 0 // 验证 Server 归一化的默认上限也传到了发送路径。
+				case "depth-and-size":
+					value := structpb.NewStringValue("x")
+					for range 33 {
+						value = structpb.NewListValue(&structpb.ListValue{Values: []*structpb.Value{value}})
+					}
+					payload = value
+					limit = outboundSize(t, protocolName, payload) - 1
 				}
 				opened := make(chan *Session, 1)
 				cfg := baseConfig()
@@ -103,22 +85,21 @@ func TestSendSizeCheckedBeforeDecode(t *testing.T) {
 				_, h := startTestServer(t, cfg)
 				client := dial(t, h, protocolName)
 				session := await(t, opened)
-				created := 0
 				message := Outgoing{
 					Kind:   Event,
 					Scene:  "home",
 					Action: "refresh",
-					Data:   countingMessage{Message: payload, created: &created},
+					Data:   payload,
 				}
 				err := session.Send(context.Background(), message)
 				want := payload
 				if mode == "exact" {
-					if err != nil || created != 1 {
-						t.Fatalf("恰好达到上限应保留解码校验并发送: err=%v created=%d", err, created)
+					if err != nil {
+						t.Fatalf("恰好达到上限应允许发送: %v", err)
 					}
 				} else {
-					if !errors.Is(err, websocketx.ErrMessageTooLarge) || created != 0 {
-						t.Fatalf("超限应在额外解码前拒绝: err=%v created=%d", err, created)
+					if !errors.Is(err, websocketx.ErrMessageTooLarge) {
+						t.Fatalf("超长应返回尺寸错误: %v", err)
 					}
 					want = wrapperspb.String("ok")
 					message.Data = want

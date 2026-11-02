@@ -48,17 +48,15 @@
 // 遵循 base64、int64/uint64 字段遵循字符串等标准 ProtoJSON 规则。业务 JSON 未知字段报错。
 // requestId、scene、action 各为 1–128 字节，允许 ASCII 字母/数字/点/下划线/短横线。
 // JSON 信封字段名精确匹配，未知、重复、缺失字段及尾随内容均拒绝，正文容器深度最多 32。
-// PB 与业务 ProtoJSON 解码递归深度为 32。错误帧类型关闭 1003，非法信封关闭 1007。
-// Send/Reply 在正文编码后按同编码、同类型的新对象执行一次有界解码校验，超限返回 ErrInvalidMessage，不入队。
-// JSON 同时受容器深度与 ProtoJSON 递归限制；PB 沿用原生解码规则，不额外展开 Any.value 或 bytes。
-// 两种编码的深度计数分别遵循各自解析器，不保证同一对象跨编码接纳边界相同；没有业务深度配置。
-// 出站校验会增加一次正文解码及临时对象分配，不修改调用方对象；错误响应没有此开销。
-// 正文长度下界和含信封完整帧的 MaxSendBytes 检查均早于额外解码；尺寸超限返回 websocketx.ErrMessageTooLarge。
+// PB 请求信封拒绝顶层 group 和 error 字段，跳过普通未知字段。错误帧类型关闭 1003，非法信封关闭 1007。
+// Message.Decode 对 ProtoJSON 和 PB 正文采用原生 RecursionLimit=32；PB 正文中的未知 group 沿用 protobuf 自身的跳过规则。
+// Send/Reply 按完整帧检查 MaxSendBytes，超长返回 websocketx.ErrMessageTooLarge；
+// 大小合规后，JSON 正文容器超过 32 层返回 ErrInvalidMessage。接收方在解码时执行自己的递归限制。
 // 业务 Decode 错误由 Handler 显式处理；普通 Handler error 只脱敏观察，不自动回复或断连。
 // panic/超时由 websocketx 处理。ReplyError 内容由业务授权公开，不应传入内部错误原文。
 //
 // Message 和其正文只在 OnMessage 回调期间有效，每次 Decode 使用独立可写对象。
-// Reply/ReplyError 检查所属 Session 和原请求 ctx，回调结束/超时后拒绝迟到回复。
+// Reply/ReplyError 检查所属 Session，并在入队时检查原请求与调用方的 ctx；回调结束或超时后拒绝迟到回复。
 // 每个请求的回复次数由业务保证，库不维护 pending 表、响应去重或远端任务句柄。
 //
 // # 身份与业务状态

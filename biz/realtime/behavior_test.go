@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +15,9 @@ import (
 	"github.com/bpcoder16/pixiu/biz/realtime/protocol"
 	"github.com/bpcoder16/pixiu/infra/websocketx"
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -76,6 +79,43 @@ func TestPublicErrorAndHandlerFailure(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// 将编码固定在请求超时之后，覆盖 Reply 入口检查与实际入队之间的窗口。
+type replyAfterDeadline struct {
+	*emptypb.Empty
+	ctx context.Context
+}
+
+func (m replyAfterDeadline) ProtoReflect() protoreflect.Message {
+	<-m.ctx.Done()
+	return m.Empty.ProtoReflect()
+}
+
+func TestReplyDeadlineDuringEncoding(t *testing.T) {
+	result := make(chan error, 1)
+	cfg := baseConfig()
+	cfg.Transport.MessageTimeout = 100 * time.Millisecond
+	cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
+		result <- s.Reply(context.Background(), m, replyAfterDeadline{
+			Empty: &emptypb.Empty{},
+			ctx:   ctx,
+		})
+		return nil
+	}
+	_, h := startTestServer(t, cfg)
+	c := dial(t, h, SubprotocolJSON)
+	typ, wire := requestWire(t, SubprotocolJSON, &emptypb.Empty{})
+	if err := c.WriteMessage(typ, wire); err != nil {
+		t.Fatal(err)
+	}
+	if err := await(t, result); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("编码期间请求超时，应拒绝入队并保留原请求错误: %v", err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := c.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseInternalServerErr) {
+		t.Fatalf("请求超时后应直接收到关闭帧: %v", err)
 	}
 }
 
@@ -243,6 +283,50 @@ func TestReservedTransportConfiguration(t *testing.T) {
 		if _, err := NewServer(cfg); err == nil {
 			t.Fatal("保留配置或缺失必要回调被静默接受")
 		}
+	}
+}
+
+func TestPBRequestEnvelopeFields(t *testing.T) {
+	group := bytes.Repeat(protowire.AppendTag(nil, 10, protowire.StartGroupType), 33)
+	group = append(group, bytes.Repeat(protowire.AppendTag(nil, 10, protowire.EndGroupType), 33)...)
+	body := &emptypb.Empty{}
+	body.ProtoReflect().SetUnknown(group)
+	typ, wire := requestWire(t, SubprotocolProtobuf, body)
+	cfg := baseConfig()
+	cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
+		var value emptypb.Empty
+		if err := m.Decode(&value); err != nil {
+			return s.ReplyError(ctx, m, "INVALID", "非法正文")
+		}
+		return s.Reply(ctx, m, &value)
+	}
+	_, h := startTestServer(t, cfg)
+	for _, tc := range []struct {
+		name   string
+		prefix []byte
+		reject bool
+	}{
+		{"unknown-group", group, true},
+		// error 出现在 data 之前，不能被 protobuf 的 oneof 覆盖规则掩盖。
+		{"error-before-data", protowire.AppendBytes(protowire.AppendTag(nil, 6, protowire.BytesType), nil), true},
+		{"unknown-field", protowire.AppendVarint(protowire.AppendTag(nil, 10, protowire.VarintType), 1), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := dial(t, h, SubprotocolProtobuf)
+			if err := c.WriteMessage(typ, append(bytes.Clone(tc.prefix), wire...)); err != nil {
+				t.Fatal(err)
+			}
+			if tc.reject {
+				_ = c.SetReadDeadline(time.Now().Add(time.Second))
+				if _, _, err := c.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseInvalidFramePayloadData) {
+					t.Fatalf("非法 PB 信封应关闭 1007: %v", err)
+				}
+				return
+			}
+			if got := responseBody(t, c, "response"); !bytes.Equal(got, group) {
+				t.Fatalf("普通未知信封字段或业务正文未按原生规则处理: %x", got)
+			}
+		})
 	}
 }
 

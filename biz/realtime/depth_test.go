@@ -119,13 +119,10 @@ func TestSendDepthBoundary(t *testing.T) {
 					Data:   tc.message,
 				}
 				err := session.Send(context.Background(), message)
-				wantOK := tc.pbOK
-				if protocolName == SubprotocolJSON {
-					wantOK = tc.jsonOK
-				}
+				wantOK := protocolName != SubprotocolJSON || tc.envelopeOK
 				if !wantOK {
 					if !errors.Is(err, ErrInvalidMessage) {
-						t.Fatalf("超出本编码接收深度应拒绝发送: %v", err)
+						t.Fatalf("JSON 容器超深应拒绝发送: %v", err)
 					}
 					message.Data = wrapperspb.String("next")
 					if err := session.Send(context.Background(), message); err != nil {
@@ -137,9 +134,9 @@ func TestSendDepthBoundary(t *testing.T) {
 				body := responseBody(t, client, "event")
 				got := message.Data.ProtoReflect().New().Interface()
 				if protocolName == SubprotocolJSON {
-					err = (protojson.UnmarshalOptions{RecursionLimit: 32}).Unmarshal(body, got)
+					err = protojson.Unmarshal(body, got)
 				} else {
-					err = (proto.UnmarshalOptions{RecursionLimit: 32}).Unmarshal(body, got)
+					err = proto.Unmarshal(body, got)
 				}
 				if err != nil || !proto.Equal(got, message.Data) {
 					t.Fatalf("线上正文不能按同编码解码，或被拒消息仍入队: %v", err)

@@ -44,6 +44,8 @@ type DrainError struct {
 	SendDropped    uint64
 	SendExpired    uint64
 	WriteErrors    uint64
+	// CallbackErrors 统计停收期间传输层回调的失败次数，同一连接可计多次。
+	// 上层适配回调收到取消也可能计数，即使它没有调用业务 OnClose。
 	CallbackErrors uint64
 }
 

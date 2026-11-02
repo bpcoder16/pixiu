@@ -117,6 +117,7 @@
 // 数值负值非法；CompressionLevel 零值默认 1，可设置 1–9，压缩仅在 EnableCompression 时协商。
 //
 // Send/SendPrepared 不等待网络或可用额度，成功只表示本地接纳。输入只在调用期间不可修改，返回后可复用。
+// SendWhileActive 还在接纳时检查额外的作用域 ctx，可用于限制请求回复的有效期。
 // Prepare 创建不可变帧；同 Endpoint 的多个连接可并发 SendPrepared，每连接仍扣完整逻辑字节预算。
 // ExpiresAt 为零时不过期；非零时接纳和实际写入前都检查。晚于入队的 ctx 取消不撤回消息。
 // ErrQueueFull 表示本连接满，ErrBudgetExceeded 表示共享预算满；组件不自动重试或把它们混为慢客户端。

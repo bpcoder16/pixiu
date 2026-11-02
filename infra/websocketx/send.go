@@ -58,14 +58,20 @@ func (e *Endpoint) Prepare(message Message) (*PreparedMessage, error) {
 }
 
 func (s *Session) Send(ctx context.Context, message Message) error {
-	return s.enqueue(ctx, message, nil)
+	return s.enqueue(ctx, nil, message, nil)
+}
+
+// SendWhileActive 与 Send 共用队列；额外的 activeCtx 非 nil 时也必须在接纳时有效。
+// 入队后任一 context 取消都不会撤回消息。
+func (s *Session) SendWhileActive(ctx, activeCtx context.Context, message Message) error {
+	return s.enqueue(ctx, activeCtx, message, nil)
 }
 
 func (s *Session) SendPrepared(ctx context.Context, message *PreparedMessage) error {
-	return s.enqueue(ctx, Message{}, message)
+	return s.enqueue(ctx, nil, Message{}, message)
 }
 
-func (s *Session) enqueue(ctx context.Context, message Message, prepared *PreparedMessage) error {
+func (s *Session) enqueue(ctx, activeCtx context.Context, message Message, prepared *PreparedMessage) error {
 	if ctx == nil {
 		return ErrNilContext
 	}
@@ -74,6 +80,11 @@ func (s *Session) enqueue(ctx context.Context, message Message, prepared *Prepar
 	defer e.mu.RUnlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if activeCtx != nil {
+		if err := activeCtx.Err(); err != nil {
+			return err
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
