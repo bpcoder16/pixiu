@@ -136,23 +136,33 @@ type Config struct {
 	CheckReady func() bool
 	// Authenticate 在握手时认证并生成身份；nil 时允许匿名连接。
 	Authenticate func(context.Context, *http.Request) (Identity, error)
-	// OnOpen 在连接建立后、消息处理前执行，返回错误时关闭连接。
+	// OnOpen 在认证和 WebSocket 升级成功后、该连接的消息派发前执行。
+	// 与 OnMessage 同连接串行；返回错误时关闭连接，不再派发该连接的消息。
 	// 单连接回调时序（省略未配置的回调）：
 	//
-	//	连接建立 -> OnOpen -> OnMessage -> OnMessage -> ...（同连接串行）
+	//	Authenticate -> 升级成功 -> OnOpen -> OnMessage -> OnMessage -> ...
+	//	                          （同连接串行，Revalidate 可与业务回调并发）
 	//
-	//	任意阶段触发关闭
-	//	  +-> OnDetach --------------------------------------------+
-	//	  +-> 关闭网络，等待在途业务、读写和复核结束 --------------+-> OnClose -> Done
+	//	连接建立后的任意阶段触发关闭（可能仍在执行 OnOpen/OnMessage）
+	//	  -> 标记关闭、摘除活跃索引、取消 Session.Context、关闭 Detached
+	//	  +-> OnDetach -------------------------------------------+
+	//	  +-> 关闭网络，等待在途业务、读写和复核结束 -------------+-> OnClose -> 收尾 -> Done
 	//
-	// OnDetach 可与 OnOpen/OnMessage 并发；提前关闭时 OnOpen/OnMessage 可能不执行。
-	// OnClose 等待两条关闭分支实际结束后执行，返回后才会关闭 Session.Done()。
+	// 网络回收与 OnDetach 独立推进；两条关闭分支实际结束后才执行 OnClose。
+	// 收尾包含关闭观察和释放连接名额，完成后才关闭 Session.Done()。
+	// 提前关闭时 OnOpen/OnMessage 可能不执行；握手失败不会进入这些连接回调。
 	OnOpen func(context.Context, *Session) error
-	// OnMessage 按连接串行处理完整消息；nil 时丢弃消息。
+	// OnMessage 在 OnOpen 成功返回后按连接串行处理完整消息；nil 时丢弃消息。
 	OnMessage func(context.Context, *Session, Message) error
-	// OnDetach 只做快速内存索引清理，可与 OnOpen 并发，不执行 I/O。
+	// OnDetach 在连接首次关闭、摘除活跃索引并取消 Session.Context 后调用一次。
+	// 此时 Detached 已关闭，但网络和在途 OnOpen/OnMessage/Revalidate 可能尚未结束。
+	// 在传输内部锁外同步执行，只做快速内存索引清理，不执行 I/O；
+	// 不得在此释放仍被在途回调使用的业务资源，也不得同步等待自身或所属 Endpoint 完成。
 	OnDetach func(*Session)
-	// OnClose 在网络和在途工作收尾后执行一次，使用受 OnCloseTimeout 及 Endpoint.Cancel 约束的独立 ctx。
+	// OnClose 等网络、在途业务、读写、复核和 OnDetach 全部结束后执行一次。
+	// 可在此释放会话业务资源并执行清理 I/O；须使用回调 ctx，不使用已取消的 Session.Context。
+	// ctx 独立于会话断连取消，受 OnCloseTimeout（默认 5 秒）及 Endpoint.Cancel 约束。
+	// 超时或取消不能强制终止回调，实际返回前 Session.Done 不关闭。
 	OnClose func(context.Context, *Session)
 	// Revalidate 可与消息处理并发，返回错误时关闭连接；nil 时不启用复核。
 	Revalidate func(context.Context, *Session) error

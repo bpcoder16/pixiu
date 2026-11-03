@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package pixiu.realtime.v1;
+
+option go_package = "github.com/bpcoder16/pixiu/biz/realtime/protocol";
+
+// Kind 区分客户端请求、服务端响应和服务端主动事件。
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  REQUEST = 1;
+  RESPONSE = 2;
+  EVENT = 3;
+}
+
+// Error 仅承载业务显式允许公开的错误，不包含内部错误文本。
+message Error {
+  string code = 1;
+  string message = 2;
+}
+
+// Envelope 是 PB 公共信封；JSON 的 data 直接使用业务 ProtoJSON 值。
+message Envelope {
+  Kind kind = 1;
+  string request_id = 2;
+  // scene/action 只用于上行请求路由，下行不设置。
+  string scene = 3;
+  string action = 4;
+  oneof body {
+    bytes data = 5;
+    Error error = 6;
+  }
+  // type 只用于下行消息，由业务显式指定，响应、错误响应和事件均必填。
+  string type = 7;
+}

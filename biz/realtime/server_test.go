@@ -30,7 +30,6 @@ func baseConfig() Config {
 			return ClientInfo{
 				UserID:   "user",
 				DeviceID: r.Header.Get("X-Device"),
-				TenantID: "tenant",
 			}, nil
 		},
 		OnMessage: func(context.Context, *Session, *Message) error {
@@ -111,7 +110,7 @@ func requestWire(t testing.TB, protocolName string, data proto.Message) (int, []
 			t.Fatal(err)
 		}
 		return websocket.TextMessage, append(append([]byte(
-			"{\"kind\":\"request\",\"requestId\":\"r-1\",\"scene\":\"home\",\"action\":\"refresh\",\"data\":"),
+			"{\"kind\":1,\"requestId\":\"r-1\",\"scene\":\"home\",\"action\":\"refresh\",\"data\":"),
 			body...), '}')
 	}
 	body, err := proto.Marshal(data)
@@ -131,7 +130,7 @@ func requestWire(t testing.TB, protocolName string, data proto.Message) (int, []
 	return websocket.BinaryMessage, wire
 }
 
-func responseBody(t testing.TB, c *websocket.Conn, wantKind string) []byte {
+func responseBody(t testing.TB, c *websocket.Conn, wantKind protocol.Kind) []byte {
 	t.Helper()
 	typ, wire := read(t, c)
 	if c.Subprotocol() == SubprotocolJSON {
@@ -142,17 +141,18 @@ func responseBody(t testing.TB, c *websocket.Conn, wantKind string) []byte {
 		if err := json.Unmarshal(wire, &fields); err != nil {
 			t.Fatal(err)
 		}
-		if string(fields["kind"]) != "\""+wantKind+"\"" {
+		var kind protocol.Kind
+		if err := json.Unmarshal(fields["kind"], &kind); err != nil || kind != wantKind {
 			t.Fatalf("消息类型错误: %s", wire)
 		}
-		if wantKind == "response" && string(fields["requestId"]) != "\"r-1\"" {
+		if wantKind == protocol.Kind_RESPONSE && string(fields["requestId"]) != "\"r-1\"" {
 			t.Fatalf("响应未关联请求: %s", wire)
 		}
-		if wantKind == "event" && fields["requestId"] != nil {
+		if wantKind == protocol.Kind_EVENT && fields["requestId"] != nil {
 			t.Fatal("事件错误携带 requestId")
 		}
-		if string(fields["scene"]) != "\"home\"" || string(fields["action"]) != "\"refresh\"" {
-			t.Fatalf("关联字段错误: %s", wire)
+		if string(fields["type"]) != "\"home.refreshed\"" || fields["scene"] != nil || fields["action"] != nil {
+			t.Fatalf("下行必须携带业务类型且不携带路由字段: %s", wire)
 		}
 		return fields["data"]
 	}
@@ -163,12 +163,12 @@ func responseBody(t testing.TB, c *websocket.Conn, wantKind string) []byte {
 	if err := proto.Unmarshal(wire, &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if strings.ToLower(envelope.Kind.String()) != wantKind ||
-		envelope.Scene != "home" || envelope.Action != "refresh" {
+	if envelope.Kind != wantKind || envelope.Type != "home.refreshed" ||
+		envelope.Scene != "" || envelope.Action != "" {
 		t.Fatalf("响应信封错误: %v", &envelope)
 	}
-	if wantKind == "response" && envelope.RequestId != "r-1" ||
-		wantKind == "event" && envelope.RequestId != "" {
+	if wantKind == protocol.Kind_RESPONSE && envelope.RequestId != "r-1" ||
+		wantKind == protocol.Kind_EVENT && envelope.RequestId != "" {
 		t.Fatal("关联请求 ID 错误")
 	}
 	if _, ok := envelope.Body.(*protocol.Envelope_Data); !ok {
@@ -203,7 +203,7 @@ func TestProtocolsRoundTripAndUnsolicitedSend(t *testing.T) {
 					if !proto.Equal(value, payload) {
 						return errors.New("解码值不一致")
 					}
-					return s.Reply(ctx, m, value)
+					return s.Reply(ctx, m, "home.refreshed", value)
 				}
 				_, h := startTestServer(t, cfg)
 				c := dial(t, h, protocolName)
@@ -212,13 +212,12 @@ func TestProtocolsRoundTripAndUnsolicitedSend(t *testing.T) {
 				if err := c.WriteMessage(typ, wire); err != nil {
 					t.Fatal(err)
 				}
-				for _, kind := range []string{"response", "event"} {
-					if kind == "event" {
+				for _, kind := range []protocol.Kind{protocol.Kind_RESPONSE, protocol.Kind_EVENT} {
+					if kind == protocol.Kind_EVENT {
 						if err := session.Send(context.Background(), Outgoing{
-							Kind:   Event,
-							Scene:  "home",
-							Action: "refresh",
-							Data:   payload,
+							Kind: protocol.Kind_EVENT,
+							Type: "home.refreshed",
+							Data: payload,
 						}); err != nil {
 							t.Fatal(err)
 						}
@@ -309,7 +308,7 @@ func TestSessionIsolationAndHTTPIndependence(t *testing.T) {
 	}
 	cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
 		count := s.State().(*state).count.Add(1)
-		return s.Reply(ctx, m, wrapperspb.Int32(count))
+		return s.Reply(ctx, m, "home.refreshed", wrapperspb.Int32(count))
 	}
 	_, h := startTestServer(t, cfg)
 	first := dial(t, h, SubprotocolProtobuf, SubprotocolJSON)
@@ -327,15 +326,69 @@ func TestSessionIsolationAndHTTPIndependence(t *testing.T) {
 		if err := c.WriteMessage(typ, wire); err != nil {
 			t.Fatal(err)
 		}
-		responseBody(t, c, "response")
+		responseBody(t, c, protocol.Kind_RESPONSE)
 	}
 	if a.State().(*state).count.Load() != 2 || b.State().(*state).count.Load() != 1 {
 		t.Fatal("状态跨连接串写")
 	}
 }
 
+func TestJSONEnvelopeCompatibility(t *testing.T) {
+	valid := []byte(`{"kind":1,"requestId":"r-1","scene":"home","action":"refresh","data":{}}`)
+	for _, tc := range []struct {
+		name  string
+		wire  []byte
+		scene string
+	}{
+		{
+			name:  "duplicate",
+			wire:  bytes.Replace(valid, []byte(`"scene":"home"`), []byte(`"scene":"home","scene":"other"`), 1),
+			scene: "other",
+		},
+		{
+			name:  "case-insensitive",
+			wire:  bytes.Replace(valid, []byte(`"scene"`), []byte(`"Scene"`), 1),
+			scene: "home",
+		},
+		{
+			name:  "unknown",
+			wire:  bytes.Replace(valid, []byte(`"scene"`), []byte(`"extra":{"nested":[1]},"scene"`), 1),
+			scene: "home",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			type result struct {
+				requestID string
+				scene     string
+				action    string
+				decodeErr error
+			}
+			received := make(chan result, 1)
+			cfg := baseConfig()
+			cfg.OnMessage = func(_ context.Context, _ *Session, m *Message) error {
+				received <- result{
+					requestID: m.RequestID(),
+					scene:     m.Scene(),
+					action:    m.Action(),
+					decodeErr: m.Decode(&emptypb.Empty{}),
+				}
+				return nil
+			}
+			_, h := startTestServer(t, cfg)
+			c := dial(t, h, SubprotocolJSON)
+			if err := c.WriteMessage(websocket.TextMessage, tc.wire); err != nil {
+				t.Fatal(err)
+			}
+			got := await(t, received)
+			if got.requestID != "r-1" || got.scene != tc.scene || got.action != "refresh" || got.decodeErr != nil {
+				t.Fatalf("JSON 信封未沿用标准库解码语义: %+v", got)
+			}
+		})
+	}
+}
+
 func TestInvalidFramesAndEnvelopes(t *testing.T) {
-	valid := []byte("{\"kind\":\"request\",\"requestId\":\"r-1\",\"scene\":\"home\",\"action\":\"refresh\",\"data\":{}}")
+	valid := []byte("{\"kind\":1,\"requestId\":\"r-1\",\"scene\":\"home\",\"action\":\"refresh\",\"data\":{}}")
 	for _, tc := range []struct {
 		name string
 		typ  int
@@ -355,21 +408,39 @@ func TestInvalidFramesAndEnvelopes(t *testing.T) {
 			code: 1007,
 		},
 		{
-			name: "duplicate",
+			name: "missing-data",
 			typ:  websocket.TextMessage,
-			wire: bytes.Replace(valid, []byte("\"scene\":\"home\""), []byte("\"scene\":\"home\",\"scene\":\"other\""), 1),
+			wire: bytes.Replace(valid, []byte(`,"data":{}`), nil, 1),
 			code: 1007,
 		},
 		{
-			name: "wrong-case",
+			name: "request-error",
 			typ:  websocket.TextMessage,
-			wire: bytes.Replace(valid, []byte("\"scene\""), []byte("\"Scene\""), 1),
+			wire: bytes.Replace(valid, []byte(`"data":{}`), []byte(`"data":{},"error":{"code":"FAIL"}`), 1),
 			code: 1007,
 		},
 		{
-			name: "unknown",
+			name: "request-error-null",
 			typ:  websocket.TextMessage,
-			wire: bytes.Replace(valid, []byte("\"scene\""), []byte("\"extra\":1,\"scene\""), 1),
+			wire: bytes.Replace(valid, []byte(`"data":{}`), []byte(`"data":{},"Error":null`), 1),
+			code: 1007,
+		},
+		{
+			name: "null-request-id",
+			typ:  websocket.TextMessage,
+			wire: bytes.Replace(valid, []byte(`"requestId":"r-1"`), []byte(`"requestId":null`), 1),
+			code: 1007,
+		},
+		{
+			name: "wrong-field-type",
+			typ:  websocket.TextMessage,
+			wire: bytes.Replace(valid, []byte(`"scene":"home"`), []byte(`"scene":1`), 1),
+			code: 1007,
+		},
+		{
+			name: "invalid-utf8",
+			typ:  websocket.TextMessage,
+			wire: bytes.Replace(valid, []byte(`"data":{}`), []byte("\"data\":\"\xff\""), 1),
 			code: 1007,
 		},
 		{
@@ -381,7 +452,7 @@ func TestInvalidFramesAndEnvelopes(t *testing.T) {
 		{
 			name: "direction",
 			typ:  websocket.TextMessage,
-			wire: bytes.Replace(valid, []byte("request\""), []byte("event\""), 1),
+			wire: bytes.Replace(valid, []byte(`"kind":1`), []byte(`"kind":3`), 1),
 			code: 1007,
 		},
 		{
@@ -428,7 +499,7 @@ func TestDrainRetainsAcceptedReplyAndWaitDoesNotCancel(t *testing.T) {
 	cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
 		entered <- ctx
 		<-release
-		return s.Reply(ctx, m, wrapperspb.String("done"))
+		return s.Reply(ctx, m, "home.refreshed", wrapperspb.String("done"))
 	}
 	s, h := startTestServer(t, cfg)
 	c := dial(t, h, SubprotocolJSON)
@@ -442,7 +513,7 @@ func TestDrainRetainsAcceptedReplyAndWaitDoesNotCancel(t *testing.T) {
 		t.Fatalf("Wait 错误取消了业务: %v", err)
 	}
 	unblock()
-	if body := responseBody(t, c, "response"); string(body) != "\"done\"" {
+	if body := responseBody(t, c, protocol.Kind_RESPONSE); string(body) != "\"done\"" {
 		t.Fatalf("排空期间响应丢失: %s", body)
 	}
 	ctx, done := context.WithTimeout(context.Background(), time.Second)
@@ -466,29 +537,40 @@ func TestOutboundValidationAndTransportErrors(t *testing.T) {
 	var nilBody *emptypb.Empty
 	for _, out := range []Outgoing{
 		{
-			Kind:   Event,
-			Scene:  "home",
-			Action: "refresh",
-			Data:   nilBody,
+			Type: "home.refreshed",
+			Data: &emptypb.Empty{},
 		},
 		{
-			Kind:      Event,
-			Scene:     "home",
-			Action:    "refresh",
+			Kind:      protocol.Kind_REQUEST,
+			RequestID: "r-1",
+			Type:      "home.refreshed",
+			Data:      &emptypb.Empty{},
+		},
+		{
+			Kind: 99,
+			Type: "home.refreshed",
+			Data: &emptypb.Empty{},
+		},
+		{
+			Kind: protocol.Kind_EVENT,
+			Type: "home.refreshed",
+			Data: nilBody,
+		},
+		{
+			Kind:      protocol.Kind_EVENT,
+			Type:      "home.refreshed",
 			RequestID: "r-1",
 			Data:      &emptypb.Empty{},
 		},
 		{
-			Kind:   Response,
-			Scene:  "home",
-			Action: "refresh",
-			Data:   &emptypb.Empty{},
+			Kind: protocol.Kind_RESPONSE,
+			Type: "home.refreshed",
+			Data: &emptypb.Empty{},
 		},
 		{
-			Kind:   Event,
-			Scene:  "home",
-			Action: "refresh",
-			Data:   &emptypb.Empty{},
+			Kind: protocol.Kind_EVENT,
+			Type: "home.refreshed",
+			Data: &emptypb.Empty{},
 			Error: &Error{
 				Code:    "FAIL",
 				Message: "失败",
@@ -500,10 +582,9 @@ func TestOutboundValidationAndTransportErrors(t *testing.T) {
 		}
 	}
 	out := Outgoing{
-		Kind:   Event,
-		Scene:  "home",
-		Action: "refresh",
-		Data:   wrapperspb.String(strings.Repeat("x", 128)),
+		Kind: protocol.Kind_EVENT,
+		Type: "home.refreshed",
+		Data: wrapperspb.String(strings.Repeat("x", 128)),
 	}
 	if err := s.Send(context.Background(), out); !errors.Is(err, websocketx.ErrMessageTooLarge) {
 		t.Fatalf("出站长度错误: %v", err)

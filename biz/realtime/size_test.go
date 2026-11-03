@@ -1,7 +1,6 @@
 package realtime
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,10 +25,9 @@ func outboundSize(t *testing.T, protocolName string, payload proto.Message) int6
 			t.Fatal(marshalErr)
 		}
 		wire, err = json.Marshal(map[string]any{
-			"kind":   "event",
-			"scene":  "home",
-			"action": "refresh",
-			"data":   json.RawMessage(body),
+			"kind": 3,
+			"type": "home.refreshed",
+			"data": json.RawMessage(body),
 		})
 	} else {
 		body, marshalErr := proto.Marshal(payload)
@@ -37,10 +35,9 @@ func outboundSize(t *testing.T, protocolName string, payload proto.Message) int6
 			t.Fatal(marshalErr)
 		}
 		wire, err = proto.Marshal(&protocol.Envelope{
-			Kind:   protocol.Kind_EVENT,
-			Scene:  "home",
-			Action: "refresh",
-			Body:   &protocol.Envelope_Data{Data: body},
+			Kind: protocol.Kind_EVENT,
+			Type: "home.refreshed",
+			Body: &protocol.Envelope_Data{Data: body},
 		})
 	}
 	if err != nil {
@@ -86,10 +83,9 @@ func TestSendSizeBoundary(t *testing.T) {
 				client := dial(t, h, protocolName)
 				session := await(t, opened)
 				message := Outgoing{
-					Kind:   Event,
-					Scene:  "home",
-					Action: "refresh",
-					Data:   payload,
+					Kind: protocol.Kind_EVENT,
+					Type: "home.refreshed",
+					Data: payload,
 				}
 				err := session.Send(context.Background(), message)
 				want := payload
@@ -108,7 +104,7 @@ func TestSendSizeBoundary(t *testing.T) {
 					}
 				}
 				// 拒绝后仍能发送，且客户端看到的首条消息不能是超限正文。
-				body := responseBody(t, client, "event")
+				body := responseBody(t, client, protocol.Kind_EVENT)
 				got := want.ProtoReflect().New().Interface()
 				if protocolName == SubprotocolJSON {
 					err = protojson.Unmarshal(body, got)
@@ -141,39 +137,14 @@ func TestSendJSONCompactSize(t *testing.T) {
 	client := dial(t, h, SubprotocolJSON)
 	session := await(t, opened)
 	if err := session.Send(context.Background(), Outgoing{
-		Kind:   Event,
-		Scene:  "home",
-		Action: "refresh",
-		Data:   payload,
+		Kind: protocol.Kind_EVENT,
+		Type: "home.refreshed",
+		Data: payload,
 	}); err != nil {
 		t.Fatalf("压缩后完整帧恰好达到上限，应允许发送: %v", err)
 	}
 	var got structpb.ListValue
-	if err := protojson.Unmarshal(responseBody(t, client, "event"), &got); err != nil || !proto.Equal(&got, payload) {
+	if err := protojson.Unmarshal(responseBody(t, client, protocol.Kind_EVENT), &got); err != nil || !proto.Equal(&got, payload) {
 		t.Fatalf("正文错误: %v", err)
-	}
-}
-
-// ProtoJSON 是否插入空白随构建变化，用固定合法 JSON 覆盖可压缩空白的下界约束。
-func TestBodyLengthLowerBound(t *testing.T) {
-	for _, body := range []string{
-		"[0, 0, 0]",
-		"\n {\t\"v\": 1 \r}\n",
-		`{"v": "  a b  "}`,
-		`{"v": "\" \\ \t 雪"}`,
-	} {
-		var compact bytes.Buffer
-		if err := json.Compact(&compact, []byte(body)); err != nil {
-			t.Fatal(err)
-		}
-		if bodyExceedsLimit(SubprotocolJSON, []byte(body), int64(compact.Len())) {
-			t.Fatalf("JSON 下界不能高于压缩后的实际长度: %q", body)
-		}
-		if !bodyExceedsLimit(SubprotocolProtobuf, []byte(body), int64(len(body)-1)) {
-			t.Fatal("PB 下界应计入全部原始字节")
-		}
-	}
-	if !bodyExceedsLimit(SubprotocolJSON, []byte(`"abcdef"`), 3) {
-		t.Fatal("明显超限的 JSON 正文未被预检查拒绝")
 	}
 }

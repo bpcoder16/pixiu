@@ -38,7 +38,7 @@ func TestPublicErrorAndHandlerFailure(t *testing.T) {
 				if count.Add(1) == 1 {
 					return errors.New("内部敏感信息")
 				}
-				return s.ReplyError(ctx, m, "FORBIDDEN", "没有权限")
+				return s.ReplyError(ctx, m, "request.error", "FORBIDDEN", "没有权限")
 			}
 			_, h := startTestServer(t, cfg)
 			c := dial(t, h, protocolName)
@@ -65,7 +65,9 @@ func TestPublicErrorAndHandlerFailure(t *testing.T) {
 				var failure map[string]string
 				if err := json.Unmarshal(envelope["error"], &failure); err != nil ||
 					failure["code"] != "FORBIDDEN" || failure["message"] != "没有权限" ||
-					envelope["data"] != nil || string(envelope["requestId"]) != "\"r-1\"" {
+					envelope["data"] != nil || string(envelope["requestId"]) != "\"r-1\"" ||
+					string(envelope["kind"]) != "2" || string(envelope["type"]) != "\"request.error\"" ||
+					envelope["scene"] != nil || envelope["action"] != nil {
 					t.Fatalf("错误响应不一致: %s, %v", reply, err)
 				}
 			} else {
@@ -74,7 +76,8 @@ func TestPublicErrorAndHandlerFailure(t *testing.T) {
 					t.Fatal(err)
 				}
 				if envelope.GetError().GetCode() != "FORBIDDEN" ||
-					envelope.GetError().GetMessage() != "没有权限" || envelope.RequestId != "r-1" {
+					envelope.GetError().GetMessage() != "没有权限" || envelope.RequestId != "r-1" ||
+					envelope.Type != "request.error" || envelope.Scene != "" || envelope.Action != "" {
 					t.Fatalf("PB 错误响应不一致: %v", &envelope)
 				}
 			}
@@ -98,7 +101,7 @@ func TestReplyDeadlineDuringEncoding(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Transport.MessageTimeout = 100 * time.Millisecond
 	cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
-		result <- s.Reply(context.Background(), m, replyAfterDeadline{
+		result <- s.Reply(context.Background(), m, "home.refreshed", replyAfterDeadline{
 			Empty: &emptypb.Empty{},
 			ctx:   ctx,
 		})
@@ -130,7 +133,7 @@ func TestTimeoutRejectsLateReplyAndDoneWaitsForCallback(t *testing.T) {
 	cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
 		entered <- s
 		<-release
-		replyErr <- s.Reply(context.Background(), m, &emptypb.Empty{})
+		replyErr <- s.Reply(context.Background(), m, "home.refreshed", &emptypb.Empty{})
 		return nil
 	}
 	server, h := startTestServer(t, cfg)
@@ -233,10 +236,10 @@ func TestReplyRejectsForeignSessionAndCompletedRequest(t *testing.T) {
 	_ = a.WriteMessage(typ, wire)
 	request := await(t, requests)
 	await(t, handled)
-	if err := second.Reply(context.Background(), request, &emptypb.Empty{}); !errors.Is(err, ErrInvalidMessage) {
+	if err := second.Reply(context.Background(), request, "home.refreshed", &emptypb.Empty{}); !errors.Is(err, ErrInvalidMessage) {
 		t.Fatalf("跨 Session 回复被接受: %v", err)
 	}
-	if err := first.Reply(context.Background(), request, &emptypb.Empty{}); !errors.Is(err, context.Canceled) {
+	if err := first.Reply(context.Background(), request, "home.refreshed", &emptypb.Empty{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("已结束请求仍可回复: %v", err)
 	}
 }
@@ -257,10 +260,9 @@ func TestSharedBudgetRejectionDoesNotSilentlyDrop(t *testing.T) {
 	dial(t, h, SubprotocolJSON)
 	s := await(t, opened)
 	if err := s.Send(context.Background(), Outgoing{
-		Kind:   Event,
-		Scene:  "home",
-		Action: "refresh",
-		Data:   &emptypb.Empty{},
+		Kind: protocol.Kind_EVENT,
+		Type: "home.refreshed",
+		Data: &emptypb.Empty{},
 	}); !errors.Is(err, websocketx.ErrBudgetExceeded) {
 		t.Fatalf("共享预算错误丢失: %v", err)
 	}
@@ -296,9 +298,9 @@ func TestPBRequestEnvelopeFields(t *testing.T) {
 	cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
 		var value emptypb.Empty
 		if err := m.Decode(&value); err != nil {
-			return s.ReplyError(ctx, m, "INVALID", "非法正文")
+			return s.ReplyError(ctx, m, "request.error", "INVALID", "非法正文")
 		}
-		return s.Reply(ctx, m, &value)
+		return s.Reply(ctx, m, "home.refreshed", &value)
 	}
 	_, h := startTestServer(t, cfg)
 	for _, tc := range []struct {
@@ -323,7 +325,7 @@ func TestPBRequestEnvelopeFields(t *testing.T) {
 				}
 				return
 			}
-			if got := responseBody(t, c, "response"); !bytes.Equal(got, group) {
+			if got := responseBody(t, c, protocol.Kind_RESPONSE); !bytes.Equal(got, group) {
 				t.Fatalf("普通未知信封字段或业务正文未按原生规则处理: %x", got)
 			}
 		})
@@ -365,12 +367,12 @@ func TestMalformedProtobufAndDeepJSON(t *testing.T) {
 	if _, err := decodeEnvelope(SubprotocolProtobuf, []byte{0xff}); !errors.Is(err, ErrInvalidMessage) {
 		t.Fatal("损坏的 PB 被接受")
 	}
-	prefix := "{\"kind\":\"request\",\"requestId\":\"r1\",\"scene\":\"home\",\"action\":\"refresh\",\"data\":"
+	prefix := "{\"kind\":1,\"requestId\":\"r1\",\"scene\":\"home\",\"action\":\"refresh\",\"data\":"
 	deep := prefix + strings.Repeat("[", 33) + "0" + strings.Repeat("]", 33) + "}"
-	if _, err := decodeEnvelope(SubprotocolJSON, []byte(deep)); !errors.Is(err, ErrInvalidMessage) {
-		t.Fatal("超深 JSON 被接受")
+	if _, err := decodeEnvelope(SubprotocolJSON, []byte(deep)); err != nil {
+		t.Fatalf("信封层不应提前限制合法 JSON 正文的深度: %v", err)
 	}
 	if _, err := decodeEnvelope(SubprotocolJSON, []byte(prefix+"\"[\\\"{}]\"}")); err != nil {
-		t.Fatalf("字符串内括号被错误统计: %v", err)
+		t.Fatalf("合法字符串正文被拒绝: %v", err)
 	}
 }

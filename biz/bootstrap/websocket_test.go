@@ -98,7 +98,7 @@ func wsDial(t *testing.T, addr, subprotocol string) *websocket.Conn {
 func wsExchange(t *testing.T, c *websocket.Conn, want string) {
 	t.Helper()
 	frameType := websocket.TextMessage
-	frame := []byte(`{"kind":"request","requestId":"r1","scene":"test","action":"echo","data":"hello"}`)
+	frame := []byte(`{"kind":1,"requestId":"r1","scene":"test","action":"echo","data":"hello"}`)
 	if c.Subprotocol() == realtime.SubprotocolProtobuf {
 		frameType = websocket.BinaryMessage
 		body, _ := proto.Marshal(wrapperspb.String("hello"))
@@ -174,7 +174,7 @@ func TestWebSocketServicesIndependent(t *testing.T) {
 					}
 					count := s.State().(*int)
 					*count++
-					return s.Reply(ctx, m, wrapperspb.String(fmt.Sprintf("%s:%d:%s", s.Info().UserID, *count, body.Value)))
+					return s.Reply(ctx, m, "test.echo", wrapperspb.String(fmt.Sprintf("%s:%d:%s", s.Info().UserID, *count, body.Value)))
 				}
 				return realtime.NewServer(cfg)
 			})

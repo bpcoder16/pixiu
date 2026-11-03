@@ -30,7 +30,7 @@ func realtimeConfig() realtime.Config {
 			if err := m.Decode(&request); err != nil {
 				return err
 			}
-			return s.Reply(ctx, m, &request)
+			return s.Reply(ctx, m, "home.refreshed", &request)
 		},
 	}
 }
@@ -95,13 +95,13 @@ func TestRealtimeGinService(t *testing.T) {
 		}
 		defer client.Close()
 		if err := client.WriteMessage(websocket.TextMessage, []byte(
-			"{\"kind\":\"request\",\"requestId\":\"r1\",\"scene\":\"home\",\"action\":\"refresh\",\"data\":{}}",
+			"{\"kind\":1,\"requestId\":\"r1\",\"scene\":\"home\",\"action\":\"refresh\",\"data\":{}}",
 		)); err != nil {
 			t.Fatal(err)
 		}
 		_ = client.SetReadDeadline(time.Now().Add(3 * time.Second))
 		typ, reply, err := client.ReadMessage()
-		if err != nil || typ != websocket.TextMessage || !strings.Contains(string(reply), "\"kind\":\"response\"") {
+		if err != nil || typ != websocket.TextMessage || !strings.Contains(string(reply), "\"kind\":2") {
 			t.Fatalf("Gin WebSocket 往返失败: %s, %v", reply, err)
 		}
 		response, err := http.Get(h.URL + "/health")

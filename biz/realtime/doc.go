@@ -14,9 +14,9 @@
 //		OnMessage: func(ctx context.Context, session *realtime.Session, message *realtime.Message) error {
 //			var request wrapperspb.StringValue
 //			if err := message.Decode(&request); err != nil {
-//				return session.ReplyError(ctx, message, "INVALID_ARGUMENT", "请求参数错误")
+//				return session.ReplyError(ctx, message, "request.error", "INVALID_ARGUMENT", "请求参数错误")
 //			}
-//			return session.Reply(ctx, message, wrapperspb.String("hello "+request.Value))
+//			return session.Reply(ctx, message, "home.greeting", wrapperspb.String("hello "+request.Value))
 //		},
 //	})
 //	if err != nil {
@@ -39,24 +39,33 @@
 //
 // 握手提供 SubprotocolJSON 或 SubprotocolProtobuf，分别使用 Text/Binary；
 // 同时提供时优先 JSON。无协议或无交集拒绝升级，同连接上下行编码一致且不可切换。
+// JSON/PB 的 kind 共用 protocol.Kind 枚举值：请求为 1、响应为 2、事件为 3；
+// JSON 只接受整数，不再接受字符串 request/response/event、枚举名称或数字字符串。
+// Outgoing.Kind 直接使用 protocol.Kind，业务发送使用 protocol.Kind_RESPONSE、protocol.Kind_EVENT。
+// 上行以 scene/action 路由；下行不携带这两个字段，使用业务显式指定的 type 标识消息类型。
+// 响应、错误响应和事件均必填 type；响应只回显 requestId，事件不带 requestId。
 // JSON 请求示例，data 是 wrapperspb.StringValue 的 ProtoJSON 标量：
 //
-//	{"kind":"request","requestId":"r1","scene":"home","action":"hello","data":"world"}
+//	{"kind":1,"requestId":"r1","scene":"home","action":"hello","data":"world"}
 //
 // PB 使用 protocol.Envelope，data 为业务 proto.Marshal 字节。JSON 信封的 data
 // 直接嵌入 ProtoJSON 值，不能将整个 protobuf 正文改为 base64；业务 bytes 字段本身仍
 // 遵循 base64、int64/uint64 字段遵循字符串等标准 ProtoJSON 规则。业务 JSON 未知字段报错。
-// requestId、scene、action 各为 1–128 字节，允许 ASCII 字母/数字/点/下划线/短横线。
-// JSON 信封字段名精确匹配，未知、重复、缺失字段及尾随内容均拒绝，正文容器深度最多 32。
+// requestId、scene、action、type 各为 1–128 字节，允许 ASCII 字母/数字/点/下划线/短横线。
+// JSON 信封使用 encoding/json.Unmarshal，字段名大小写兼容、重复字段和未知字段沿用标准库行为。
+// 仍校验请求方向、关联及路由标识、data 存在且无 error（含 null），拒绝格式错误、尾随内容和必要字段类型错误。
+// 文本帧的 UTF-8 和大小由 websocketx 校验，信封层不重复检查 UTF-8 或扫描正文容器深度。
 // PB 请求信封拒绝顶层 group 和 error 字段，跳过普通未知字段。错误帧类型关闭 1003，非法信封关闭 1007。
-// Message.Decode 对 ProtoJSON 和 PB 正文采用原生 RecursionLimit=32；PB 正文中的未知 group 沿用 protobuf 自身的跳过规则。
-// Send/Reply 按完整帧检查 MaxSendBytes，超长返回 websocketx.ErrMessageTooLarge；
-// 大小合规后，JSON 正文容器超过 32 层返回 ErrInvalidMessage。接收方在解码时执行自己的递归限制。
+// 信封的 PB 解码与 Message.Decode 的 ProtoJSON/PB 解码均沿用 protobuf 默认递归保护，具体上限由依赖版本决定。
+// PB 正文中的未知 group 沿用 protobuf 自身的跳过规则。
+// Send/Reply 按完整帧检查 MaxSendBytes，超长返回 websocketx.ErrMessageTooLarge。
+// 发送不额外限制 JSON 正文容器深度，接收方在解码时执行自己的递归限制。
 // 业务 Decode 错误由 Handler 显式处理；普通 Handler error 只脱敏观察，不自动回复或断连。
 // panic/超时由 websocketx 处理。ReplyError 内容由业务授权公开，不应传入内部错误原文。
 //
 // Message 和其正文只在 OnMessage 回调期间有效，每次 Decode 使用独立可写对象。
-// Reply/ReplyError 检查所属 Session，并在入队时检查原请求与调用方的 ctx；回调结束或超时后拒绝迟到回复。
+// Reply/ReplyError 由业务传入消息类型，不从路由或 protobuf 类型名推导；检查所属 Session，
+// 并在入队时检查原请求与调用方的 ctx；回调结束或超时后拒绝迟到回复。
 // 每个请求的回复次数由业务保证，库不维护 pending 表、响应去重或远端任务句柄。
 //
 // # 身份与业务状态
@@ -77,12 +86,11 @@
 //
 // # 主动下发与容量
 //
-// 业务持有当前 Session 时可以直接下发事件，以下代码放在返回 error 的函数中：
+// 业务持有当前 Session 时可以直接下发事件，需导入 protocol；以下代码放在返回 error 的函数中：
 //
 //	return session.Send(ctx, realtime.Outgoing{
-//		Kind:   realtime.Event,
-//		Scene:  "home",
-//		Action: "changed",
+//		Kind:   protocol.Kind_EVENT,
+//		Type:   "home.changed",
 //		Data:   wrapperspb.String("new value"),
 //	})
 //
