@@ -1,5 +1,5 @@
 # 复制到 app.yaml 所在配置目录，命名为 websocket.<name>.yaml。
-# 例如 NewWebSocketService("app", factory) 读取 websocket.app.yaml。
+# 例如 NewWebSocketService("app") 读取 websocket.app.yaml。
 # HTTP 监听字段与 http.yaml 同名、同层。时间使用 Go 时长单位，如 "5s"。
 
 # WebSocket 独立监听地址，必填。每个实例使用独立端口，例如 app :8889、web :8890、admin :8891。
@@ -19,5 +19,5 @@ idleTimeout: "60s"
 # 请求行与请求头总大小上限（字节），零值默认 64 KiB，负值无效。
 maxHeaderBytes: 65536
 
-# 认证、Origin 校验、会话状态、心跳和消息限额由 factory 中的 realtime.Config 提供。
+# 认证、Origin 校验、会话状态、心跳和消息限额由 MustRegisterWebSocket 声明工厂中的 realtime.Config 提供。
 # 服务排空使用管理器的共享期限（bootstrap.Start 默认 30s）。

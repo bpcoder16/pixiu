@@ -36,8 +36,8 @@
 // 默认未命中回复 request.error / NOT_FOUND，可用 Config.OnNotFound 定制。
 // Authenticate 和 RegisterHandlers 必填。NewServer 只构造，Run 一次并阻塞到真实收尾。
 // Run 前或 Stop 后拒绝握手。HTTP 关闭不自动关闭已升级连接。
-// 独立端口可用 bootstrap.NewWebSocketService(name, factory) 一并管理 HTTP 与 realtime，
-// factory 返回全新 Server，调用方不得再单独运行或登记内部 Server；各端使用不同名称和配置文件。
+// 独立端口可用 bootstrap.NewWebSocketService(name) 一并管理 HTTP 与 realtime，
+// 先登记并初始化命名 Server，调用方不得再单独运行或登记内部 Server；各端使用不同名称和配置文件。
 // 关闭时 Stop 全部服务，再以同一总期限 Wait；失败时 Cancel，共享资源随后回收，日志最后关闭。
 // Stop 不取消已经接纳的业务，Wait 超时只结束等待，Done 只在回调和网络实际结束后关闭。
 //
@@ -91,6 +91,22 @@
 // 受 Transport.OnCloseTimeout（默认 5 秒）及 Server.Cancel 约束，Stop/Wait 超时不取消它。
 // 回调必须配合取消，Session.Done/Server.Done 等待实际返回；停收期间清理失败计入 ErrDrainFailed。
 // 每个业务回调使用自己的 ctx；不可同步等待自身或所属 Server.Done。
+//
+// # 命名实例
+//
+// 应用可以通过 bootstrap.MustRegisterWebSocket(name, factory) 声明实例，
+// MustBaseInit 在共享基础设施就绪后构造并登记。之后以 NewWebSocketService(name)
+// 接管运行和关闭，业务通过 realtime.Named(name) 获取同一 Server：
+//
+//	server := realtime.Named("app")
+//	result, err := server.PushToUser(ctx, userID, realtime.PushMessage{
+//		Type: "home.notice",
+//		Data: wrapperspb.String("updated"),
+//	})
+//
+// 自行装配时也可通过 Register(name, server) 登记全新 Server，并显式管理其生命周期。
+// 注册只保存引用，不启动任务、不关闭实例、不自动替换；名称未知时 Named panic。
+// 关闭后 Named 仍返回原对象，其投递方法返回关闭错误。初始化完成后只查询，不重新登记。
 //
 // # 按端投递事件
 //

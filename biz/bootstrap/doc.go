@@ -435,15 +435,27 @@
 // StartWithConfig 要求显式预算至少 5s；Start/NewAppManager 默认仍为 30s。
 // 总预算不包含资源栈、Client.Close 和日志；这些由应用随后调用 lifecycle.Stack.Close 回收，默认整体 20 秒，日志最后关闭。
 //
-// NewWebSocketService(name, factory) 构造独立端口的 WebSocket 服务。
+// 应用在统一初始化前声明 WebSocket 命名实例，工厂在共享客户端就绪后执行：
+//
+//	bootstrap.MustRegisterWebSocket("app", newAppServer)
+//	bootstrap.MustBaseInit(config, resources)
+//
+// newAppServer 的签名为 func() (*realtime.Server, error)，仅构造全新 Server。
+// 业务可通过 realtime.Named("app") 获取同一实例，未知名称 panic。
+// 调用 NewWebSocketService("app") 接管其运行和关闭，不向共享资源栈重复登记关闭。
+// 自行初始化时也可用 realtime.Register(name, server) 登记，再以同一方法创建 Service。
+// 同一命名实例只由一个 Service 接管。
+// 已停止的实例仍可按名称获取，推送返回关闭错误，不自动重建或重启。
+//
+// NewWebSocketService(name) 通过实例名称构造独立端口服务。
 // 严格读取 websocket.<name>.yaml，顶层 addr 和 path 必填，监听字段与 http.yaml 相同。
 // HTTP 监听字段均放在顶层，http 嵌套块按未知字段拒绝。
-// 认证、端状态、JSON/PB 和连接限额仍由 factory 中的 realtime.Config 提供；每次返回全新、未 Run 的 Server。
-// 例如（另需导入 biz/realtime，先准备 websocket.app.yaml，模板见 conf.example/websocket.example.yaml）：
+// 认证、端状态、JSON/PB 和连接限额由声明工厂中的 realtime.Config 提供。
+// 例如（先完成上述初始化并准备 websocket.app.yaml，模板见 conf.example/websocket.example.yaml）：
 //
-//	func startWebSocket(newServer func() (*realtime.Server, error)) error {
+//	func startWebSocket() error {
 //		return bootstrap.Start(func() (apprun.Service, error) {
-//			return bootstrap.NewWebSocketService("app", newServer)
+//			return bootstrap.NewWebSocketService("app")
 //		})
 //	}
 //

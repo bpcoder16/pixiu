@@ -14,6 +14,7 @@ var baseInitStarted bool
 
 // MustBaseInit 执行通用初始化；参数缺失时 panic。
 // 参数校验通过后封闭注册；先应用 env 时区，再依次初始化日志、OSS、STS、阿里云 ES、MySQL、Redis、Elasticsearch 和 NATS。
+// 共享客户端就绪后构造并登记 WebSocket 命名实例，不监听、不运行、不向资源栈登记关闭。
 // Redis 就绪后按代码声明装配 lockx 默认及命名执行器，不读取锁配置文件或新增资源所有权。
 // 必须在其他 goroutine 并发使用时间或日志前调用，运行期不再修改 time.Local。
 // 服务停止后，共享资源按 NATS、Elasticsearch、Redis、MySQL、阿里云 ES、STS、OSS、日志的顺序关闭；未声明的组件跳过。

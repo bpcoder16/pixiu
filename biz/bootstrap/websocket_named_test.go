@@ -11,8 +11,12 @@ import (
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
 	"github.com/bpcoder16/pixiu/biz/realtime"
+	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/lifecycle"
 )
+
+// 服务构造入口只接受实例名称。
+var _ func(string) (apprun.Service, error) = bootstrap.NewWebSocketService
 
 func TestNamedWebSocketServiceOwnership(t *testing.T) {
 	isolatedLog(t, func() {
@@ -59,6 +63,9 @@ func TestNamedWebSocketServiceOwnership(t *testing.T) {
 			t.Fatal("同一实例被多个 Service 接管")
 		}
 		runWSService(t, service, addr)
+		if !app.Ready() {
+			t.Fatal("重复接管取消了原服务")
+		}
 		wsExchange(t, wsDial(t, addr, realtime.SubprotocolJSON), "hello")
 		// 资源栈只回收共享客户端，不能提前关闭 Service 管理的连接。
 		if err := resources.Close(); err != nil {
@@ -78,12 +85,36 @@ func TestNamedWebSocketServiceOwnership(t *testing.T) {
 		default:
 			t.Fatal("Service 关闭未等待 Server")
 		}
+		writeWSContent(t, "admin", `addr: 127.0.0.1:0
+path: /ws
+readHeaderTimeout: -1s
+`)
+		if _, err := bootstrap.NewWebSocketService("admin"); err == nil {
+			t.Fatal("非法监听配置未被拒绝")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := admin.Wait(ctx); err != nil {
+			t.Fatal("构造失败未取消已接管实例")
+		}
 		writeWSConfig(t, "admin", wsAddress(t))
-		adminService, err := bootstrap.NewWebSocketService("admin")
+		if _, err := bootstrap.NewWebSocketService("admin"); err == nil {
+			t.Fatal("失败的已接管实例被重复使用")
+		}
+		// 手动装配也可使用公共命名表，同一对象仍由 Service 独占生命周期。
+		manual, err := realtime.NewServer(exampleRealtimeConfig())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := stopAndWait(adminService.Stop, adminService.Wait, adminService.Cancel); err != nil {
+		if err := realtime.Register("manual", manual); err != nil {
+			t.Fatal(err)
+		}
+		writeWSConfig(t, "manual", wsAddress(t))
+		manualService, err := bootstrap.NewWebSocketService("manual")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := stopAndWait(manualService.Stop, manualService.Wait, manualService.Cancel); err != nil {
 			t.Fatal(err)
 		}
 	})

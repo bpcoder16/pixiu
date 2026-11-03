@@ -48,6 +48,18 @@ func writeWSContent(t *testing.T, name, content string) {
 	}
 }
 
+func registerWSServer(t *testing.T, name string, cfg realtime.Config) *realtime.Server {
+	t.Helper()
+	server, err := realtime.NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := realtime.Register(name, server); err != nil {
+		t.Fatal(err)
+	}
+	return server
+}
+
 func runWSService(t *testing.T, service apprun.Service, addr string) {
 	t.Helper()
 	done := make(chan error, 1)
@@ -161,25 +173,24 @@ func TestWebSocketServicesIndependent(t *testing.T) {
 			case "web", "admin":
 				writeWSConfig(t, name, addr)
 			}
-			service, err := bootstrap.NewWebSocketService(name, func() (*realtime.Server, error) {
-				cfg := realtimeConfig()
-				cfg.Authenticate = func(context.Context, *http.Request) (realtime.ClientInfo, error) {
-					return realtime.ClientInfo{UserID: name}, nil
-				}
-				cfg.NewState = func(realtime.ClientInfo) any { return new(int) }
-				cfg.RegisterHandlers = func(r *realtime.Router) error {
-					return r.Handle("test", "echo", func(ctx context.Context, s *realtime.Session, m *realtime.Message) error {
-						var body wrapperspb.StringValue
-						if err := m.Decode(&body); err != nil {
-							return err
-						}
-						count := s.State().(*int)
-						*count++
-						return s.Reply(ctx, m, "test.echo", wrapperspb.String(fmt.Sprintf("%s:%d:%s", s.Info().UserID, *count, body.Value)))
-					})
-				}
-				return realtime.NewServer(cfg)
-			})
+			cfg := realtimeConfig()
+			cfg.Authenticate = func(context.Context, *http.Request) (realtime.ClientInfo, error) {
+				return realtime.ClientInfo{UserID: name}, nil
+			}
+			cfg.NewState = func(realtime.ClientInfo) any { return new(int) }
+			cfg.RegisterHandlers = func(r *realtime.Router) error {
+				return r.Handle("test", "echo", func(ctx context.Context, s *realtime.Session, m *realtime.Message) error {
+					var body wrapperspb.StringValue
+					if err := m.Decode(&body); err != nil {
+						return err
+					}
+					count := s.State().(*int)
+					*count++
+					return s.Reply(ctx, m, "test.echo", wrapperspb.String(fmt.Sprintf("%s:%d:%s", s.Info().UserID, *count, body.Value)))
+				})
+			}
+			registerWSServer(t, name, cfg)
+			service, err := bootstrap.NewWebSocketService(name)
 			if err != nil || service.Name != "websocket:"+name {
 				t.Fatalf("构造服务失败: %s %v", service.Name, err)
 			}
@@ -237,16 +248,16 @@ func TestWebSocketServicesIndependent(t *testing.T) {
 func TestWebSocketServiceFailureCleanup(t *testing.T) {
 	isolatedLog(t, func() {
 		initHTTPConfigDir(t)
-		factory := func() (*realtime.Server, error) { return realtime.NewServer(realtimeConfig()) }
+		registerWSServer(t, "app", realtimeConfig())
 		for _, name := range []string{"", "../app", " app", "app/web"} {
-			if _, err := bootstrap.NewWebSocketService(name, factory); err == nil {
+			if _, err := bootstrap.NewWebSocketService(name); err == nil {
 				t.Fatalf("接纳了非法名称 %q", name)
 			}
 		}
-		if _, err := bootstrap.NewWebSocketService("app", factory); !errors.Is(err, os.ErrNotExist) {
+		if _, err := bootstrap.NewWebSocketService("app"); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("缺失配置错误链丢失: %v", err)
 		}
-		for _, content := range []string{
+		for i, content := range []string{
 			"addr: ':0'\nunknown: true\npath: /ws\n",
 			// 旧 http 块不再接纳，即使其内部字段本身合法。
 			"http:\n  addr: ':0'\npath: /ws\n",
@@ -260,29 +271,19 @@ func TestWebSocketServiceFailureCleanup(t *testing.T) {
 			"readTimeout: 2s\nhttp:\n  addr: ':8889'\npath: /ws\n",
 			"readTimeout: 0s\nhttp:\n  addr: ':8889'\n  readTimeout: 2s\npath: /ws\n",
 		} {
-			writeWSContent(t, "app", content)
-			if _, err := bootstrap.NewWebSocketService("app", factory); err == nil {
+			name := fmt.Sprintf("invalid-%d", i)
+			registerWSServer(t, name, realtimeConfig())
+			writeWSContent(t, name, content)
+			if _, err := bootstrap.NewWebSocketService(name); err == nil {
 				t.Fatalf("非法配置未拒绝: %s", content)
 			}
 		}
 		writeWSConfig(t, "app", "127.0.0.1:0")
-		if _, err := bootstrap.NewWebSocketService("app", nil); err == nil {
-			t.Fatal("nil 工厂被接受")
+		writeWSConfig(t, "unregistered", "127.0.0.1:0")
+		if _, err := bootstrap.NewWebSocketService("unregistered"); err == nil || !strings.Contains(err.Error(), "not registered") {
+			t.Fatalf("未知命名实例未被拒绝: %v", err)
 		}
-		if _, err := bootstrap.NewWebSocketService("app", func() (*realtime.Server, error) { return nil, nil }); err == nil {
-			t.Fatal("nil Server 被接受")
-		}
-		server, _ := factory()
-		failure := errors.New("factory failed")
-		if _, err := bootstrap.NewWebSocketService("app", func() (*realtime.Server, error) { return server, failure }); !errors.Is(err, failure) {
-			t.Fatalf("工厂错误丢失: %v", err)
-		}
-		select {
-		case <-server.Done():
-		case <-time.After(time.Second):
-			t.Fatal("部分构造的 Server 未回收")
-		}
-		service, err := bootstrap.NewWebSocketService("app", factory)
+		service, err := bootstrap.NewWebSocketService("app")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -298,7 +299,8 @@ func TestWebSocketServiceFailureCleanup(t *testing.T) {
 		}
 		defer ln.Close()
 		writeWSConfig(t, "occupied", ln.Addr().String())
-		service, err = bootstrap.NewWebSocketService("occupied", factory)
+		registerWSServer(t, "occupied", realtimeConfig())
+		service, err = bootstrap.NewWebSocketService("occupied")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -324,22 +326,18 @@ func TestWebSocketServiceWaitIncludesOnClose(t *testing.T) {
 		release := make(chan struct{})
 		releaseCleanup := sync.OnceFunc(func() { close(release) })
 		defer releaseCleanup()
-		var server *realtime.Server
-		service, err := bootstrap.NewWebSocketService("app", func() (*realtime.Server, error) {
-			cfg := realtimeConfig()
-			cfg.Transport.OnCloseTimeout = 5 * time.Second
-			cfg.OnOpen = func(context.Context, *realtime.Session) error {
-				opened <- struct{}{}
-				return nil
-			}
-			cfg.OnClose = func(ctx context.Context, _ *realtime.Session) {
-				entered <- ctx
-				<-release
-			}
-			var err error
-			server, err = realtime.NewServer(cfg)
-			return server, err
-		})
+		cfg := realtimeConfig()
+		cfg.Transport.OnCloseTimeout = 5 * time.Second
+		cfg.OnOpen = func(context.Context, *realtime.Session) error {
+			opened <- struct{}{}
+			return nil
+		}
+		cfg.OnClose = func(ctx context.Context, _ *realtime.Session) {
+			entered <- ctx
+			<-release
+		}
+		server := registerWSServer(t, "app", cfg)
+		service, err := bootstrap.NewWebSocketService("app")
 		if err != nil {
 			t.Fatal(err)
 		}

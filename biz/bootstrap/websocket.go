@@ -24,26 +24,14 @@ type webSocketConfig struct {
 
 // NewWebSocketService 构造独占端口的 websocket:<name> 服务，不启动监听或后台任务。
 // 严格读取 env.ConfigDirPath() 下的 websocket.<name>.yaml，顶层 addr 与 path 必填。
-// name 为非空 ASCII 字母、数字、下划线、连字符组合。每次 factory 必须返回全新且未运行的 Server，
-// 成功后由本服务独占其生命周期，调用方不得再单独运行或登记内部 Server；失败时回收已返回的部分对象。
+// name 为非空 ASCII 字母、数字、下划线、连字符组合。
+// 接管已由 MustBaseInit 或 realtime.Register 登记的命名实例，每个实例只可接管一次。
+// 成功后本服务独占生命周期，调用方不得再单独运行或登记内部 Server；失败时回收本轮已接管的对象。
 // 只处理配置的升级路径与固定 /ready/ws，两者仅允许 GET；其他路径返回 404，不提供普通 HTTP 路由扩展。
 // HTTP 与 realtime 并发启动，以 /ready/ws 的 204 表示可接纳连接；所有实例共享外层管理器的停机预算。
-func NewWebSocketService(name string, factories ...func() (*realtime.Server, error)) (apprun.Service, error) {
+func NewWebSocketService(name string) (apprun.Service, error) {
 	if err := validateInstanceName("WebSocket", name); err != nil {
 		return apprun.Service{}, err
-	}
-	if len(factories) > 1 || (len(factories) == 1 && factories[0] == nil) {
-		return apprun.Service{}, errors.New("bootstrap: expected zero or one non-nil WebSocket factory")
-	}
-	factory := func() (*realtime.Server, error) { return claimWebSocket(name) }
-	if len(factories) == 1 {
-		// 已声明的命名实例不可绕过 Service 所有权检查。
-		for _, registration := range webSocketInstances.registrations {
-			if registration.name == name {
-				return apprun.Service{}, fmt.Errorf("bootstrap: WebSocket %q is registered; omit the factory", name)
-			}
-		}
-		factory = factories[0]
 	}
 	configFile := filepath.Join(env.ConfigDirPath(), "websocket."+name+".yaml")
 	cfg, err := configx.Parse[webSocketConfig](configFile)
@@ -59,18 +47,15 @@ func NewWebSocketService(name string, factories ...func() (*realtime.Server, err
 	}
 	serviceName := "websocket:" + name
 	var server *realtime.Server
-	if constructErr := callServiceCleanup(serviceName, "construct realtime", func() error {
-		var factoryErr error
-		server, factoryErr = factory()
-		return factoryErr
-	}); constructErr != nil {
-		if server != nil {
-			server.Cancel()
-		}
-		return apprun.Service{}, constructErr
+	if lookupErr := callServiceCleanup(serviceName, "lookup realtime", func() error {
+		var resolveErr error
+		server, resolveErr = registeredWebSocket(name)
+		return resolveErr
+	}); lookupErr != nil {
+		return apprun.Service{}, lookupErr
 	}
-	if server == nil {
-		return apprun.Service{}, errors.New("bootstrap: WebSocket factory returned nil server")
+	if claimErr := claimWebSocket(name); claimErr != nil {
+		return apprun.Service{}, claimErr
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != cfg.Path && r.URL.Path != "/ready/ws" {

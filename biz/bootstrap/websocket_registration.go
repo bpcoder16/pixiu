@@ -11,11 +11,9 @@ type webSocketRegistration struct {
 	name    string
 	factory func() (*realtime.Server, error)
 	server  *realtime.Server
-	claimed bool
 }
 
 var webSocketInstances struct {
-	sync.Mutex
 	registrations []*webSocketRegistration
 	initialized   bool
 }
@@ -75,21 +73,30 @@ func initWebSockets() (err error) {
 	return nil
 }
 
-func claimWebSocket(name string) (*realtime.Server, error) {
-	webSocketInstances.Lock()
-	defer webSocketInstances.Unlock()
+func registeredWebSocket(name string) (*realtime.Server, error) {
 	for _, registration := range webSocketInstances.registrations {
-		if registration.name != name {
-			continue
-		}
-		if !webSocketInstances.initialized || registration.server == nil {
+		if registration.name == name && !webSocketInstances.initialized {
 			return nil, fmt.Errorf("bootstrap: WebSocket %q is not initialized", name)
 		}
-		if registration.claimed {
-			return nil, fmt.Errorf("bootstrap: WebSocket %q already belongs to a Service", name)
-		}
-		registration.claimed = true
-		return registration.server, nil
 	}
-	return nil, fmt.Errorf("bootstrap: WebSocket %q is not registered", name)
+	// 未声明工厂的实例也可由应用显式 Register；未知名称的 panic 由服务构造边界转换为错误。
+	return realtime.Named(name), nil
+}
+
+// 命名表已保证名称与实例一一对应，Service 只记录已接管的名称。
+var webSocketOwners = struct {
+	sync.Mutex
+	names map[string]struct{}
+}{
+	names: make(map[string]struct{}),
+}
+
+func claimWebSocket(name string) error {
+	webSocketOwners.Lock()
+	defer webSocketOwners.Unlock()
+	if _, exists := webSocketOwners.names[name]; exists {
+		return fmt.Errorf("bootstrap: WebSocket %q already belongs to a Service", name)
+	}
+	webSocketOwners.names[name] = struct{}{}
+	return nil
 }
