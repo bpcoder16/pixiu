@@ -19,6 +19,16 @@ type PushMessage struct {
 	ExpiresAt time.Time
 }
 
+func (msg PushMessage) outgoing() Outgoing {
+	return Outgoing{
+		Kind:      protocol.Kind_EVENT,
+		Type:      msg.Type,
+		Data:      msg.Data,
+		Error:     msg.Error,
+		ExpiresAt: msg.ExpiresAt,
+	}
+}
+
 // PushResult 统计本节点匹配、已入队和失败的连接数。成功入队不等于终端已收到。
 type PushResult struct {
 	Matched  int
@@ -146,13 +156,7 @@ func (s *Server) deliver(ctx context.Context, target pushTarget, msg PushMessage
 	s.pushes.Add(1)
 	s.pushMu.Unlock()
 	defer s.pushes.Done()
-	out := Outgoing{
-		Kind:      protocol.Kind_EVENT,
-		Type:      msg.Type,
-		Data:      msg.Data,
-		Error:     msg.Error,
-		ExpiresAt: msg.ExpiresAt,
-	}
+	out := msg.outgoing()
 	if validationErr := validateOutgoing(out); validationErr != nil {
 		return result, validationErr
 	}

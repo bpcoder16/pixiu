@@ -110,6 +110,29 @@
 // 其他连接继续发送。调用方可据此观察过载，不应整批重试已部分入队的事件。
 // 调用期间不得并发修改消息及其正文。Stop 封闭新投递，Wait 包含已接纳的投递及连接实际排空。
 //
+// # 跨节点推送命令
+//
+// 发布端与订阅端使用同一份 UTF-8 JSON。命令上限 1 MiB，kind 为 broadcast 时须省略 id，
+// user/device 则需要非空白 id。message.data 按 ProtoJSON 表示，也可改用 message.error。
+// expiresAt 可省略，填写时使用 RFC3339 绝对时间。示例在线上表示为：
+//
+//	{"kind":"user","id":"u42","message":{"type":"home.notice","data":"updated"}}
+//
+// 发布端可以将以下字节交给自己的消息系统：
+//
+//	data, err := realtime.MarshalPushCommand(realtime.PushCommand{
+//		Kind: realtime.PushUser,
+//		ID:   "u42",
+//		Message: realtime.PushMessage{
+//			Type: "home.notice",
+//			Data: wrapperspb.String("updated"),
+//		},
+//	})
+//
+// 消费端调用 UnmarshalPushCommand(data, newData)。newData 按业务 type 提供独立的可写 proto，
+// 例如 home.notice 返回 new(wrapperspb.StringValue)。仅有 error 时无需提供构造函数。
+// 调用方按命令 Kind/ID 调用本端 Server 的投递方法，Server 再编码为各连接协商的 JSON/PB。
+//
 // # 当前会话下发与容量
 //
 // 业务持有当前 Session 时可以直接下发事件，需导入 protocol；以下代码放在返回 error 的函数中：

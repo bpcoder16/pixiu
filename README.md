@@ -199,7 +199,7 @@ HTTP、Cron 不再保留独立关闭计时器；http.yaml 的 shutdownTimeout �
 
 ### 规划中的能力
 
-`biz/realtime` 提供 Session、JSON/PB 和 bootstrap 接入。构造服务时通过 `Config.RegisterHandlers` 集中登记场景和动作，Pixiu 负责分发、默认未命中回复和回复发送失败的处置。Server 通过 Broadcast、PushToUser、PushToDevice 在本端本节点投递事件，调用方管理消息来源。其他尚未实现的包不属于当前可用 API，实际能力以上述模块导航为准。
+`biz/realtime` 提供 Session、JSON/PB 和 bootstrap 接入。构造服务时通过 `Config.RegisterHandlers` 集中登记场景和动作，Pixiu 负责分发、默认未命中回复和回复发送失败的处置。Server 通过 Broadcast、PushToUser、PushToDevice 在本端本节点投递事件。跨节点可使用 PushCommand，将 kind、id 与嵌套的 message 编码为统一 JSON，发布、订阅和按端分发由调用方装配。其他尚未实现的包不属于当前可用 API，实际能力以上述模块导航为准。
 
 ## 分层架构
 
