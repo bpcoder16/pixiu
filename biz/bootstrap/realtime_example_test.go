@@ -18,12 +18,14 @@ func exampleRealtimeConfig() realtime.Config {
 			// 仅供示例：业务应在此校验凭据并提取可信身份。
 			return realtime.ClientInfo{}, nil
 		},
-		OnMessage: func(ctx context.Context, session *realtime.Session, message *realtime.Message) error {
-			var request wrapperspb.StringValue
-			if err := message.Decode(&request); err != nil {
-				return session.ReplyError(ctx, message, "request.error", "INVALID_ARGUMENT", "请求参数错误")
-			}
-			return session.Reply(ctx, message, "home.greeting", wrapperspb.String("hello "+request.Value))
+		RegisterHandlers: func(r *realtime.Router) error {
+			return r.Handle("home", "hello", func(ctx context.Context, session *realtime.Session, message *realtime.Message) error {
+				var request wrapperspb.StringValue
+				if err := message.Decode(&request); err != nil {
+					return session.ReplyError(ctx, message, "request.error", "INVALID_ARGUMENT", "请求参数错误")
+				}
+				return session.Reply(ctx, message, "home.greeting", wrapperspb.String("hello "+request.Value))
+			})
 		},
 	}
 }

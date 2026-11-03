@@ -1,23 +1,26 @@
 // Package realtime 基于 websocketx 提供连接身份、独立业务状态和 JSON/PB 双向消息。
-// 首期通过统一 OnMessage 回调处理请求；场景路由和 Redis/NATS 推送来源尚未实现。
+// Router 按上行 scene/action 分发请求，业务处理器负责解码正文和回复。
 //
 // # 构造与消息处理
 //
 // 业务消息由业务项目的 .proto 定义。下例使用标准 protobuf 消息展示公开 API，
 // 需导入 context、net/http、realtime 和 wrapperspb；代码放在返回 error 的函数中：
 //
-//	server, err := realtime.NewServer(realtime.Config{
-//		Authenticate: func(ctx context.Context, r *http.Request) (realtime.ClientInfo, error) {
-//			// 示例显式允许匿名；生产业务应校验凭据并返回用户、设备等可信信息。
-//			return realtime.ClientInfo{}, nil
-//		},
-//		OnMessage: func(ctx context.Context, session *realtime.Session, message *realtime.Message) error {
+//	register := func(r *realtime.Router) error {
+//		return r.Handle("home", "hello", func(ctx context.Context, session *realtime.Session, message *realtime.Message) error {
 //			var request wrapperspb.StringValue
 //			if err := message.Decode(&request); err != nil {
 //				return session.ReplyError(ctx, message, "request.error", "INVALID_ARGUMENT", "请求参数错误")
 //			}
 //			return session.Reply(ctx, message, "home.greeting", wrapperspb.String("hello "+request.Value))
+//		})
+//	}
+//	server, err := realtime.NewServer(realtime.Config{
+//		Authenticate: func(ctx context.Context, r *http.Request) (realtime.ClientInfo, error) {
+//			// 示例显式允许匿名；生产业务应校验凭据并返回用户、设备等可信信息。
+//			return realtime.ClientInfo{}, nil
 //		},
+//		RegisterHandlers: register,
 //	})
 //	if err != nil {
 //		return err
@@ -28,7 +31,10 @@
 //	// 应用运行 server.Run，并由 HTTP 服务监听 mux；Ready 为 true 后接受连接。
 //	// 使用 bootstrap 时，显式将 Server 的生命周期方法填入 apprun.Service，与 HTTP 服务分别登记。
 //
-// Authenticate、OnMessage 必填；NewServer 无后台任务。Run 一次并阻塞到真实收尾，
+// NewServer 调用 RegisterHandlers，在构造阶段封闭路由表。每个服务拥有独立的注册清单。
+// Handle 精确匹配 scene 和 action，注册函数应返回非法标识、空处理器或重复注册产生的错误。
+// 默认未命中回复 request.error / NOT_FOUND，可用 Config.OnNotFound 定制。
+// Authenticate 和 RegisterHandlers 必填。NewServer 只构造，Run 一次并阻塞到真实收尾。
 // Run 前或 Stop 后拒绝握手。HTTP 关闭不自动关闭已升级连接。
 // 独立端口可用 bootstrap.NewWebSocketService(name, factory) 一并管理 HTTP 与 realtime，
 // factory 返回全新 Server，调用方不得再单独运行或登记内部 Server；各端使用不同名称和配置文件。
@@ -63,9 +69,11 @@
 // 业务 Decode 错误由 Handler 显式处理；普通 Handler error 只脱敏观察，不自动回复或断连。
 // panic/超时由 websocketx 处理。ReplyError 内容由业务授权公开，不应传入内部错误原文。
 //
-// Message 和其正文只在 OnMessage 回调期间有效，每次 Decode 使用独立可写对象。
+// Message 和其正文只在业务 Handler 回调期间有效，每次 Decode 使用独立可写对象。
 // Reply/ReplyError 由业务传入消息类型，不从路由或 protobuf 类型名推导；检查所属 Session，
 // 并在入队时检查原请求与调用方的 ctx；回调结束或超时后拒绝迟到回复。
+// 活跃请求回复失败时，队列或共享预算不足发起关闭 1013，回复编码或大小错误发起关闭 1011。
+// 原始错误返回给调用方。取消、过期、跨会话或已结束的请求沿用自身的错误与关闭语义。
 // 每个请求的回复次数由业务保证，库不维护 pending 表、响应去重或远端任务句柄。
 //
 // # 身份与业务状态
@@ -76,7 +84,7 @@
 //
 // NewState 为每个连接返回独立的业务对象，State 返回对象本身，不做深拷贝或自动加锁。
 // 工厂仅做快速内存初始化；业务自定义结构负责并发安全，可在 OnClose 中释放资源。
-// OnOpen 与 OnMessage 同连接串行，Revalidate 基于固定身份并发执行。
+// OnOpen 与业务 Handler 同连接串行，Revalidate 基于固定身份并发执行。
 // OnClose 等待网络和在途回调完成，OnOpen 失败也会清理已发布的业务会话；
 // 初始化前断开或 NewState panic 时可能不创建业务会话，因此不调用业务 OnClose。
 // 清理 I/O 使用 OnClose 的 ctx，不使用已取消的 Session.Context；它独立于断连取消，

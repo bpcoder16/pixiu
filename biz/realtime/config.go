@@ -45,19 +45,21 @@ type Config struct {
 	// State 中的并发访问和资源释放由业务负责，库不做深拷贝。
 	NewState func(ClientInfo) any
 	OnOpen   func(context.Context, *Session) error
-	// OnMessage 必填，避免接入后静默丢弃客户端请求。
-	OnMessage Handler
+	// RegisterHandlers 必填。NewServer 同步调用一次并封闭路由表，注册函数应返回 Handle 的错误。
+	RegisterHandlers func(*Router) error
+	// OnNotFound 可覆盖未知 scene/action 的处理。默认回复 request.error，错误码为 NOT_FOUND。
+	OnNotFound Handler
 	// OnClose 等待该连接在途回调结束后执行，可释放业务状态。
 	// ctx 独立于 Session.Context 的断连取消，受 Transport.OnCloseTimeout（默认 5 秒）及 Server.Cancel 约束。
 	// 回调须响应取消；实际返回前 Session.Done/Server.Done 不关闭。
 	OnClose func(context.Context, *Session)
-	// Revalidate 复核不可变身份；可与 OnOpen/OnMessage 并发。
+	// Revalidate 复核不可变身份，可与 OnOpen 及业务 Handler 并发。
 	Revalidate func(context.Context, ClientInfo) error
 }
 
 func validateConfig(cfg Config) error {
-	if cfg.Authenticate == nil || cfg.OnMessage == nil {
-		return errors.New("realtime: Authenticate and OnMessage are required")
+	if cfg.Authenticate == nil || cfg.RegisterHandlers == nil {
+		return errors.New("realtime: Authenticate and RegisterHandlers are required")
 	}
 	t := cfg.Transport
 	if len(t.Subprotocols) != 0 || t.RequireSubprotocol || t.CheckReady != nil ||

@@ -119,8 +119,12 @@ func (s *Session) enqueue(ctx, activeCtx context.Context, message Message, prepa
 	if prepared == nil {
 		message.Data = bytes.Clone(message.Data)
 	}
-	// 等待共享预算或复制正文期间也可能到期，在发布队列项前复核。
-	if err := checkContexts(); err != nil {
+	// 等待共享预算或复制正文时，调用期限与消息有效期都可能届满。
+	err := checkContexts()
+	if err == nil && !message.ExpiresAt.IsZero() && !time.Now().Before(message.ExpiresAt) {
+		err = ErrExpired
+	}
+	if err != nil {
 		e.config.Budget.release(false, 1, size)
 		return err
 	}

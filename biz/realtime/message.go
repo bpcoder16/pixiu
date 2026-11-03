@@ -8,7 +8,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Message 保存已验证信封和未解码业务正文，仅在 OnMessage 期间有效。
+// Message 保存已验证信封和未解码业务正文，仅在业务 Handler 执行期间有效。
 type Message struct {
 	requestID string
 	scene     string

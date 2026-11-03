@@ -25,12 +25,14 @@ func realtimeConfig() realtime.Config {
 			// 测试显式允许匿名，不依赖业务认证服务。
 			return realtime.ClientInfo{}, nil
 		},
-		OnMessage: func(ctx context.Context, s *realtime.Session, m *realtime.Message) error {
-			var request emptypb.Empty
-			if err := m.Decode(&request); err != nil {
-				return err
-			}
-			return s.Reply(ctx, m, "home.refreshed", &request)
+		RegisterHandlers: func(r *realtime.Router) error {
+			return r.Handle("home", "refresh", func(ctx context.Context, s *realtime.Session, m *realtime.Message) error {
+				var request emptypb.Empty
+				if err := m.Decode(&request); err != nil {
+					return err
+				}
+				return s.Reply(ctx, m, "home.refreshed", &request)
+			})
 		},
 	}
 }

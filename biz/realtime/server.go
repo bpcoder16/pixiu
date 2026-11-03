@@ -2,6 +2,7 @@ package realtime
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -19,10 +20,16 @@ const (
 // bootstrap.NewWebSocketService 可将两者组合为独立端口服务；共用端口时分别登记。
 // 构造后不得复制，Run 只执行一次，Stop/Wait/Cancel 可并发调用。
 type Server struct {
-	config   Config
+	// 服务配置与业务回调。
+	config Config
+	// 注册完成后的消息分发入口。
+	dispatch Handler
+	// 底层 WebSocket 传输端点。
 	endpoint *websocketx.Endpoint
-	state    atomic.Uint32
-	started  atomic.Bool
+	// 当前生命周期状态，控制是否接纳新连接。
+	state atomic.Uint32
+	// 标记 Run 是否已调用，防止重复启动。
+	started atomic.Bool
 	// 将传输连接关联到已初始化的业务会话，供消息和业务收尾回调使用。
 	sessions sync.Map
 }
@@ -38,7 +45,14 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.Transport.MaxSendBytes == 0 {
 		cfg.Transport.MaxSendBytes = 64 << 10
 	}
-	s := &Server{config: cfg}
+	var routes Router
+	if err := cfg.RegisterHandlers(&routes); err != nil {
+		return nil, fmt.Errorf("realtime: register handlers: %w", err)
+	}
+	s := &Server{
+		config:   cfg,
+		dispatch: routes.seal(cfg.OnNotFound),
+	}
 	transport := cfg.Transport
 	transport.Subprotocols = []string{SubprotocolJSON, SubprotocolProtobuf}
 	transport.RequireSubprotocol = true
@@ -147,7 +161,7 @@ func (s *Server) onMessage(ctx context.Context, raw *websocketx.Session, frame w
 	}
 	message.session = session
 	message.ctx = ctx
-	return s.config.OnMessage(ctx, session, message)
+	return s.dispatch(ctx, session, message)
 }
 
 func (s *Server) onClose(ctx context.Context, raw *websocketx.Session) {

@@ -100,10 +100,10 @@ func TestReceiveDepthBoundary(t *testing.T) {
 				decoded := make(chan error, 1)
 				got := tc.message.ProtoReflect().New().Interface()
 				cfg := baseConfig()
-				cfg.OnMessage = func(_ context.Context, _ *Session, message *Message) error {
+				cfg.RegisterHandlers = testRoute("home", "refresh", func(_ context.Context, _ *Session, message *Message) error {
 					decoded <- message.Decode(got)
 					return nil
-				}
+				})
 				_, h := startTestServer(t, cfg)
 				client := dial(t, h, protocolName)
 				frameType, wire := requestWire(t, protocolName, tc.message)

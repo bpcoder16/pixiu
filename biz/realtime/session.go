@@ -2,10 +2,12 @@ package realtime
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/bpcoder16/pixiu/biz/realtime/protocol"
 	"github.com/bpcoder16/pixiu/infra/websocketx"
+	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -75,11 +77,13 @@ func (s *Session) send(ctx, requestCtx context.Context, message Outgoing) error 
 
 // Reply 使用业务指定的消息类型关联当前连接的请求，只回显 requestId。
 // 请求回调结束或超时后不能继续通过此方法回复。
+// 活跃请求的回复因队列或预算不足而失败时发起关闭 1013，编码失败或超限时发起关闭 1011。
+// 发送错误原样返回。
 func (s *Session) Reply(ctx context.Context, request *Message, messageType string, data proto.Message) error {
 	return s.reply(ctx, request, messageType, data, nil)
 }
 
-// ReplyError 使用业务指定的消息类型下发公开错误，不使用内部错误文本。
+// ReplyError 使用业务指定的消息类型下发公开错误，发送失败沿用 Reply 的关闭策略。
 func (s *Session) ReplyError(ctx context.Context, request *Message, messageType, code, message string) error {
 	return s.reply(ctx, request, messageType, nil, &Error{
 		Code:    code,
@@ -94,11 +98,24 @@ func (s *Session) reply(ctx context.Context, request *Message, messageType strin
 	if err := request.ctx.Err(); err != nil {
 		return err
 	}
-	return s.send(ctx, request.ctx, Outgoing{
+	err := s.send(ctx, request.ctx, Outgoing{
 		Kind:      protocol.Kind_RESPONSE,
 		RequestID: request.requestID,
 		Type:      messageType,
 		Data:      data,
 		Error:     publicError,
 	})
+	if err == nil || ctx == nil || ctx.Err() != nil || request.ctx.Err() != nil {
+		return err
+	}
+	// 活跃请求无法得到回复时让客户端感知断连。过期、取消或已关闭由原生命周期路径处理。
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled), errors.Is(err, websocketx.ErrClosed):
+		return err
+	case errors.Is(err, websocketx.ErrQueueFull), errors.Is(err, websocketx.ErrBudgetExceeded):
+		_, _ = s.Close(websocket.CloseTryAgainLater, "server busy")
+	default:
+		_, _ = s.Close(websocket.CloseInternalServerErr, "response failed")
+	}
+	return err
 }

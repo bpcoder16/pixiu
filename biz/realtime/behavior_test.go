@@ -33,13 +33,13 @@ func TestPublicErrorAndHandlerFailure(t *testing.T) {
 					observed <- event.Err
 				}
 			}
-			cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
+			cfg.RegisterHandlers = testRoute("home", "refresh", func(ctx context.Context, s *Session, m *Message) error {
 				called <- struct{}{}
 				if count.Add(1) == 1 {
 					return errors.New("内部敏感信息")
 				}
 				return s.ReplyError(ctx, m, "request.error", "FORBIDDEN", "没有权限")
-			}
+			})
 			_, h := startTestServer(t, cfg)
 			c := dial(t, h, protocolName)
 			typ, wire := requestWire(t, protocolName, &emptypb.Empty{})
@@ -100,13 +100,13 @@ func TestReplyDeadlineDuringEncoding(t *testing.T) {
 	result := make(chan error, 1)
 	cfg := baseConfig()
 	cfg.Transport.MessageTimeout = 100 * time.Millisecond
-	cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
+	cfg.RegisterHandlers = testRoute("home", "refresh", func(ctx context.Context, s *Session, m *Message) error {
 		result <- s.Reply(context.Background(), m, "home.refreshed", replyAfterDeadline{
 			Empty: &emptypb.Empty{},
 			ctx:   ctx,
 		})
 		return nil
-	}
+	})
 	_, h := startTestServer(t, cfg)
 	c := dial(t, h, SubprotocolJSON)
 	typ, wire := requestWire(t, SubprotocolJSON, &emptypb.Empty{})
@@ -130,12 +130,12 @@ func TestTimeoutRejectsLateReplyAndDoneWaitsForCallback(t *testing.T) {
 	unblock := func() { once.Do(func() { close(release) }) }
 	cfg := baseConfig()
 	cfg.Transport.MessageTimeout = 40 * time.Millisecond
-	cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
+	cfg.RegisterHandlers = testRoute("home", "refresh", func(ctx context.Context, s *Session, m *Message) error {
 		entered <- s
 		<-release
 		replyErr <- s.Reply(context.Background(), m, "home.refreshed", &emptypb.Empty{})
 		return nil
-	}
+	})
 	server, h := startTestServer(t, cfg)
 	defer unblock()
 	c := dial(t, h, SubprotocolJSON)
@@ -218,10 +218,10 @@ func TestReplyRejectsForeignSessionAndCompletedRequest(t *testing.T) {
 		opened <- s
 		return nil
 	}
-	cfg.OnMessage = func(_ context.Context, _ *Session, m *Message) error {
+	cfg.RegisterHandlers = testRoute("home", "refresh", func(_ context.Context, _ *Session, m *Message) error {
 		requests <- m
 		return nil
-	}
+	})
 	cfg.Transport.Observe = func(_ context.Context, event websocketx.Event) {
 		if event.Kind == websocketx.EventHandled {
 			handled <- struct{}{}
@@ -271,7 +271,7 @@ func TestSharedBudgetRejectionDoesNotSilentlyDrop(t *testing.T) {
 func TestReservedTransportConfiguration(t *testing.T) {
 	for _, mutate := range []func(*Config){
 		func(c *Config) { c.Authenticate = nil },
-		func(c *Config) { c.OnMessage = nil },
+		func(c *Config) { c.RegisterHandlers = nil },
 		func(c *Config) { c.Transport.Subprotocols = []string{"other"} },
 		func(c *Config) { c.Transport.CheckReady = func() bool { return true } },
 		func(c *Config) {
@@ -295,13 +295,13 @@ func TestPBRequestEnvelopeFields(t *testing.T) {
 	body.ProtoReflect().SetUnknown(group)
 	typ, wire := requestWire(t, SubprotocolProtobuf, body)
 	cfg := baseConfig()
-	cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
+	cfg.RegisterHandlers = testRoute("home", "refresh", func(ctx context.Context, s *Session, m *Message) error {
 		var value emptypb.Empty
 		if err := m.Decode(&value); err != nil {
 			return s.ReplyError(ctx, m, "request.error", "INVALID", "非法正文")
 		}
 		return s.Reply(ctx, m, "home.refreshed", &value)
-	}
+	})
 	_, h := startTestServer(t, cfg)
 	for _, tc := range []struct {
 		name   string

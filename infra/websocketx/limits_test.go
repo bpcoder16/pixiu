@@ -69,6 +69,52 @@ func TestSendRejectsElapsedDeadline(t *testing.T) {
 	}
 }
 
+func TestSendRejectsMessageExpiredDuringAdmission(t *testing.T) {
+	opened := make(chan *Session, 1)
+	e, server := newTestEndpoint(t, Config{
+		OnOpen: func(_ context.Context, s *Session) error {
+			opened <- s
+			return nil
+		},
+	})
+	client := dialTest(t, server)
+	s := await(t, opened)
+	budget := e.Budget()
+	for _, mode := range []string{"send", "prepared"} {
+		t.Run(mode, func(t *testing.T) {
+			message := Message{
+				Type:      Text,
+				Data:      []byte("late"),
+				ExpiresAt: time.Now().Add(100 * time.Millisecond),
+			}
+			send := func() error { return s.Send(t.Context(), message) }
+			if mode == "prepared" {
+				frame, err := e.Prepare(message)
+				if err != nil {
+					t.Fatal(err)
+				}
+				send = func() error { return s.SendPrepared(t.Context(), frame) }
+			}
+
+			// 接纳从有效期内开始，预算锁在消息到期后才释放；调用方 ctx 始终有效。
+			budget.mu.Lock()
+			time.AfterFunc(time.Until(message.ExpiresAt), budget.mu.Unlock)
+			if err := send(); !errors.Is(err, ErrExpired) {
+				t.Errorf("接纳期间消息到期，应返回 ErrExpired，得到 %v", err)
+			}
+			if usage := budget.Usage(); usage != (Usage{}) {
+				t.Errorf("拒绝过期消息后仍占用共享预算: %+v", usage)
+			}
+		})
+	}
+	if err := s.Send(t.Context(), Message{Type: Text, Data: []byte("ok")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, data := readTest(t, client); string(data) != "ok" {
+		t.Fatalf("客户端收到意外消息: %q", data)
+	}
+}
+
 // gateConn 只在测试中暂停一次实际数据写入，保留真实 TCP 和握手。
 type gateConn struct {
 	net.Conn

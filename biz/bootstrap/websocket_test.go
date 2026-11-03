@@ -167,14 +167,16 @@ func TestWebSocketServicesIndependent(t *testing.T) {
 					return realtime.ClientInfo{UserID: name}, nil
 				}
 				cfg.NewState = func(realtime.ClientInfo) any { return new(int) }
-				cfg.OnMessage = func(ctx context.Context, s *realtime.Session, m *realtime.Message) error {
-					var body wrapperspb.StringValue
-					if err := m.Decode(&body); err != nil {
-						return err
-					}
-					count := s.State().(*int)
-					*count++
-					return s.Reply(ctx, m, "test.echo", wrapperspb.String(fmt.Sprintf("%s:%d:%s", s.Info().UserID, *count, body.Value)))
+				cfg.RegisterHandlers = func(r *realtime.Router) error {
+					return r.Handle("test", "echo", func(ctx context.Context, s *realtime.Session, m *realtime.Message) error {
+						var body wrapperspb.StringValue
+						if err := m.Decode(&body); err != nil {
+							return err
+						}
+						count := s.State().(*int)
+						*count++
+						return s.Reply(ctx, m, "test.echo", wrapperspb.String(fmt.Sprintf("%s:%d:%s", s.Info().UserID, *count, body.Value)))
+					})
 				}
 				return realtime.NewServer(cfg)
 			})

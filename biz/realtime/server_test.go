@@ -24,6 +24,12 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
+func testRoute(scene, action string, handler Handler) func(*Router) error {
+	return func(r *Router) error {
+		return r.Handle(scene, action, handler)
+	}
+}
+
 func baseConfig() Config {
 	return Config{
 		Authenticate: func(_ context.Context, r *http.Request) (ClientInfo, error) {
@@ -32,9 +38,9 @@ func baseConfig() Config {
 				DeviceID: r.Header.Get("X-Device"),
 			}, nil
 		},
-		OnMessage: func(context.Context, *Session, *Message) error {
+		RegisterHandlers: testRoute("home", "refresh", func(context.Context, *Session, *Message) error {
 			return nil
-		},
+		}),
 	}
 }
 
@@ -195,7 +201,7 @@ func TestProtocolsRoundTripAndUnsolicitedSend(t *testing.T) {
 					opened <- s
 					return nil
 				}
-				cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
+				cfg.RegisterHandlers = testRoute("home", "refresh", func(ctx context.Context, s *Session, m *Message) error {
 					value := payload.ProtoReflect().New().Interface()
 					if err := m.Decode(value); err != nil {
 						return err
@@ -204,7 +210,7 @@ func TestProtocolsRoundTripAndUnsolicitedSend(t *testing.T) {
 						return errors.New("解码值不一致")
 					}
 					return s.Reply(ctx, m, "home.refreshed", value)
-				}
+				})
 				_, h := startTestServer(t, cfg)
 				c := dial(t, h, protocolName)
 				session := await(t, opened)
@@ -306,10 +312,10 @@ func TestSessionIsolationAndHTTPIndependence(t *testing.T) {
 		opened <- s
 		return nil
 	}
-	cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
+	cfg.RegisterHandlers = testRoute("home", "refresh", func(ctx context.Context, s *Session, m *Message) error {
 		count := s.State().(*state).count.Add(1)
 		return s.Reply(ctx, m, "home.refreshed", wrapperspb.Int32(count))
-	}
+	})
 	_, h := startTestServer(t, cfg)
 	first := dial(t, h, SubprotocolProtobuf, SubprotocolJSON)
 	a := await(t, opened)
@@ -365,7 +371,7 @@ func TestJSONEnvelopeCompatibility(t *testing.T) {
 			}
 			received := make(chan result, 1)
 			cfg := baseConfig()
-			cfg.OnMessage = func(_ context.Context, _ *Session, m *Message) error {
+			cfg.RegisterHandlers = testRoute(tc.scene, "refresh", func(_ context.Context, _ *Session, m *Message) error {
 				received <- result{
 					requestID: m.RequestID(),
 					scene:     m.Scene(),
@@ -373,7 +379,7 @@ func TestJSONEnvelopeCompatibility(t *testing.T) {
 					decodeErr: m.Decode(&emptypb.Empty{}),
 				}
 				return nil
-			}
+			})
 			_, h := startTestServer(t, cfg)
 			c := dial(t, h, SubprotocolJSON)
 			if err := c.WriteMessage(websocket.TextMessage, tc.wire); err != nil {
@@ -471,10 +477,10 @@ func TestInvalidFramesAndEnvelopes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var called atomic.Bool
 			cfg := baseConfig()
-			cfg.OnMessage = func(context.Context, *Session, *Message) error {
+			cfg.RegisterHandlers = testRoute("home", "refresh", func(context.Context, *Session, *Message) error {
 				called.Store(true)
 				return nil
-			}
+			})
 			_, h := startTestServer(t, cfg)
 			c := dial(t, h, SubprotocolJSON)
 			if err := c.WriteMessage(tc.typ, tc.wire); err != nil {
@@ -496,11 +502,11 @@ func TestDrainRetainsAcceptedReplyAndWaitDoesNotCancel(t *testing.T) {
 	unblock := func() { once.Do(func() { close(release) }) }
 	defer unblock()
 	cfg := baseConfig()
-	cfg.OnMessage = func(ctx context.Context, s *Session, m *Message) error {
+	cfg.RegisterHandlers = testRoute("home", "refresh", func(ctx context.Context, s *Session, m *Message) error {
 		entered <- ctx
 		<-release
 		return s.Reply(ctx, m, "home.refreshed", wrapperspb.String("done"))
-	}
+	})
 	s, h := startTestServer(t, cfg)
 	c := dial(t, h, SubprotocolJSON)
 	typ, wire := requestWire(t, SubprotocolJSON, &emptypb.Empty{})
