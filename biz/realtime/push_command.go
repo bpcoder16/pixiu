@@ -95,6 +95,7 @@ func MarshalPushCommand(cmd PushCommand) ([]byte, error) {
 
 // UnmarshalPushCommand 解析总线 JSON。newData 根据业务 type 返回全新的可写 proto，
 // 未知类型返回 nil。error 事件不调用 newData。截止时间保留给投递和写出时检查。
+// 已知类型的 data 忽略本地 proto 未定义的字段，使滚动发布中的旧节点也能投递已知字段。
 func UnmarshalPushCommand(data []byte, newData func(string) proto.Message) (PushCommand, error) {
 	if len(data) > maxPushCommandBytes {
 		return PushCommand{}, ErrInvalidMessage
@@ -134,7 +135,8 @@ func UnmarshalPushCommand(data []byte, newData func(string) proto.Message) (Push
 		if nilMessage(msg.Data) {
 			return PushCommand{}, fmt.Errorf("%w: unknown data type %q", ErrInvalidMessage, msg.Type)
 		}
-		if err := protojson.Unmarshal(body.Data, msg.Data); err != nil {
+		options := protojson.UnmarshalOptions{DiscardUnknown: true}
+		if err := options.Unmarshal(body.Data, msg.Data); err != nil {
 			return PushCommand{}, fmt.Errorf("%w: data: %v", ErrInvalidMessage, err)
 		}
 	}

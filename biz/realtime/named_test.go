@@ -22,6 +22,12 @@ func TestNamedServerRegistrationAndLifecycle(t *testing.T) {
 	if err := Register(name, app); err != nil {
 		t.Fatal(err)
 	}
+	if got, ok := Lookup(name); !ok || got != app {
+		t.Fatal("Lookup 应返回已登记的实例")
+	}
+	if got, ok := Lookup(name + "-missing"); ok || got != nil {
+		t.Fatal("Lookup 查询未知名称应返回 nil, false")
+	}
 	if Named(name) != app || app.Ready() {
 		t.Fatal("登记应返回同一实例，且不自动运行")
 	}

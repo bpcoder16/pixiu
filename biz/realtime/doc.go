@@ -106,6 +106,7 @@
 //
 // 自行装配时也可通过 Register(name, server) 登记全新 Server，并显式管理其生命周期。
 // 注册只保存引用，不启动任务、不关闭实例、不自动替换；名称未知时 Named panic。
+// 需要处理实例未登记的情况时可使用 Lookup(name)，检查返回的布尔值。
 // 关闭后 Named 仍返回原对象，其投递方法返回关闭错误。初始化完成后只查询，不重新登记。
 //
 // # 按端投递事件
@@ -122,6 +123,7 @@
 // PushMessage.Type 必填，Data 与 Error 必须且只能给一个，ExpiresAt 为绝对截止时间。
 // 客户端接收 kind=3，携带 type 和 data 或 error。目标身份与有效期仅供投递端使用。
 // OnOpen 成功才加入索引，断开时摘除。多个标签页及设备各自占一个命中。
+// 若 OnOpen 中发送建连通知，客户端可等本连接的首个业务请求收到响应后，再触发定向推送。
 // 返回值统计 Matched、Enqueued 与 Failed。零命中返回零计数及 nil；部分失败时同时返回首个错误，
 // 其他连接继续发送。调用方可据此观察过载，不应整批重试已部分入队的事件。
 // 调用期间不得并发修改消息及其正文。Stop 封闭新投递，Wait 包含已接纳的投递及连接实际排空。
@@ -147,6 +149,7 @@
 //
 // 消费端调用 UnmarshalPushCommand(data, newData)。newData 按业务 type 提供独立的可写 proto，
 // 例如 home.notice 返回 new(wrapperspb.StringValue)。仅有 error 时无需提供构造函数。
+// 已知事件类型的 data 会忽略本地 proto 未定义的字段，投递时只携带已识别的字段。
 // 调用方按命令 Kind/ID 调用本端 Server 的投递方法，Server 再编码为各连接协商的 JSON/PB。
 //
 // # 当前会话下发与容量

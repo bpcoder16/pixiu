@@ -37,12 +37,18 @@ func Register(name string, server *Server) error {
 	return nil
 }
 
-// Named 返回已登记的同一实例，可并发获取。未登记或未知名称 panic。
-// 服务停止后仍返回该实例，其推送方法按原生命周期返回关闭错误；不自动重建。
-func Named(name string) *Server {
+// Lookup 查询已登记的 Server，可并发调用。名称未登记时返回 nil, false。
+func Lookup(name string) (*Server, bool) {
 	namedServers.RLock()
 	defer namedServers.RUnlock()
 	server, exists := namedServers.servers[name]
+	return server, exists
+}
+
+// Named 返回已登记的同一实例，可并发获取。未登记或未知名称 panic。
+// 服务停止后仍返回该实例，其推送方法按原生命周期返回关闭错误；不自动重建。
+func Named(name string) *Server {
+	server, exists := Lookup(name)
 	if !exists {
 		panic(fmt.Sprintf("realtime: Server %q is not registered", name))
 	}

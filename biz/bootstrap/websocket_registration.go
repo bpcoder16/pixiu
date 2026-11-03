@@ -79,8 +79,12 @@ func registeredWebSocket(name string) (*realtime.Server, error) {
 			return nil, fmt.Errorf("bootstrap: WebSocket %q is not initialized", name)
 		}
 	}
-	// 未声明工厂的实例也可由应用显式 Register；未知名称的 panic 由服务构造边界转换为错误。
-	return realtime.Named(name), nil
+	// 未声明工厂的实例也可由应用显式 Register。
+	server, ok := realtime.Lookup(name)
+	if !ok {
+		return nil, fmt.Errorf("bootstrap: WebSocket %q is not registered", name)
+	}
+	return server, nil
 }
 
 // 命名表已保证名称与实例一一对应，Service 只记录已接管的名称。

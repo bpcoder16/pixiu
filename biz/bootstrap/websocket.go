@@ -46,13 +46,9 @@ func NewWebSocketService(name string) (apprun.Service, error) {
 		return apprun.Service{}, fmt.Errorf("bootstrap: %s requires a literal absolute path other than /ready/ws", configFile)
 	}
 	serviceName := "websocket:" + name
-	var server *realtime.Server
-	if lookupErr := callServiceCleanup(serviceName, "lookup realtime", func() error {
-		var resolveErr error
-		server, resolveErr = registeredWebSocket(name)
-		return resolveErr
-	}); lookupErr != nil {
-		return apprun.Service{}, lookupErr
+	server, err := registeredWebSocket(name)
+	if err != nil {
+		return apprun.Service{}, err
 	}
 	if claimErr := claimWebSocket(name); claimErr != nil {
 		return apprun.Service{}, claimErr

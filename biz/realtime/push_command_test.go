@@ -9,6 +9,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/typepb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -58,6 +59,17 @@ func TestPushCommandRoundTrip(t *testing.T) {
 	got, err = UnmarshalPushCommand(wire, func(string) proto.Message { return new(structpb.Value) })
 	if err != nil || !proto.Equal(cmd.Message.Data, got.Message.Data) {
 		t.Fatalf("null 正文丢失: %s, %v", wire, err)
+	}
+}
+
+func TestPushCommandIgnoresNewDataFields(t *testing.T) {
+	wire := []byte(`{"kind":"broadcast","message":{"type":"status","data":{"name":"OPEN","displayColor":"red"}}}`)
+	cmd, err := UnmarshalPushCommand(wire, func(string) proto.Message { return new(typepb.EnumValue) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(cmd.Message.Data, &typepb.EnumValue{Name: "OPEN"}) {
+		t.Fatalf("应保留已知字段: %v", cmd.Message.Data)
 	}
 }
 

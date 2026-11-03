@@ -280,8 +280,10 @@ func TestWebSocketServiceFailureCleanup(t *testing.T) {
 		}
 		writeWSConfig(t, "app", "127.0.0.1:0")
 		writeWSConfig(t, "unregistered", "127.0.0.1:0")
-		if _, err := bootstrap.NewWebSocketService("unregistered"); err == nil || !strings.Contains(err.Error(), "not registered") {
-			t.Fatalf("未知命名实例未被拒绝: %v", err)
+		_, lookupErr := bootstrap.NewWebSocketService("unregistered")
+		var panicErr *apprun.PanicError
+		if lookupErr == nil || !strings.Contains(lookupErr.Error(), `"unregistered" is not registered`) || errors.As(lookupErr, &panicErr) {
+			t.Fatalf("未知实例应返回带名称的普通错误: %v", lookupErr)
 		}
 		service, err := bootstrap.NewWebSocketService("app")
 		if err != nil {
