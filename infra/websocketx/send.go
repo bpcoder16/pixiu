@@ -80,12 +80,15 @@ func (s *Session) enqueue(ctx, activeCtx context.Context, message Message, prepa
 	defer e.mu.RUnlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if activeCtx != nil {
-		if err := activeCtx.Err(); err != nil {
-			return err
+	checkContexts := func() error {
+		if activeCtx != nil {
+			if err := contextErr(activeCtx); err != nil {
+				return err
+			}
 		}
+		return contextErr(ctx)
 	}
-	if err := ctx.Err(); err != nil {
+	if err := checkContexts(); err != nil {
 		return err
 	}
 	if s.closed || e.canceled.Load() || isClosed(e.outputSealed) {
@@ -113,11 +116,16 @@ func (s *Session) enqueue(ctx, activeCtx context.Context, message Message, prepa
 	if !e.config.Budget.reserve(false, 1, size) {
 		return ErrBudgetExceeded
 	}
-	s.usage.SendMessages++
-	s.usage.SendBytes += size
 	if prepared == nil {
 		message.Data = bytes.Clone(message.Data)
 	}
+	// 等待共享预算或复制正文期间也可能到期，在发布队列项前复核。
+	if err := checkContexts(); err != nil {
+		e.config.Budget.release(false, 1, size)
+		return err
+	}
+	s.usage.SendMessages++
+	s.usage.SendBytes += size
 	s.send.push(outgoing{
 		message:  message,
 		prepared: prepared,

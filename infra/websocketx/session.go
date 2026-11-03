@@ -179,7 +179,7 @@ func (s *Session) run() {
 			closeCtx, cancel := context.WithTimeout(ctx, s.endpoint.config.OnCloseTimeout)
 			defer cancel()
 			defer func() {
-				callbackErr := closeCtx.Err()
+				callbackErr := contextErr(closeCtx)
 				if recover() != nil {
 					callbackErr = errors.Join(callbackErr, ErrPanic)
 				}
@@ -204,6 +204,17 @@ func (s *Session) run() {
 	s.endpoint.mu.Unlock()
 	close(s.done)
 	s.endpoint.work.Done()
+}
+
+// contextErr 保留已发出的取消原因；定时器可能晚于截止时间运行。
+func contextErr(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 // invoke 不把业务移交临时 goroutine；期限只负责取消和断开连接，真实返回仍需等待。

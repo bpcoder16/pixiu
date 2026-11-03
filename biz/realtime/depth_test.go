@@ -2,7 +2,6 @@ package realtime
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -22,58 +21,33 @@ type depthCase struct {
 
 func depthCases(t *testing.T) []depthCase {
 	t.Helper()
-	var cases []depthCase
-	// 覆盖原 32 层边界及更深消息，解码沿用 protobuf 默认递归保护。
-	for _, n := range []int{15, 16, 17, 31, 32, 33, 64} {
-		message := &descriptorpb.DescriptorProto{Name: proto.String("leaf")}
-		for i := 1; i < n; i++ {
-			message = &descriptorpb.DescriptorProto{NestedType: []*descriptorpb.DescriptorProto{message}}
-		}
-		cases = append(cases, depthCase{
-			name:    fmt.Sprintf("repeated-%d", n),
-			message: message,
-		})
+	// 保留超过旧 32 层限制的消息，以及各自具有不同 ProtoJSON 映射的类型。
+	repeated := &descriptorpb.DescriptorProto{Name: proto.String("leaf")}
+	for range 63 {
+		repeated = &descriptorpb.DescriptorProto{NestedType: []*descriptorpb.DescriptorProto{repeated}}
 	}
-	// Value/ListValue 和 Value/Struct 的 ProtoJSON 定制映射与 PB 的嵌套层数不同。
-	for _, shape := range []string{"list", "map"} {
-		levels := []int{15, 16, 31, 32, 33}
-		if shape == "map" {
-			levels = []int{10, 11, 31, 32, 33}
-		}
-		for _, n := range levels {
-			message := structpb.NewStringValue("leaf")
-			for i := 0; i < n; i++ {
-				if shape == "list" {
-					message = structpb.NewListValue(&structpb.ListValue{Values: []*structpb.Value{message}})
-				} else {
-					message = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{"child": message}})
-				}
-			}
-			cases = append(cases, depthCase{
-				name:    fmt.Sprintf("%s-%d", shape, n),
-				message: message,
-			})
+	list := structpb.NewStringValue("leaf")
+	object := structpb.NewStringValue("leaf")
+	var packed proto.Message = wrapperspb.String("leaf")
+	for range 33 {
+		list = structpb.NewListValue(&structpb.ListValue{Values: []*structpb.Value{list}})
+		object = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{"child": object}})
+		var err error
+		packed, err = anypb.New(packed)
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
-	for _, n := range []int{31, 32, 33} {
-		var message proto.Message = wrapperspb.String("leaf")
-		for i := 0; i < n; i++ {
-			var err error
-			message, err = anypb.New(message)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-		cases = append(cases, depthCase{
-			name:    fmt.Sprintf("any-%d", n),
-			message: message,
-		})
+	return []depthCase{
+		{name: "repeated-64", message: repeated},
+		{name: "list-33", message: list},
+		{name: "map-33", message: object},
+		{name: "any-33", message: packed},
+		{
+			name:    "bytes-are-opaque",
+			message: wrapperspb.Bytes([]byte(strings.Repeat("[", 40) + `"opaque"` + strings.Repeat("]", 40))),
+		},
 	}
-	cases = append(cases, depthCase{
-		name:    "bytes-are-opaque",
-		message: wrapperspb.Bytes([]byte(strings.Repeat("[", 40) + `"opaque"` + strings.Repeat("]", 40))),
-	})
-	return cases
 }
 
 // Send 只编码和检查帧大小，正文递归限制由接收方决定，且不修改调用方对象。

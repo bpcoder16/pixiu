@@ -17,6 +17,58 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// 模拟截止时间已过、定时器尚未发出取消通知的窗口。
+type elapsedDeadline struct{ context.Context }
+
+func (elapsedDeadline) Deadline() (time.Time, bool) { return time.Unix(1, 0), true }
+
+func TestSendRejectsElapsedDeadline(t *testing.T) {
+	opened := make(chan *Session, 1)
+	e, server := newTestEndpoint(t, Config{
+		OnOpen: func(_ context.Context, s *Session) error {
+			opened <- s
+			return nil
+		},
+	})
+	client := dialTest(t, server)
+	s := await(t, opened)
+	parent, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	expired := elapsedDeadline{parent}
+	late := Message{Type: Text, Data: []byte("late")}
+	if err := s.SendWhileActive(t.Context(), expired, late); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("请求已到期，发送结果 = %v", err)
+	}
+	if err := s.Send(expired, late); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("调用方已到期，发送结果 = %v", err)
+	}
+	cancel()
+	if err := s.Send(expired, late); !errors.Is(err, context.Canceled) {
+		t.Errorf("已确认的取消原因应保留，发送结果 = %v", err)
+	}
+	// 让预算预留等到请求已过期，再放行入队流程。
+	budget := e.Budget()
+	budget.mu.Lock()
+	waitCtx, stop := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer stop()
+	result := make(chan error, 1)
+	go func() { result <- s.SendWhileActive(t.Context(), waitCtx, late) }()
+	<-waitCtx.Done()
+	budget.mu.Unlock()
+	if err := await(t, result); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("等待预算期间请求到期，发送结果 = %v", err)
+	}
+	if got := budget.Usage(); got != (Usage{}) {
+		t.Errorf("拒绝发送后预算未归还: %+v", got)
+	}
+	if err := s.Send(t.Context(), Message{Type: Text, Data: []byte("ok")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, data := readTest(t, client); string(data) != "ok" {
+		t.Fatalf("客户端收到了迟到的消息: %q", data)
+	}
+}
+
 // gateConn 只在测试中暂停一次实际数据写入，保留真实 TCP 和握手。
 type gateConn struct {
 	net.Conn

@@ -3,6 +3,7 @@ package realtime
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -205,6 +206,45 @@ func TestOnCloseDeadlineAndServerCancel(t *testing.T) {
 			}
 			await(t, session.Done())
 		})
+	}
+}
+
+func TestOnCloseReturnsPastDeadline(t *testing.T) {
+	previous := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previous)
+	opened := make(chan struct{})
+	closed := make(chan error, 1)
+	cfg := baseConfig()
+	cfg.Transport.OnCloseTimeout = time.Millisecond
+	cfg.Transport.Observe = func(_ context.Context, event websocketx.Event) {
+		if event.Kind == websocketx.EventClosed {
+			closed <- event.Err
+		}
+	}
+	cfg.OnOpen = func(context.Context, *Session) error {
+		close(opened)
+		return nil
+	}
+	cfg.OnClose = func(ctx context.Context, _ *Session) {
+		// 单核运行至截止时间，覆盖回调先于定时器执行完毕的情形。
+		deadline, _ := ctx.Deadline()
+		for time.Now().Before(deadline) {
+		}
+	}
+	s, h := startTestServer(t, cfg)
+	dial(t, h, SubprotocolJSON)
+	await(t, opened)
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := await(t, closed); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("关闭观察未记录清理超时: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	var drain *websocketx.DrainError
+	if err := s.Wait(ctx); !errors.As(err, &drain) || drain.CallbackErrors != 1 {
+		t.Fatalf("排空应记录一次超时的清理回调: %v", err)
 	}
 }
 
