@@ -119,7 +119,7 @@ func validateOutgoing(message Outgoing) error {
 	if hasData == (message.Error != nil) {
 		return ErrInvalidMessage
 	}
-	if message.Error != nil && (message.Kind != protocol.Kind_RESPONSE || !validID(message.Error.Code) ||
+	if message.Error != nil && (!validID(message.Error.Code) ||
 		len(message.Error.Message) > 1024 || !utf8.ValidString(message.Error.Message)) {
 		return ErrInvalidMessage
 	}

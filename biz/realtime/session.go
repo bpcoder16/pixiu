@@ -19,7 +19,7 @@ type Error struct {
 
 // Outgoing 是下发消息，只允许 protocol.Kind_RESPONSE、protocol.Kind_EVENT。
 // Type 必须由业务显式指定，用于客户端分发和选择正文解码类型，不使用上行路由字段。
-// Data/Error 必须且只能指定一个，Error 只用于响应。
+// 响应和事件的 Data/Error 必须且只能指定一个。
 // 响应必须携带 RequestID，事件不携带。调用期间不得修改消息及其正文。
 type Outgoing struct {
 	Kind      protocol.Kind

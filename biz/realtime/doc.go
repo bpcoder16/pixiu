@@ -92,7 +92,25 @@
 // 回调必须配合取消，Session.Done/Server.Done 等待实际返回；停收期间清理失败计入 ErrDrainFailed。
 // 每个业务回调使用自己的 ctx；不可同步等待自身或所属 Server.Done。
 //
-// # 主动下发与容量
+// # 按端投递事件
+//
+// 持有 Server 的调用方可按用户、设备或整个端投递，只影响本实例上的连接。
+// 例如业务消费者从外部事件取出 userID 后调用：
+//
+//	result, err := server.PushToUser(ctx, userID, realtime.PushMessage{
+//		Type: "home.notice",
+//		Data: wrapperspb.String("updated"),
+//	})
+//
+// 同一服务的其他节点由调用方分别触发相同投递。Broadcast 和 PushToDevice 的消息参数相同。
+// PushMessage.Type 必填，Data 与 Error 必须且只能给一个，ExpiresAt 为绝对截止时间。
+// 客户端接收 kind=3，携带 type 和 data 或 error。目标身份与有效期仅供投递端使用。
+// OnOpen 成功才加入索引，断开时摘除。多个标签页及设备各自占一个命中。
+// 返回值统计 Matched、Enqueued 与 Failed。零命中返回零计数及 nil；部分失败时同时返回首个错误，
+// 其他连接继续发送。调用方可据此观察过载，不应整批重试已部分入队的事件。
+// 调用期间不得并发修改消息及其正文。Stop 封闭新投递，Wait 包含已接纳的投递及连接实际排空。
+//
+// # 当前会话下发与容量
 //
 // 业务持有当前 Session 时可以直接下发事件，需导入 protocol；以下代码放在返回 error 的函数中：
 //

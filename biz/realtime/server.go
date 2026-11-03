@@ -32,6 +32,18 @@ type Server struct {
 	started atomic.Bool
 	// 将传输连接关联到已初始化的业务会话，供消息和业务收尾回调使用。
 	sessions sync.Map
+	// 索引已就绪的会话，供广播及按用户、设备推送时定位目标。
+	targets pushIndex
+	// 接纳推送与 Stop 封门必须在同一把锁内完成。
+	pushMu sync.Mutex
+	// 跟踪已接纳的推送，Stop 等待投递结束后再排空传输队列。
+	pushes sync.WaitGroup
+	// 保证停止接纳与异步排空流程只启动一次。
+	stopOnce sync.Once
+	// 标记强制取消，使进行中的推送停止后续投递。
+	canceled atomic.Bool
+	// 已接纳的推送与底层传输收尾完成后关闭，供 Wait 和 Done 等待。
+	done chan struct{}
 }
 
 // NewServer 只构造对象，不启动后台任务、不监听端口。
@@ -51,6 +63,7 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	s := &Server{
 		config:   cfg,
+		done:     make(chan struct{}),
 		dispatch: routes.seal(cfg.OnNotFound),
 	}
 	transport := cfg.Transport
@@ -68,8 +81,14 @@ func NewServer(cfg Config) (*Server, error) {
 	transport.OnMessage = s.onMessage
 	if cfg.OnClose != nil {
 		transport.OnClose = s.onClose
-	} else {
-		transport.OnDetach = func(raw *websocketx.Session) { s.sessions.Delete(raw) }
+	}
+	transport.OnDetach = func(raw *websocketx.Session) {
+		if v, ok := s.sessions.Load(raw); ok {
+			s.targets.remove(v.(*Session))
+		}
+		if cfg.OnClose == nil {
+			s.sessions.Delete(raw)
+		}
 	}
 	if cfg.Revalidate != nil {
 		transport.Revalidate = func(ctx context.Context, raw *websocketx.Session) error {
@@ -101,20 +120,47 @@ func (s *Server) Ready() bool { return s.state.Load() == serverRunning }
 
 // Stop 启动有序排空，不提前取消已接纳的业务。
 func (s *Server) Stop() error {
-	s.state.Store(serverStopped)
-	return s.endpoint.Stop()
+	s.stopOnce.Do(func() {
+		s.pushMu.Lock()
+		s.state.Store(serverStopped)
+		s.pushMu.Unlock()
+		_ = s.endpoint.StopInput()
+		go func() {
+			// 已接纳的投递先完成入队，然后传输层排空发送队列。
+			s.pushes.Wait()
+			_ = s.endpoint.Stop()
+			<-s.endpoint.Done()
+			close(s.done)
+		}()
+	})
+	return nil
 }
 
 // Wait 只等待收尾，期限到达时由调用方显式 Cancel。
-func (s *Server) Wait(ctx context.Context) error { return s.endpoint.Wait(ctx) }
+func (s *Server) Wait(ctx context.Context) error {
+	if ctx == nil {
+		return websocketx.ErrNilContext
+	}
+	select {
+	case <-s.done:
+	default:
+		select {
+		case <-s.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.endpoint.Wait(ctx)
+}
 
 // Cancel 通知强制取消；忽略取消的业务仍会延迟 Done。
 func (s *Server) Cancel() {
-	s.state.Store(serverStopped)
+	_ = s.Stop()
+	s.canceled.Store(true)
 	s.endpoint.Cancel()
 }
 
-func (s *Server) Done() <-chan struct{} { return s.endpoint.Done() }
+func (s *Server) Done() <-chan struct{} { return s.done }
 
 func (s *Server) onOpen(ctx context.Context, raw *websocketx.Session) error {
 	session := &Session{
@@ -135,8 +181,11 @@ func (s *Server) onOpen(ctx context.Context, raw *websocketx.Session) error {
 		}
 	}
 	if s.config.OnOpen != nil {
-		return s.config.OnOpen(ctx, session)
+		if err := s.config.OnOpen(ctx, session); err != nil {
+			return err
+		}
 	}
+	s.targets.add(ctx, session)
 	return nil
 }
 
