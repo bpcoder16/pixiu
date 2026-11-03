@@ -117,8 +117,12 @@ func TestNewRejectsDuplicateMemoryDSNParameters(t *testing.T) {
 	}
 }
 
-func TestNewProtectsEscapedMemoryDSN(t *testing.T) {
-	for _, dsn := range []string{"file:%3Amemory%3A", "file:%3amemory%3a"} {
+func TestNewProtectsMemoryDSN(t *testing.T) {
+	for _, dsn := range []string{
+		"file:%3Amemory%3A",
+		"file:%3amemory%3a",
+		"file:sample?mode=memory#anchor",
+	} {
 		for _, tc := range []struct {
 			name    string
 			pool    Pool
@@ -157,17 +161,18 @@ func TestNewProtectsEscapedMemoryDSN(t *testing.T) {
 					_ = client.Close()
 				}
 				if err == nil || !strings.Contains(err.Error(), tc.want) {
-					t.Fatalf("转义内存库配置未被拒绝: err=%v, want %q", err, tc.want)
+					t.Fatalf("内存库配置未被拒绝: err=%v, want %q", err, tc.want)
 				}
 			})
 		}
 	}
 }
 
-func TestEscapedSharedMemoryUsesSameDatabase(t *testing.T) {
+func TestSharedMemoryUsesSameDatabase(t *testing.T) {
 	for _, dsn := range []string{
 		"file:%3Amemory%3A?cache=shared",
 		"file:%2Fsqlitex-escaped-memdb?vfs=memdb",
+		"file:sample?mode=memory&cache=shared#anchor",
 	} {
 		t.Run(dsn, func(t *testing.T) {
 			ctx := context.Background()
@@ -202,7 +207,7 @@ func TestEscapedSharedMemoryUsesSameDatabase(t *testing.T) {
 			}
 			var count int
 			if err := second.QueryRowContext(ctx, "SELECT COUNT(*) FROM escaped_t").Scan(&count); err != nil {
-				t.Fatalf("转义内存库的两条连接未共享数据: %v", err)
+				t.Fatalf("内存库的两条连接未共享数据: %v", err)
 			}
 		})
 	}
@@ -211,7 +216,7 @@ func TestEscapedSharedMemoryUsesSameDatabase(t *testing.T) {
 func TestEscapedFileDSNPreservesPath(t *testing.T) {
 	for _, useURI := range []bool{false, true} {
 		t.Run(fmt.Sprintf("URI=%t", useURI), func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "%3Amemory%3A.db")
+			path := filepath.Join(t.TempDir(), "%3Amemory%3A#data.db")
 			dsn := path
 			if useURI {
 				uri := url.URL{Scheme: "file", Path: path}
@@ -236,6 +241,27 @@ func TestEscapedFileDSNPreservesPath(t *testing.T) {
 				t.Fatalf("文件路径被额外解码: %v", err)
 			}
 		})
+	}
+}
+
+// 默认单连接能打开私有内存库，fragment 内的驱动参数不能影响连接。
+func TestMemoryURIFragmentIgnoredByDriver(t *testing.T) {
+	for _, foreignKeys := range []*bool{nil, new(true)} {
+		client, err := New(Config{
+			Name:        "fragment",
+			DSN:         "file:sample?mode=memory#anchor&_fk=invalid",
+			ForeignKeys: foreignKeys,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = client.Close() })
+		if foreignKeys != nil {
+			var enabled int
+			if err := client.DB(t.Context()).Raw("PRAGMA foreign_keys").Scan(&enabled).Error; err != nil || enabled != 1 {
+				t.Fatalf("显式外键设置未生效: enabled=%d err=%v", enabled, err)
+			}
+		}
 	}
 }
 

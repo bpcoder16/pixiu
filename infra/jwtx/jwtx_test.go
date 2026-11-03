@@ -516,6 +516,30 @@ func TestCustomValidationAndMapClaims(t *testing.T) {
 	}
 }
 
+func TestVerifyLargeIntegerID(t *testing.T) {
+	const id int64 = 9007199254740993 // 2^53 + 1，float64 无法精确表示。
+	type idClaims struct {
+		UserID int64 `json:"uid"`
+		jwt.RegisteredClaims
+	}
+	raw := nativeToken(t, jwt.SigningMethodHS256, idClaims{
+		UserID:           id,
+		RegisteredClaims: validClaims(),
+	}, testSecret())
+	verifier := hsVerifier(t, VerifyConfig{})
+	var typed idClaims
+	if err := verifier.Verify(raw, &typed); err != nil || typed.UserID != id {
+		t.Fatalf("强类型 uid = %d, err = %v", typed.UserID, err)
+	}
+	mapped := jwt.MapClaims{}
+	if err := verifier.Verify(raw, mapped); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := mapped["uid"].(float64); !ok {
+		t.Fatalf("已有 MapClaims 数字类型发生变化: %T", mapped["uid"])
+	}
+}
+
 func TestSignRequiresExpiryAndVerifyRequiresDestination(t *testing.T) {
 	signer, err := NewSigner(SignConfig{
 		Algorithm: HS256,

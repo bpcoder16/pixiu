@@ -39,13 +39,13 @@ func Example() {
 		panic(err)
 	}
 	type appClaims struct {
-		UserID string `json:"uid"`
+		UserID int64  `json:"uid"`
 		Portal string `json:"portal"`
 		jwt.RegisteredClaims
 	}
 	now := time.Now()
 	raw, err := signer.Sign(appClaims{
-		UserID: "user-42",
+		UserID: 9007199254740993,
 		Portal: "app",
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "example",
@@ -65,7 +65,7 @@ func Example() {
 		return
 	}
 	fmt.Println(claims.UserID, claims.Portal)
-	// Output: user-42 app
+	// Output: 9007199254740993 app
 }
 
 func ExampleNewSigner_asymmetric() {

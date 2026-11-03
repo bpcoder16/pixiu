@@ -46,7 +46,8 @@ type Pool = gormcore.PoolConfig
 type Config struct {
 	// Name 是必填的逻辑库名，用作日志中的下游标识。
 	Name string
-	// DSN 是必填的 SQLite 文件路径或驱动连接字符串；显式配置项优先于同名 DSN 参数，重复的 mode、cache、vfs 参数无效。
+	// DSN 是必填的 SQLite 文件路径或驱动连接字符串；file: URI 中首个字面 # 及其后内容会被忽略。
+	// 显式配置项优先于同名 DSN 参数，重复的 mode、cache、vfs 参数无效。
 	DSN string
 	// JournalMode 设置 SQLite 日志模式；空值沿用 DSN 或驱动默认值。
 	JournalMode JournalMode
@@ -92,6 +93,10 @@ func New(cfg Config) (*Client, error) {
 	poolCfg, err := normalizePool(cfg.Pool)
 	if err != nil {
 		return nil, fmt.Errorf("sqlitex: %w", err)
+	}
+	// SQLite 在解码 file: URI 前忽略 fragment；分类、参数合并和驱动必须使用同一有效 DSN。
+	if strings.HasPrefix(cfg.DSN, "file:") {
+		cfg.DSN, _, _ = strings.Cut(cfg.DSN, "#")
 	}
 	isMemory, isPrivate, err := classifyMemoryDSN(cfg.DSN)
 	if err != nil {

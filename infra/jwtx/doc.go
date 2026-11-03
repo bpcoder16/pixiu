@@ -44,6 +44,8 @@
 //	return nil
 //
 // 自定义 claims 推荐按值嵌入 jwt.RegisteredClaims，保留自身 JSON 布局。
+// 对于 JSON 整数形式的用户 ID，按业务范围用 int64 或 uint64 字段接收，可精确读取已有 token。
+// jwt.MapClaims 默认把数字解码为 float64，超过 2^53 的整数可能舍入；再转成整数也无法恢复丢失的精度。
 // Sign 要求 exp 存在但不修改或验证业务声明；Verify 始终要求 exp 并检查时间。
 // 每次验签须使用新的空 claims 对象，出错时丢弃可能已解码的不可信内容。
 // 可使用 errors.Is(err, jwt.ErrTokenExpired) 等判断底层错误，HTTP 错误码由应用映射。
