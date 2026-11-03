@@ -28,12 +28,22 @@ type webSocketConfig struct {
 // 成功后由本服务独占其生命周期，调用方不得再单独运行或登记内部 Server；失败时回收已返回的部分对象。
 // 只处理配置的升级路径与固定 /ready/ws，两者仅允许 GET；其他路径返回 404，不提供普通 HTTP 路由扩展。
 // HTTP 与 realtime 并发启动，以 /ready/ws 的 204 表示可接纳连接；所有实例共享外层管理器的停机预算。
-func NewWebSocketService(name string, factory func() (*realtime.Server, error)) (apprun.Service, error) {
+func NewWebSocketService(name string, factories ...func() (*realtime.Server, error)) (apprun.Service, error) {
 	if err := validateInstanceName("WebSocket", name); err != nil {
 		return apprun.Service{}, err
 	}
-	if factory == nil {
-		return apprun.Service{}, errors.New("bootstrap: nil WebSocket factory")
+	if len(factories) > 1 || (len(factories) == 1 && factories[0] == nil) {
+		return apprun.Service{}, errors.New("bootstrap: expected zero or one non-nil WebSocket factory")
+	}
+	factory := func() (*realtime.Server, error) { return claimWebSocket(name) }
+	if len(factories) == 1 {
+		// 已声明的命名实例不可绕过 Service 所有权检查。
+		for _, registration := range webSocketInstances.registrations {
+			if registration.name == name {
+				return apprun.Service{}, fmt.Errorf("bootstrap: WebSocket %q is registered; omit the factory", name)
+			}
+		}
+		factory = factories[0]
 	}
 	configFile := filepath.Join(env.ConfigDirPath(), "websocket."+name+".yaml")
 	cfg, err := configx.Parse[webSocketConfig](configFile)

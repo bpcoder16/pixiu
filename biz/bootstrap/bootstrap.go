@@ -71,6 +71,9 @@ func mustBaseInit(config *appconfig.AppConfig, resources *lifecycle.Stack, initi
 	if err := natsInstances.initialize(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize NATS: %w", err))
 	}
+	if err := initWebSockets(); err != nil {
+		panic(fmt.Errorf("bootstrap: initialize WebSocket: %w", err))
+	}
 }
 
 func validateParams(config *appconfig.AppConfig, resources *lifecycle.Stack) error {
