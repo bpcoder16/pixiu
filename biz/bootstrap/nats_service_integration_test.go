@@ -373,6 +373,132 @@ func testNewNATSConsumerService(t *testing.T) {
 	}
 }
 
+// 先让同一连接经历重连并确认一条消息，再从服务端删除 Durable。
+func testNATSServiceConsumerDeleted(t *testing.T) {
+	isolatedNATS(t, func() {
+		client := registrationClients(t, true, "service")[0]
+		writeNATSRegistration(t, "service", "streams:\n  - name: EVENTS\n    subjects: [events]\n    consumers:\n      - durable: worker\n        handler: task\n")
+		handlers := &natsx.JetStreamHandlerRegistry{}
+		handlers.MustRegister(func(context.Context, jetstream.Msg) error { return nil }, "task")
+		service, err := NewNATSConsumerService("service", handlers, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ran := runNATSServiceForTest(t, service)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		// 等待实际拉取建立，排除注册尚未完成的路径。
+		var consumer jetstream.Consumer
+		for {
+			consumer, err = client.JetStream().Consumer(ctx, "EVENTS", "worker")
+			if err == nil && consumer.CachedInfo().NumWaiting > 0 {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatal("消费者未开始拉取", err)
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		conn := client.Conn()
+		connected := conn.StatusChanged(nats.CONNECTED)
+		defer conn.RemoveStatusListener(connected)
+		if err := conn.ForceReconnect(); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-connected:
+		case <-ctx.Done():
+			t.Fatal("重连未成功")
+		}
+		ack, err := client.PublishJetStream(ctx, "events", []byte("after reconnect"), "after-reconnect")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for {
+			info, err := consumer.Info(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.AckFloor.Stream == ack.Sequence {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatal("重连后消息未确认")
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		if err := client.JetStream().DeleteConsumer(ctx, "EVENTS", "worker"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-ran:
+			if !errors.Is(err, jetstream.ErrConsumerDeleted) || !strings.Contains(err.Error(), "EVENTS") || !strings.Contains(err.Error(), "worker") {
+				t.Fatalf("应返回可定位到 Durable 的删除错误: %v", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("Durable 已删除，Run 仍在等待")
+		}
+	})
+}
+
+func testNATSServiceConnectionClosed(t *testing.T) {
+	isolatedNATS(t, func() {
+		initNATSRegistrationEnv(t)
+		broker := startNATSTestServer(t, false)
+		client, err := natsx.NewNamed(natsx.Config{
+			Name: "core",
+			URLs: []string{broker.ClientURL()},
+		}, nats.NoReconnect())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = client.Close() })
+		writeNATSRegistration(t, "core", "coreConsumers:\n  - name: ready\n    subject: ready\n    handler: ready\n")
+		handlers := &natsx.CoreHandlerRegistry{}
+		handlers.MustRegister(func(_ context.Context, msg *nats.Msg) error { return msg.Respond(nil) }, "ready")
+		service, err := NewNATSConsumerService("core", nil, handlers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ran := runNATSServiceForTest(t, service)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for {
+			_, err := client.Request(ctx, "ready", nil)
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, nats.ErrNoResponders) {
+				t.Fatal(err)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		broker.Shutdown()
+		select {
+		case err := <-ran:
+			if !errors.Is(err, nats.ErrConnectionClosed) {
+				t.Fatalf("Core 服务未保留永久断连原因: %v", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("连接已永久关闭，Run 仍在等待")
+		}
+	})
+}
+
+func runNATSServiceForTest(t *testing.T, service apprun.Service) <-chan error {
+	t.Helper()
+	ran := make(chan error, 1)
+	go func() { ran <- service.Run() }()
+	t.Cleanup(func() {
+		if err := stopAndWait(service.Stop, service.Wait, service.Cancel); err != nil {
+			t.Error(err)
+		}
+	})
+	return ran
+}
+
 // stopAndWait 仅用于测试清理；生产调用方显式传递统一的排空期限。
 func stopAndWait(stop func() error, wait func(context.Context) error, cancel func()) error {
 	err := stop()

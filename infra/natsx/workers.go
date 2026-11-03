@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bpcoder16/pixiu/logit"
@@ -54,6 +55,7 @@ type workerConsumer struct {
 	iterator jetstream.MessagesContext
 	cancel   context.CancelFunc
 	done     chan struct{}
+	draining atomic.Bool // 显式 Drain 后 Next 返回迭代结束属于正常收尾。
 }
 
 func (w *workerConsumer) Stop() {
@@ -61,7 +63,10 @@ func (w *workerConsumer) Stop() {
 	w.iterator.Stop()
 }
 
-func (w *workerConsumer) Drain() { w.iterator.Drain() }
+func (w *workerConsumer) Drain() {
+	w.draining.Store(true)
+	w.iterator.Drain()
+}
 
 func (w *workerConsumer) Closed() <-chan struct{} { return w.done }
 
@@ -117,7 +122,7 @@ func (c *Client) runWorkers(ctx context.Context, consumer jetstream.Consumer, ha
 		msg, err := handle.iterator.Next(nextContext)
 		if err != nil {
 			<-slots
-			if ctx.Err() != nil || errors.Is(err, jetstream.ErrMsgIteratorClosed) {
+			if ctx.Err() != nil || (handle.draining.Load() && errors.Is(err, jetstream.ErrMsgIteratorClosed)) {
 				return
 			}
 			c.logConsumeError(c.handlerCtx, consumer, err)

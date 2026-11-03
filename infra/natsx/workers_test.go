@@ -509,3 +509,28 @@ func TestWorkerEngineContinuesAfterMissingHeartbeat(t *testing.T) {
 		}
 	}
 }
+
+func TestUnexpectedIteratorCloseReportsError(t *testing.T) {
+	c, consumer := newWorkerTestClient(t, time.Second)
+	called := make(chan error, 1)
+	err := c.consumeWithWorkers(workerErrorConsumer{
+		Consumer: consumer,
+		iterator: &workerErrorIterator{errors: []error{jetstream.ErrMsgIteratorClosed}},
+	}, ConsumeConfig{
+		Workers: 1,
+		ErrorHandler: func(_ jetstream.ConsumeContext, err error) {
+			called <- err
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-called:
+		if !errors.Is(err, jetstream.ErrMsgIteratorClosed) {
+			t.Fatalf("意外关闭的错误原因丢失: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("意外关闭迭代器没有通知消费方")
+	}
+}

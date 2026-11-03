@@ -13,6 +13,7 @@ import (
 	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/infra/natsx"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -35,6 +36,8 @@ import (
 // 省略或 null 沿用 Default，显式值的归一化及校验交给 natsx 注册入口和服务端。
 // Core queue 非空时 subscribers 必须大于 1，否则在注册任何资源前返回错误。
 // Run 注册期间可能执行 Handler；失败须中止启动并先排空已启动消费，再由资源栈关闭 Client，不回滚远端资源或业务。
+// 注册成功后，连接永久关闭或任一 JetStream 拉取循环意外终止时 Run 返回错误，由管理器统一停收。
+// 临时断连沿用 SDK 重连，丢失心跳继续拉取。
 // 注册 context 可由 Stop 取消，不设置整体注册期限；资源请求与 Core Flush 沿用 SDK 默认行为。
 // Client 关闭检查沿用 natsx；长期 Handler 使用独立消息 context，不提供热更新或整批重试。
 func NewNATSConsumerService(instanceName string, jetStreamHandlers *natsx.JetStreamHandlerRegistry, coreHandlers *natsx.CoreHandlerRegistry) (apprun.Service, error) {
@@ -110,17 +113,43 @@ func (c *natsConsumer) Run() error {
 	}
 	c.started = true
 	c.mu.Unlock()
-	err := c.register(c.registerCtx)
-	if err != nil {
-		c.mu.Lock()
-		stopping := c.stopped
-		c.mu.Unlock()
-		if !stopping || !errors.Is(err, context.Canceled) && !errors.Is(err, natsx.ErrClosed) {
+	conn := c.client.Conn()
+	// StatusChanged 只通知后续状态；先订阅再检查，覆盖注册之前及注册期间的永久关闭。
+	closed := conn.StatusChanged(nats.CLOSED)
+	defer conn.RemoveStatusListener(closed)
+	var failure error = nats.ErrConnectionClosed
+	if !conn.IsClosed() {
+		failed := make(chan error, 1)
+		for i, spec := range c.batch.jetStreamConsumers {
+			c.batch.jetStreamConsumers[i].Consume.ErrorHandler = func(_ jetstream.ConsumeContext, err error) {
+				if errors.Is(err, jetstream.ErrNoHeartbeat) {
+					return
+				}
+				// 多个拉取循环可以同时失败，首个错误足以触发停收；回调不得阻塞。
+				select {
+				case failed <- fmt.Errorf("consumer %q/%q: %w", spec.Stream, spec.Config.Durable, err):
+				default:
+				}
+			}
+		}
+		if err := c.register(c.registerCtx); err != nil {
+			if c.registerCtx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, natsx.ErrClosed) || errors.Is(err, nats.ErrConnectionClosed)) {
+				return nil
+			}
 			return err
 		}
+		select {
+		case <-c.done:
+			return nil
+		case <-closed:
+		case failure = <-failed:
+		}
 	}
-	<-c.done
-	return nil
+	// Stop 先取消注册 context，再发起排空；并发到达的关闭通知也作为正常停收。
+	if c.registerCtx.Err() != nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", c.location, failure)
 }
 
 // Stop 停止注册和消费接入，保留已有 Handler 的 context 与共享连接。

@@ -51,6 +51,8 @@ func TestNATSFromConfig(t *testing.T) {
 	}{
 		{name: "Service", run: testNewNATSConsumerService},
 		{name: "ServiceConstructionErrors", run: testNewNATSConsumerServiceConstructionErrors},
+		{name: "ServiceConsumerDeleted", run: testNATSServiceConsumerDeleted},
+		{name: "ServiceConnectionClosed", run: testNATSServiceConnectionClosed},
 		{name: "ServiceDirectCancel", run: testNewNATSConsumerServiceDirectCancel},
 		{name: "ServiceSlowRegistrationLog", run: testNewNATSConsumerServiceSlowRegistrationLog},
 		{name: "MissingClientBeforeEnvironment", run: testNATSFromConfigMissingClientBeforeEnvironment},
@@ -89,7 +91,7 @@ func recoverValue(fn func()) (value any) {
 	return nil
 }
 
-func startNATSTestServer(t *testing.T, jetStream bool) string {
+func startNATSTestServer(t *testing.T, jetStream bool) *server.Server {
 	t.Helper()
 	s, err := server.NewServer(&server.Options{
 		Host:      "127.0.0.1",
@@ -112,7 +114,7 @@ func startNATSTestServer(t *testing.T, jetStream bool) string {
 	if !s.ReadyForConnections(5 * time.Second) {
 		t.Fatal("临时 NATS 服务未就绪")
 	}
-	return s.ClientURL()
+	return s
 }
 
 func registrationClients(t *testing.T, enableJetStream bool, names ...string) []*natsx.Client {
@@ -122,16 +124,8 @@ func registrationClients(t *testing.T, enableJetStream bool, names ...string) []
 
 func registrationClientsWithCloseError(t *testing.T, enableJetStream bool, wantCloseErr error, names ...string) []*natsx.Client {
 	t.Helper()
-	if err := env.Init(env.Config{
-		AppName:       "nats-registration-test",
-		RunMode:       env.RunModeRelease,
-		TimeLocation:  "UTC",
-		ConfigDirPath: t.TempDir(),
-		LocalIP:       "127.0.0.1",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	url := startNATSTestServer(t, enableJetStream)
+	initNATSRegistrationEnv(t)
+	url := startNATSTestServer(t, enableJetStream).ClientURL()
 	t.Cleanup(func() {
 		if err := natsx.CloseAll(); wantCloseErr == nil && err != nil || wantCloseErr != nil && !errors.Is(err, wantCloseErr) {
 			t.Error(err)
@@ -149,6 +143,19 @@ func registrationClientsWithCloseError(t *testing.T, enableJetStream bool, wantC
 		clients = append(clients, client)
 	}
 	return clients
+}
+
+func initNATSRegistrationEnv(t *testing.T) {
+	t.Helper()
+	if err := env.Init(env.Config{
+		AppName:       "nats-registration-test",
+		RunMode:       env.RunModeRelease,
+		TimeLocation:  "UTC",
+		ConfigDirPath: t.TempDir(),
+		LocalIP:       "127.0.0.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func writeNATSRegistration(t *testing.T, name, content string) {
