@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/bpcoder16/pixiu/biz/realtime/protocol"
 	"github.com/bpcoder16/pixiu/infra/websocketx"
+	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -26,6 +29,59 @@ func TestPushTargets(t *testing.T) {
 			t.Fatalf("零命中: %+v %v", res, err)
 		}
 	}
+}
+
+func TestPushToOnlineTargets(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Authenticate = func(_ context.Context, r *http.Request) (ClientInfo, error) {
+		return ClientInfo{
+			UserID:   r.Header.Get("X-User"),
+			DeviceID: r.Header.Get("X-Device"),
+		}, nil
+	}
+	s, h := startTestServer(t, cfg)
+	connect := func(user, device string) *websocket.Conn {
+		t.Helper()
+		d := websocket.Dialer{Subprotocols: []string{SubprotocolJSON}}
+		c, _, err := d.Dial("ws"+strings.TrimPrefix(h.URL, "http"), http.Header{
+			"X-User":   {user},
+			"X-Device": {device},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		return c
+	}
+	phone := connect("alice", "phone")
+	tablet := connect("alice", "tablet")
+	connect("bob", "laptop")
+	awaitTargets(t, s, 3)
+
+	msg := PushMessage{Type: "home.refreshed", Data: &emptypb.Empty{}}
+	got, err := s.PushToUser(t.Context(), "alice", msg)
+	if err != nil || got != (PushResult{Matched: 2, Enqueued: 2}) {
+		t.Fatalf("用户推送 = %+v, %v", got, err)
+	}
+	responseBody(t, phone, protocol.Kind_EVENT)
+	responseBody(t, tablet, protocol.Kind_EVENT)
+	got, err = s.PushToDevice(t.Context(), "phone", msg)
+	if err != nil || got != (PushResult{Matched: 1, Enqueued: 1}) {
+		t.Fatalf("设备推送 = %+v, %v", got, err)
+	}
+	responseBody(t, phone, protocol.Kind_EVENT)
+
+	_ = phone.Close()
+	awaitTargets(t, s, 2)
+	got, err = s.PushToDevice(t.Context(), "phone", msg)
+	if err != nil || got != (PushResult{}) {
+		t.Fatalf("设备断开后仍被命中: %+v, %v", got, err)
+	}
+	got, err = s.PushToUser(t.Context(), "alice", msg)
+	if err != nil || got != (PushResult{Matched: 1, Enqueued: 1}) {
+		t.Fatalf("用户剩余连接推送 = %+v, %v", got, err)
+	}
+	responseBody(t, tablet, protocol.Kind_EVENT)
 }
 
 type blockedPushBody struct {

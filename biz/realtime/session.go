@@ -54,6 +54,7 @@ func (s *Session) Close(code int, reason string) (bool, error) {
 }
 
 // Send 同步编码并接纳到有界队列；成功不表示已写入网络或对端收到。
+// 当前连接的主动事件用 Send。回复请求用 Reply 或 ReplyError，以关联原请求并处理发送失败。
 func (s *Session) Send(ctx context.Context, message Outgoing) error {
 	return s.send(ctx, nil, message)
 }
