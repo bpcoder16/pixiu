@@ -811,6 +811,10 @@ func TestShutdownTimeoutThenWaitForCleanup(t *testing.T) {
 	}
 }
 
+type brokenTaskError struct{}
+
+func (brokenTaskError) Error() string { panic("broken error text") }
+
 func TestTaskErrorsAndPanicGoToStderr(t *testing.T) {
 	read, write, err := os.Pipe()
 	if err != nil {
@@ -824,19 +828,33 @@ func TestTaskErrorsAndPanicGoToStderr(t *testing.T) {
 		read.Close()
 	})
 	cfg := testConfig()
-	cfg.MaxRetries = 1
+	cfg.QueueSize = 5
 	p, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var calls atomic.Int32
-	if err := p.Submit(context.Background(), "fails", func(context.Context) error {
-		calls.Add(1)
-		return errors.New("failed")
-	}); err != nil {
-		t.Fatal(err)
+	failures := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"fails", errors.New("failed"), `error="failed"`},
+		{"typed-nil", (*os.PathError)(nil), `error="<nil>"`},
+		{"broken-error", brokenTaskError{}, "broken error text"},
+	}
+	var attempts atomic.Int32
+	for _, tc := range failures {
+		if err := p.Submit(context.Background(), tc.name, func(context.Context) error {
+			attempts.Add(1)
+			return tc.err
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := p.Submit(context.Background(), "panics", func(context.Context) error { panic("broken") }); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Submit(context.Background(), "next", func(context.Context) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.Shutdown(); err != nil {
@@ -848,7 +866,15 @@ func TestTaskErrorsAndPanicGoToStderr(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := string(data)
-	if calls.Load() != 2 || p.Stats().Failed != 2 || !strings.Contains(output, "task=\"fails\"") || !strings.Contains(output, "attempt=2/2") || !strings.Contains(output, "task=\"panics\"") || !strings.Contains(output, "goroutine") {
-		t.Fatalf("calls=%d Stats=%+v stderr=%q", calls.Load(), p.Stats(), output)
+	for _, tc := range failures {
+		task := fmt.Sprintf("task=%q", tc.name)
+		if strings.Count(output, task) != 2 || !strings.Contains(output, task+" attempt=1/2 status=retry") ||
+			!strings.Contains(output, task+" attempt=2/2 status=final") || !strings.Contains(output, tc.want) {
+			t.Fatalf("任务 %s 的重试或错误日志不符: %s", tc.name, output)
+		}
+	}
+	if stats := p.Stats(); attempts.Load() != 6 || stats.Failed != 4 || stats.Succeeded != 1 ||
+		!strings.Contains(output, "task=\"panics\"") || !strings.Contains(output, "goroutine") {
+		t.Fatalf("attempts=%d Stats=%+v stderr=%q", attempts.Load(), stats, output)
 	}
 }

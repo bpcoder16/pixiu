@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 
 	"github.com/bpcoder16/pixiu/infra/aliyun/ossx"
 )
@@ -26,8 +28,7 @@ func MD5FromURL(ctx context.Context, fileURL string) (string, error) {
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		// HTTP 错误可能包含签名 URL，仅保留稳定错误及取消/超时语义。
-		return "", errors.Join(ErrFileRead, ctx.Err())
+		return "", fileReadError(ctx, err)
 	}
 	defer func() {
 		_ = res.Body.Close()
@@ -41,7 +42,23 @@ func MD5FromURL(ctx context.Context, fileURL string) (string, error) {
 	// 摘要来自完整正文，不能用 ETag 代替；流式读取避免把整个文件保留在内存。
 	hash := md5.New()
 	if _, readErr := io.Copy(hash, res.Body); readErr != nil {
-		return "", errors.Join(ErrFileRead, ctx.Err())
+		return "", fileReadError(ctx, readErr)
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func fileReadError(ctx context.Context, cause error) error {
+	// 调用方的取消或期限优先；只返回稳定标记，避免底层错误链泄露签名 URL。
+	if ctxErr := ctx.Err(); ctxErr == context.Canceled || ctxErr == context.DeadlineExceeded {
+		return errors.Join(ErrFileRead, ctxErr)
+	}
+	// url.Error.Timeout 只检查直接原因，传输层用 %w 包装的超时需要继续向内查找。
+	if u, ok := cause.(*url.Error); ok && !u.Timeout() {
+		cause = u.Err
+	}
+	timeout, ok := errors.AsType[net.Error](cause)
+	if errors.Is(cause, context.DeadlineExceeded) || (ok && timeout.Timeout()) {
+		return errors.Join(ErrFileRead, context.DeadlineExceeded)
+	}
+	return ErrFileRead
 }

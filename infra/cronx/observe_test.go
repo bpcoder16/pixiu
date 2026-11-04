@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -216,12 +218,45 @@ func TestTimeoutWarningAndUnlockFailure(t *testing.T) {
 	}
 }
 
+type brokenJobError struct{}
+
+func (brokenJobError) Error() string { panic("broken error text") }
+
+func TestCallbackErrorFormattingKeepsSchedulerRunning(t *testing.T) {
+	records := recordLogs(t)
+	var runs atomic.Int32
+	s, _ := runScheduler(t, Config{}, Job{
+		Name:  "job",
+		Every: 100 * time.Millisecond,
+		Handler: func(context.Context) error {
+			switch runs.Add(1) {
+			case 1:
+				return (*os.PathError)(nil)
+			case 2:
+				return brokenJobError{}
+			default:
+				return nil
+			}
+		},
+	})
+	waitFor(t, func() bool { return countResults(records(), "success") > 0 })
+	if err := stopAndWait(s.Stop, s.Wait, s.Cancel); err != nil {
+		t.Fatal(err)
+	}
+	logs := records()
+	output := strings.Join(logs, "")
+	if countResults(logs, "error") != 2 || !strings.Contains(output, "err=[<nil>]") || !strings.Contains(output, "broken error text") {
+		t.Fatalf("两个异常错误应各留下一条失败记录: %v", logs)
+	}
+}
+
 func TestShutdownPreservesBusinessFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		result func(context.Context) error
 		status string
 		level  string
+		want   string
 	}{
 		{
 			name: "business-error",
@@ -230,14 +265,23 @@ func TestShutdownPreservesBusinessFailure(t *testing.T) {
 			},
 			status: "error",
 			level:  "ERROR",
+			want:   "save checkpoint failed",
 		},
 		{
-			name: "cooperative-cancellation",
+			name:   "typed-nil",
+			result: func(context.Context) error { return (*os.PathError)(nil) },
+			status: "error",
+			level:  "ERROR",
+			want:   "err=[<nil>]",
+		},
+		{
+			name: "wrapped-cancellation",
 			result: func(ctx context.Context) error {
-				return ctx.Err()
+				return fmt.Errorf("job stopped: %w", ctx.Err())
 			},
 			status: "canceled",
 			level:  "DEBUG",
+			want:   "job stopped",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -263,7 +307,7 @@ func TestShutdownPreservesBusinessFailure(t *testing.T) {
 			}
 			for _, record := range records() {
 				if strings.Contains(record, "CronJobResult") && strings.Contains(record, tc.level) {
-					if tc.status == "error" && !strings.Contains(record, "save checkpoint failed") {
+					if !strings.Contains(record, tc.want) {
 						t.Fatalf("业务错误应保留原因: %s", record)
 					}
 					return

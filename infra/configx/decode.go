@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
@@ -53,7 +54,45 @@ func (d capturedDecoder) Decode(data []byte, dst map[string]any) error {
 	if err := d.decoder.Decode(data, dst); err != nil {
 		return err
 	}
+	// Viper 会原地把键转成小写，此处仍能区分冲突的原始拼写。
+	if err := checkMapKeys(dst); err != nil {
+		return fmt.Errorf("config root: %w", err)
+	}
 	*d.values = dst
+	return nil
+}
+
+func checkMapKeys[K comparable](object map[K]any) error {
+	seen := make(map[string]string, len(object))
+	for key, value := range object {
+		if name, ok := any(key).(string); ok {
+			lower := strings.ToLower(name)
+			if previous, exists := seen[lower]; exists {
+				return fmt.Errorf("case-insensitive key conflict between %q and %q", min(previous, name), max(previous, name))
+			}
+			seen[lower] = name
+		}
+		if err := checkNestedKeys(value); err != nil {
+			return fmt.Errorf("key %q: %w", fmt.Sprint(key), err)
+		}
+	}
+	return nil
+}
+
+func checkNestedKeys(value any) error {
+	switch v := value.(type) {
+	case map[string]any:
+		return checkMapKeys(v)
+	case map[any]any:
+		// 含非字符串键的 YAML 对象也可能包含需要检查的字符串键。
+		return checkMapKeys(v)
+	case []any:
+		for i, item := range v {
+			if err := checkNestedKeys(item); err != nil {
+				return fmt.Errorf("index %d: %w", i, err)
+			}
+		}
+	}
 	return nil
 }
 

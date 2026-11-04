@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bpcoder16/pixiu/infra/aliyun/ossx"
 	"github.com/bpcoder16/pixiu/infra/aliyun/stsx"
@@ -34,7 +35,7 @@ type UploadCredentialsResult struct {
 
 // CreateUploadCredentials 只授权 keys 中的精确对象执行 oss:PutObject。
 // 未通过 WithSTSClient 配置 STS 时返回 ErrSTSNotConfigured。
-// keys 必须非空，每个 Key 非空且不含 *、?；完整 Policy 的 2048 字节限制由 stsx 校验。
+// keys 必须非空，每个 Key 必须是非空的有效 UTF-8 字符串且不含 *、?；完整 Policy 的 2048 字节限制由 stsx 校验。
 // 不缓存、不重试、不写入数据库，失败返回零值并保留 STS 错误链和 Context 语义。
 func (s *Service) CreateUploadCredentials(ctx context.Context, keys []string, options UploadCredentialsOptions) (UploadCredentialsResult, error) {
 	if s.sts == nil {
@@ -71,6 +72,10 @@ func uploadPolicy(bucket string, keys []string) (string, error) {
 		// RAM 把 *、? 解释为通配符，禁止扩大授权范围。
 		if key == "" || strings.ContainsAny(key, "*?") {
 			return "", errors.New("OSS upload requires exact object keys")
+		}
+		// JSON 会把非法字节替换为 U+FFFD，造成授权对象与请求不一致。
+		if !utf8.ValidString(key) {
+			return "", errors.New("OSS upload object keys must be valid UTF-8")
 		}
 		resources = append(resources, "acs:oss:*:*:"+bucket+"/"+key)
 	}

@@ -47,19 +47,30 @@ func (s *Scheduler) execute(job Job) {
 		status, level = "panic", logit.ErrorLevel
 	case errors.Is(ctxErr, context.DeadlineExceeded):
 		status, level, err = "timeout", logit.WarnLevel, errors.Join(err, ctxErr)
-	case ctxErr != nil && (err == nil || errors.Is(err, ctxErr)):
+	case ctxErr != nil && (err == nil || matchesCancellation(err, ctxErr)):
 		status, level, err = "canceled", logit.DebugLevel, errors.Join(err, ctxErr)
 	case err != nil:
 		status, level = "error", logit.ErrorLevel
 	}
 	fields := []logit.Field{logit.Str("status", status), logit.Dur("duration", ended.Sub(started))}
 	if err != nil {
-		fields = append(fields, logit.Err(err))
+		// 回调的 Error 方法可能 panic，交给 fmt 生成诊断文本。
+		fields = append(fields, logit.Str("err", fmt.Sprint(err)))
 	}
 	if stack != "" {
 		fields = append(fields, logit.Str("stack", stack))
 	}
 	logit.Output(ctx, level, 0, "CronJobResult", fields...)
+}
+
+func matchesCancellation(err, ctxErr error) (matched bool) {
+	// 业务错误的 Is 或 Unwrap 可能 panic，无法确认取消时按业务失败记录。
+	defer func() {
+		if recover() != nil {
+			matched = false
+		}
+	}()
+	return errors.Is(err, ctxErr)
 }
 
 func invoke(ctx context.Context, handler Handler) (err error, panicked bool, stack string) {

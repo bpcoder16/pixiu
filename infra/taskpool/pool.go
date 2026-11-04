@@ -338,7 +338,8 @@ func reportFailure(name string, attempt, attempts int, err error, stack []byte, 
 	if final {
 		status = "final"
 	}
-	record := fmt.Appendf(nil, "taskpool: task=%q attempt=%d/%d status=%s error=%q\n", name, attempt, attempts, status, err.Error())
+	// 由 fmt 隔离业务 Error 方法的 panic，再用 %q 将错误内容写成一行。
+	record := fmt.Appendf(nil, "taskpool: task=%q attempt=%d/%d status=%s error=%q\n", name, attempt, attempts, status, fmt.Sprint(err))
 	record = append(record, stack...)
 	// 错误行与堆栈一次写入，避免并发 worker 的记录交叉。
 	_, _ = os.Stderr.Write(record)

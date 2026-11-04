@@ -75,7 +75,7 @@ func TestCreateUploadCredentialsScopesObjectsAndPreservesOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keys := []string{"config/a.json", "config/文件 & #%.json"}
+	keys := []string{"config/a.json", "config/文件 & #%.json", "config/\uFFFD.json"}
 	wantPolicy := map[string]any{
 		"Version": "1",
 		"Statement": []any{map[string]any{
@@ -84,6 +84,7 @@ func TestCreateUploadCredentialsScopesObjectsAndPreservesOptions(t *testing.T) {
 			"Resource": []any{
 				"acs:oss:*:*:upload-bucket/" + keys[0],
 				"acs:oss:*:*:upload-bucket/" + keys[1],
+				"acs:oss:*:*:upload-bucket/" + keys[2],
 			},
 		}},
 	}
@@ -117,6 +118,7 @@ func TestCreateUploadCredentialsScopesObjectsAndPreservesOptions(t *testing.T) {
 }
 
 func TestCreateUploadCredentialsRejectsUnsafePolicyBeforeSTS(t *testing.T) {
+	const invalidKey = "private-key/\xff.json"
 	var calls atomic.Int32
 	ossClient, stsClient := newClients(t, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -131,20 +133,26 @@ func TestCreateUploadCredentialsRejectsUnsafePolicyBeforeSTS(t *testing.T) {
 		oversized = append(oversized, fmt.Sprintf("config/%s-%d.json", strings.Repeat("a", 70), i))
 	}
 	for _, tc := range []struct {
-		name string
-		keys []string
+		name    string
+		keys    []string
+		wantErr string
 	}{
 		{name: "no keys"},
 		{name: "empty key", keys: []string{""}},
 		{name: "star wildcard", keys: []string{"config/*"}},
 		{name: "question wildcard", keys: []string{"config/?.json"}},
 		{name: "mixed valid and invalid", keys: []string{"config/a.json", ""}},
+		{name: "invalid UTF-8", keys: []string{invalidKey}, wantErr: "UTF-8"},
+		{name: "mixed valid and invalid UTF-8", keys: []string{"config/a.json", invalidKey}, wantErr: "UTF-8"},
 		{name: "policy exceeds 2048 bytes", keys: oversized},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := service.CreateUploadCredentials(context.Background(), tc.keys, uploadOptions())
 			if err == nil || got != (ossservice.UploadCredentialsResult{}) {
 				t.Fatal("unsafe policy must fail without a result")
+			}
+			if tc.wantErr != "" && (!strings.Contains(err.Error(), tc.wantErr) || strings.Contains(err.Error(), "private-key")) {
+				t.Fatalf("应指明编码错误并省略对象名: %v", err)
 			}
 		})
 	}

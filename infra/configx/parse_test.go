@@ -85,3 +85,63 @@ func TestParseRejectsInvalidFiles(t *testing.T) {
 		t.Fatalf("应拒绝非结构体类型: %+v, %v", got, err)
 	}
 }
+
+func TestParseRejectsCaseConflictsInSameObject(t *testing.T) {
+	type config struct {
+		RunMode string
+		Env     map[string]any
+		Nodes   []map[string]string
+	}
+	for _, tc := range []struct {
+		name     string
+		ext      string
+		content  string
+		location string
+	}{
+		{"root", ".yaml", "runMode: private-value\nRunMode: private-value\n", "root"},
+		{"nested", ".toml", "[Env]\nrunMode = 'private-value'\nRunMode = 'other'\n", "Env"},
+		{"array", ".json", `{"Nodes":[{},{"runMode":"private-value","RunMode":"other"}]}`, "index 1"},
+		{"table-array", ".toml", "[[Nodes]]\nrunMode = 'private-value'\nRunMode = 'other'\n", "index 0"},
+		{"mixed-yaml-keys", ".yaml", "Env:\n  1: keep\n  runMode: private-value\n  RunMode: other\n", "Env"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file := configFile(t, tc.ext, tc.content)
+			got, err := Parse[config](file)
+			if got != nil || err == nil {
+				t.Fatal("同一对象的大小写冲突应返回 nil 和错误")
+			}
+			for _, part := range []string{file, tc.location, "runMode", "RunMode"} {
+				if !strings.Contains(err.Error(), part) {
+					t.Fatalf("冲突错误缺少 %q: %v", part, err)
+				}
+			}
+			if strings.Contains(err.Error(), "private-value") {
+				t.Fatalf("冲突错误泄露了配置值: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadCanRetryAfterCaseConflict(t *testing.T) {
+	type config struct {
+		Nodes []struct{ RunMode string }
+		Label string `mapstructure:"nodes.runMode"`
+	}
+	name := configName(t)
+	file := configFile(t, ".json", `{"Nodes":[{"RunMode":"one","runMode":"two"}]}`)
+	if err := Load[config](name, file); err == nil {
+		t.Fatal("加载应拒绝同层大小写冲突")
+	}
+	// 两个数组元素各自有独立的键空间，带点的字面键也不参与路径展开。
+	const valid = `{"Nodes":[{"RunMode":"one"},{"runMode":"two"}],"nodes.runMode":"literal"}`
+	if err := os.WriteFile(file, []byte(valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load[config](name, file); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Get[config](name)
+	if err != nil || len(got.Nodes) != 2 || got.Nodes[0].RunMode != "one" || got.Nodes[1].RunMode != "two" || got.Label != "literal" {
+		t.Fatalf("修正配置后应能用原名加载: %+v, %v", got, err)
+	}
+}

@@ -25,7 +25,7 @@
 //	_ = result.Credentials
 //
 // 授权固定使用传入 OSS 客户端的 Bucket，仅包含指定 Key 的 oss:PutObject，
-// 不授予读取、删除、列举权限；空列表、空 Key 及含 *、? 的 Key 会在签发前被拒绝。
+// 不授予读取、删除、列举权限；空列表、空 Key、含 *、? 或非法 UTF-8 的 Key 会在签发前被拒绝。
 // Policy 不对 Key 做路径清理或 URL 转义，授权范围与调用方提供的对象保持一致。
 // STS 仍限制完整 Policy 最多 2048 字节，超限直接失败，不改用通配符或拆分签发。
 // 凭据有效期内允许再次写入同名对象；该流程不提供一次性上传或实际文件大小限制。
@@ -75,6 +75,8 @@
 // 仅对 HTTP 200 的完整正文流式计算 MD5，返回 32 位小写十六进制摘要；不解析内容或使用 ETag。
 // 响应正文总会关闭，关闭错误不改变结果。HTTP 404 返回 ossx.ErrObjectNotFound，
 // 其余状态、请求或读取失败可用 errors.Is(err, ErrFileRead) 判断；失败不返回部分摘要。
-// 错误仅包含稳定错误、HTTP 状态码及 Context 取消/超时语义，不透传可能含签名 URL 的底层错误。
+// 请求或读取正文时，调用方取消或到期优先保留其 Context 语义；HTTP 客户端超时也可用
+// errors.Is(err, context.DeadlineExceeded) 判断。返回的错误只保留稳定标记和适用的 HTTP 状态码，
+// 不透传可能含签名 URL 或响应正文的底层错误。
 // 本函数不查询上传记录、不签发 URL；调用方应让 URL 查询、签名和下载共享同一个 Context 总期限。
 package ossservice

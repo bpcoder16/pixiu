@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -70,16 +71,21 @@ func TestMD5FromURLPreservesRedirectBehavior(t *testing.T) {
 	}
 }
 
-func assertMD5ReadFailure(t *testing.T, ctx context.Context, fileURL string, want error) {
+func assertMD5ReadFailure(t *testing.T, ctx context.Context, fileURL string, want error) error {
 	t.Helper()
 	got, err := ossservice.MD5FromURL(ctx, fileURL)
 	if got != "" || !errors.Is(err, want) {
 		t.Fatalf("MD5=%q err=%v, want empty digest and %v", got, err, want)
 	}
 	var urlErr *url.Error
-	if errors.As(err, &urlErr) || strings.Contains(err.Error(), "secret-signature") || strings.Contains(err.Error(), "private-payload") {
+	if errors.As(err, &urlErr) || strings.Contains(err.Error(), fileURL) || strings.Contains(err.Error(), "secret-signature") || strings.Contains(err.Error(), "private-payload") {
 		t.Fatal("read failure exposed a URL or response payload")
 	}
+	if errors.Is(err, ossservice.ErrFileRead) != (want != ossx.ErrObjectNotFound) ||
+		errors.Is(err, context.DeadlineExceeded) != (want == context.DeadlineExceeded) {
+		t.Fatalf("错误分类不符: got %v, want %v", err, want)
+	}
+	return err
 }
 
 func TestMD5FromURLRejectsHTTPFailuresWithoutRetry(t *testing.T) {
@@ -157,6 +163,47 @@ func TestMD5FromURLPreservesContextCancellation(t *testing.T) {
 				t.Fatal("download did not stop after cancellation")
 			}
 		})
+	}
+}
+
+func TestMD5FromURLPreservesClientTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/body" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, "private-payload")
+			w.(http.Flusher).Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	client := server.Client()
+	client.Timeout = 250 * time.Millisecond
+	previous := http.DefaultClient
+	http.DefaultClient = client
+	t.Cleanup(func() { http.DefaultClient = previous })
+
+	for _, phase := range []string{"headers", "body"} {
+		t.Run(phase, func(t *testing.T) {
+			fileURL := server.URL + "/" + phase + "?x-oss-signature=secret-signature"
+			assertMD5ReadFailure(t, context.Background(), fileURL, context.DeadlineExceeded)
+		})
+	}
+}
+
+func TestMD5FromURLSanitizesTransportTimeout(t *testing.T) {
+	const fileURL = "http://example.test/file?x-oss-signature=secret-signature"
+	// 传输层只通过 net.Error.Timeout 表达超时，原始错误及其包装均含有敏感内容。
+	timeout := &net.DNSError{Err: "private-payload", Name: "example.test", IsTimeout: true}
+	previous := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: &http.Transport{
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, fmt.Errorf("download %s: %w", fileURL, timeout)
+		},
+	}}
+	t.Cleanup(func() { http.DefaultClient = previous })
+	err := assertMD5ReadFailure(t, context.Background(), fileURL, context.DeadlineExceeded)
+	if errors.Is(err, timeout) {
+		t.Fatal("错误链泄露了原始传输错误")
 	}
 }
 
