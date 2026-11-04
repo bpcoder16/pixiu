@@ -30,6 +30,10 @@ streams:  # 可省略、设为 null 或 []；每项必须声明 subjects，统�
           - "orders.created"
         handler: "HandleOrderCreated"  # 须由应用的 JetStreamHandlerRegistry 登记。
         # 以下七项均可省略或设为 null，沿用 natsx Default；注释中说明默认值和可选示例。
+        # 三者关系：ackWait/backOff 控制确认超时，retryDelay 控制失败后的延迟 NAK，时间不相加。
+        # backOff 为空、retryDelay 为 0 时按 ackWait 重投；backOff 非空、retryDelay 为 0 时按列表重投，ackWait 不生效。
+        # retryDelay 为正时 backOff 必须为空；失败后发送固定延迟 NAK，服务端收到后按该延迟重新安排本次重投。
+        # retryDelay 为 0 不代表立即重试；正值也不会延长 Handler 的处理期限，确认超时可能在 Handler 返回前触发重投。
         # ackWait: "60s"       # 未配置非空 backOff 时必须大于 0；确认期限应覆盖预取等待和业务处理时间，支持 Go 时长单位。
         # backOff: ["60s", "5m", "30m"]  # 默认空列表；非空时覆盖 ackWait，按投递次数选择确认超时，后续重复最后一档；retryDelay 必须为 0。
         # backOff 也可写为多行列表；元素支持 Go 时长单位（不支持 d）或纳秒数，范围及列表长度由服务端校验。
