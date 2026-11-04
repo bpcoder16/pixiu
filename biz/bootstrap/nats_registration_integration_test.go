@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -64,6 +65,7 @@ func TestNATSFromConfig(t *testing.T) {
 		{name: "StreamValidation", run: testNATSFromConfigStreamValidation},
 		{name: "StreamOptions", run: testNATSFromConfigStreamOptions},
 		{name: "JetStreamOptions", run: testNATSFromConfigJetStreamOptions},
+		{name: "JetStreamBackOff", run: testNATSFromConfigJetStreamBackOff},
 		{name: "JetStreamConsumerValidation", run: testNATSFromConfigJetStreamConsumerValidation},
 		{name: "CoreConsumerValidation", run: testNATSFromConfigCoreConsumerValidation},
 		{name: "CoreSubscribers", run: testNATSFromConfigCoreSubscribers},
@@ -910,6 +912,96 @@ streams:
 	})
 }
 
+func testNATSFromConfigJetStreamBackOff(t *testing.T) {
+	isolatedNATS(t, func() {
+		client := registrationClients(t, true, "demo")[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		type delivery struct {
+			attempt uint64
+			at      time.Time
+		}
+		deliveries := make(chan delivery, 4)
+		handlers := natsx.MustNewJetStreamHandlerRegistry()
+		handlers.MustRegister(func(_ context.Context, msg jetstream.Msg) error {
+			metadata, err := msg.Metadata()
+			if err != nil {
+				return err
+			}
+			deliveries <- delivery{attempt: metadata.NumDelivered, at: time.Now()}
+			switch metadata.NumDelivered {
+			case 1, 3:
+				return errors.New("测试业务失败")
+			case 2:
+				panic("测试业务 panic")
+			default:
+				return nil
+			}
+		}, "task")
+		writeNATSRegistration(t, "demo", `
+streamDefaults: {replicas: 1}
+streams:
+  - name: EVENTS
+    subjects: [events]
+    consumers:
+      - durable: worker
+        handler: task
+        ackWait: 0
+        backOff: [100ms, 250ms]
+        maxDeliver: 4
+`)
+		if err := registerNATSForTest(t, "demo", handlers, nil); err != nil {
+			t.Fatal(err)
+		}
+		consumer, err := client.JetStream().Consumer(ctx, "EVENTS", "worker")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := consumer.CachedInfo().Config
+		if !slices.Equal(got.BackOff, []time.Duration{100 * time.Millisecond, 250 * time.Millisecond}) ||
+			got.AckWait != 100*time.Millisecond || got.MaxDeliver != 4 {
+			t.Fatalf("YAML 的 BackOff 应传入远端并覆盖 AckWait: %+v", got)
+		}
+		if _, err := client.PublishJetStream(ctx, "events", nil, "backoff-event"); err != nil {
+			t.Fatal(err)
+		}
+		// 列表用尽后重复最后一档；业务 error 和 panic 均应保持未确认，交给服务端重投。
+		waits := []time.Duration{100 * time.Millisecond, 250 * time.Millisecond, 250 * time.Millisecond}
+		var previous time.Time
+		for attempt := uint64(1); attempt <= 4; attempt++ {
+			select {
+			case event := <-deliveries:
+				if event.attempt != attempt {
+					t.Fatalf("重复或遗漏投递: got=%d want=%d", event.attempt, attempt)
+				}
+				if attempt > 1 {
+					want := waits[attempt-2]
+					if elapsed := event.at.Sub(previous); elapsed < want-20*time.Millisecond {
+						t.Fatalf("未按 YAML 梯度重投: elapsed=%s want>=%s", elapsed, want)
+					}
+				}
+				previous = event.at
+			case <-ctx.Done():
+				t.Fatalf("梯度重投未完成: attempt=%d err=%v", attempt, ctx.Err())
+			}
+		}
+		for {
+			info, err := consumer.Info(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.AckFloor.Consumer == 4 && info.NumAckPending == 0 {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatal("梯度重投成功后应完成 ACK")
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	})
+}
+
 func testNATSFromConfigJetStreamConsumerValidation(t *testing.T) {
 	for _, test := range []struct {
 		name        string
@@ -936,6 +1028,12 @@ func testNATSFromConfigJetStreamConsumerValidation(t *testing.T) {
 			durable:     "second",
 			extraConfig: "        ackWait: -1s\n",
 			want:        "requires AckWait or BackOff",
+		},
+		{
+			name:        "backoff-with-positive-retry-delay",
+			durable:     "second",
+			extraConfig: "        backOff: [1s, 5s]\n        retryDelay: 1s\n",
+			want:        "cannot combine BackOff with positive RetryDelay",
 		},
 		{
 			name:        "negative-workers",

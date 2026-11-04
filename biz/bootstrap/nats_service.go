@@ -32,8 +32,9 @@ import (
 // 配置填写原始名称和主题，前缀统一由 Client 的注册及发送入口添加；Handler 名称不变。
 // 逐项 Stream 的 replicas 不得超过全局值，超限时在注册任何资源前返回错误。
 // Stream maxBytes、retention、maxAge、duplicates 可选，省略或 null 沿用 Default；显式零值按 NATS 语义处理。
-// JetStream ackWait、maxDeliver、maxAckPending、consume.workers、consume.maxMessages、retryDelay 可选，
+// JetStream ackWait、backOff、maxDeliver、maxAckPending、consume.workers、consume.maxMessages、retryDelay 可选，
 // 省略或 null 沿用 Default，显式值的归一化及校验交给 natsx 注册入口和服务端。
+// backOff 为空列表时保留 Default；非空时覆盖 ackWait，不能与正值 retryDelay 同用。
 // Core queue 非空时 subscribers 必须大于 1，否则在注册任何资源前返回错误。
 // Run 注册期间可能执行 Handler；失败须中止启动并先排空已启动消费，再由资源栈关闭 Client，不回滚远端资源或业务。
 // 注册成功后，连接永久关闭或任一 JetStream 拉取循环意外终止时 Run 返回错误，由管理器统一停收。
@@ -210,12 +211,13 @@ type natsStreamRegistration struct {
 }
 
 type natsJetStreamRegistration struct {
-	Durable        string         `mapstructure:"durable"`
-	FilterSubjects []string       `mapstructure:"filterSubjects"`
-	Handler        string         `mapstructure:"handler"`
-	AckWait        *time.Duration `mapstructure:"ackWait"`
-	MaxDeliver     *int           `mapstructure:"maxDeliver"`
-	MaxAckPending  *int           `mapstructure:"maxAckPending"`
+	Durable        string          `mapstructure:"durable"`
+	FilterSubjects []string        `mapstructure:"filterSubjects"`
+	Handler        string          `mapstructure:"handler"`
+	AckWait        *time.Duration  `mapstructure:"ackWait"`
+	BackOff        []time.Duration `mapstructure:"backOff"`
+	MaxDeliver     *int            `mapstructure:"maxDeliver"`
+	MaxAckPending  *int            `mapstructure:"maxAckPending"`
 	Consume        struct {
 		Workers     *int `mapstructure:"workers"`
 		MaxMessages *int `mapstructure:"maxMessages"`
@@ -303,6 +305,9 @@ func (cfg *natsRegistrationConfig) bind(urlCount int, jsRegistry *natsx.JetStrea
 			// 仅覆盖显式配置的字段，保留零值语义，由 natsx 和服务端统一归一化及校验。
 			if consumerSpec.AckWait != nil {
 				consumer.Config.AckWait = *consumerSpec.AckWait
+			}
+			if len(consumerSpec.BackOff) > 0 {
+				consumer.Config.BackOff = consumerSpec.BackOff
 			}
 			if consumerSpec.MaxDeliver != nil {
 				consumer.Config.MaxDeliver = *consumerSpec.MaxDeliver

@@ -157,8 +157,8 @@ func TestNATSRegistrationExampleOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	optional := regexp.MustCompile(`(?m)^( *)# ( *)(streamDefaults|replicas|maxBytes|retention|maxAge|duplicates|ackWait|maxDeliver|maxAckPending|consume|workers|maxMessages|retryDelay):`)
-	if got := len(optional.FindAll(content, -1)); got != 14 {
+	optional := regexp.MustCompile(`(?m)^( *)# ( *)(streamDefaults|replicas|maxBytes|retention|maxAge|duplicates|ackWait|backOff|maxDeliver|maxAckPending|consume|workers|maxMessages|retryDelay):`)
+	if got := len(optional.FindAll(content, -1)); got != 15 {
 		t.Fatalf("模板应保留全部可选参数的注释示例，实际 %d 项", got)
 	}
 	js := natsx.MustNewJetStreamHandlerRegistry()
@@ -192,8 +192,12 @@ func TestNATSRegistrationExampleOptions(t *testing.T) {
 			}
 			consumer := batch.jetStreamConsumers[0]
 			consumer.Handler = nil
+			wantConsumer := natsx.DefaultJetStreamConsumer("ORDERS", "order-created-worker", nil, "orders.created")
+			if uncomment {
+				wantConsumer.Config.BackOff = []time.Duration{time.Minute, 5 * time.Minute, 30 * time.Minute}
+			}
 			if !reflect.DeepEqual(batch.streams[0], natsx.DefaultStreamConfig("ORDERS", wantReplicas, "orders.>")) ||
-				!reflect.DeepEqual(consumer, natsx.DefaultJetStreamConsumer("ORDERS", "order-created-worker", nil, "orders.created")) {
+				!reflect.DeepEqual(consumer, wantConsumer) {
 				t.Fatalf("模板应默认推导副本数、取消注释后显式覆盖，其他默认值保持一致: stream=%+v, consumer=%+v", batch.streams[0], consumer)
 			}
 		})
@@ -372,11 +376,37 @@ func TestNATSRegistrationJetStreamOptions(t *testing.T) {
 		{
 			name: "null",
 			options: `        ackWait: null
+        backOff: null
         maxDeliver: null
         maxAckPending: null
         consume: null
         retryDelay: null
 `,
+		},
+		{
+			name:    "empty-backoff",
+			options: "        backOff: []\n",
+		},
+		{
+			name: "backoff-list",
+			options: `        backOff: ["60s", "5m", "30m"]
+`,
+			want: func(consumer *natsx.JetStreamConsumer) {
+				consumer.Config.BackOff = []time.Duration{time.Minute, 5 * time.Minute, 30 * time.Minute}
+			},
+		},
+		{
+			name: "backoff-without-ackwait",
+			options: `        ackWait: 0
+        backOff:
+          - 150ms
+          - 2s
+          - 3000000000
+`,
+			want: func(consumer *natsx.JetStreamConsumer) {
+				consumer.Config.AckWait = 0
+				consumer.Config.BackOff = []time.Duration{150 * time.Millisecond, 2 * time.Second, 3 * time.Second}
+			},
 		},
 		{
 			name: "null-consume-fields",
@@ -496,6 +526,21 @@ func TestNATSRegistrationRejectsInvalidJetStreamOptions(t *testing.T) {
 			name:    "invalid-ack-wait",
 			options: "        ackWait: 1d\n",
 			want:    "ackWait",
+		},
+		{
+			name:    "invalid-backoff-duration",
+			options: "        backOff: [60s, 1d]\n",
+			want:    "backOff",
+		},
+		{
+			name:    "map-backoff",
+			options: "        backOff: {delay: 60s}\n",
+			want:    "backOff",
+		},
+		{
+			name:    "bool-backoff-item",
+			options: "        backOff: [60s, true]\n",
+			want:    "backOff",
 		},
 		{
 			name:    "invalid-retry-delay",
