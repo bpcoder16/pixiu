@@ -14,6 +14,7 @@ func newTaskContext(parent context.Context) context.Context {
 		id = logit.NewLogID()
 	}
 	ctx := logit.NewContextScope(context.WithoutCancel(parent))
+	ctx = logit.NewDurationScope(ctx)
 	logit.AddMeta(ctx, logit.Str(logit.LogId, id))
 	return ctx
 }

@@ -26,7 +26,8 @@
 // SubmitTimeout 为 0 时默认 1 秒，正值按配置使用，不设 100ms 下限。
 // 成功接收的任务以 WithoutCancel(requestCtx) 为父 context 创建独立日志作用域，
 // 只复制 meta 中的 logId，缺失或为空时主动生成；任务及重试复用该作用域和 ID。
-// 父级、不同任务的普通与 meta 日志字段互不影响；其他 context 值仍按引用保留。
+// 任务在接收时独立计时，汇总包含排队、重试等待和每次尝试的下游耗时。
+// 父级、不同任务的耗时表和普通、meta 日志字段互不影响；其他 context 值仍按引用保留。
 // taskCtx 不继承请求或池的截止时间与取消，Done 为 nil；池自身另用 p.ctx 控制排空和重试。
 // 业务需要执行时限时，在回调内自行派生 WithTimeout：
 // 示例中的 requestCtx 和 sendNotice 由应用提供：

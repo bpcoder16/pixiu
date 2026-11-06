@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/bpcoder16/pixiu/infra/taskpool"
@@ -243,4 +244,73 @@ func TestTaskContextsIsolateLogFieldsAndGenerateIDs(t *testing.T) {
 	if ids["missing"] == ids["empty"] || len(ids["missing"]) != 36 || len(ids["empty"]) != 36 {
 		t.Fatalf("缺失或空 ID 未各自生成: %v", ids)
 	}
+}
+
+func TestTaskDurationStartsAtAcceptanceAndIsolatesParent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var buf bytes.Buffer
+		logger := logit.MustNew(logit.OptEncoder(logit.DefaultJSONEncoder), logit.OptWriter(logit.NewWriter(&buf)))
+		old := logit.Default()
+		logit.SetDefault(logger)
+		defer func() {
+			logit.SetDefault(old)
+			_ = logit.Close(logger)
+		}()
+		p, err := taskpool.New(taskpool.Config{
+			MinWorkers: 1,
+			MaxWorkers: 1,
+			QueueSize:  2,
+			MaxRetries: 1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// 占住唯一的 worker，使被测任务在接收后确定排队 3ms。
+		release := make(chan struct{})
+		if err := p.Submit(context.Background(), "block", func(context.Context) error {
+			<-release
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		parent := logit.WithStart(logit.WithContextLogID(context.Background()))
+		id, _ := logit.LogIDFromContext(parent)
+		logit.AddDownstreamDurationAuto(parent, "parent", time.Millisecond)
+		time.Sleep(7 * time.Millisecond)
+		attempt := 0
+		if err := p.Submit(parent, "task", func(ctx context.Context) error {
+			attempt++
+			if attempt == 1 {
+				logit.AddDownstreamDurationAuto(ctx, "task", time.Millisecond)
+				return errors.New("retry")
+			}
+			logit.InfoDuration(ctx, "task")
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(3 * time.Millisecond)
+		close(release)
+		if err := p.Shutdown(); err != nil {
+			t.Fatal(err)
+		}
+		logit.InfoDuration(parent, "parent")
+		decoder := json.NewDecoder(&buf)
+		for _, want := range []string{"task", "parent"} {
+			var record map[string]any
+			if err := decoder.Decode(&record); err != nil {
+				t.Fatal(err)
+			}
+			other := "parent"
+			if want == "parent" {
+				other = "task"
+			}
+			if record["msg"] != want || record[logit.LogId] != id || record[want+"_1_duration_ms"] != float64(1) || record[other+"_1_duration_ms"] != nil || record[other+"_2_duration_ms"] != nil {
+				t.Fatalf("耗时表或链路 ID 错误: %v", record)
+			}
+			if want == "task" && record["total_duration_ms"] != float64(1003) {
+				t.Fatalf("任务总耗时应包含排队 3ms 和重试等待 1s: %v", record)
+			}
+		}
+	})
 }
