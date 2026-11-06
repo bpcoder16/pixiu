@@ -39,6 +39,11 @@
 // 需要时同步恢复解析、映射和测试；使用 terminate_after 时按需启用 TerminatedEarly。
 // Hits、Aggregations 和 Shards.Failures 保留原始 JSON，业务解析时应使用明确的字段类型
 // 或 json.Decoder.UseNumber 保持整数精度。
+// DecodeSources[T](result.Hits) 按命中顺序解码 _source，零命中返回非 nil 空切片；
+// _source 缺失、null 或解码失败时返回错误且不保留部分结果。
+// 一次解码整个命中数组，类型匹配和自定义解码行为遵循 encoding/json，不额外限制 source 类型。
+// 缺失或 null 的 source 错误包含命中下标；解码失败直接保留原始错误链，不重新解析定位。
+// 业务必填字段由调用方校验；此函数不处理 Search 的部分结果错误或命中元数据。
 // CreateIndex 创建具体索引，返回的两个确认标记均须由调用方检查；未确认不能直接重试。
 // 完整创建结果在 Body 关闭失败时仍保留。DeleteIndex 只删除具体索引并要求确认，
 // 索引缺失仍返回 HTTPError。Analyze 使用索引上的命名分析器处理单段文本，返回 tokens 数组。
@@ -96,7 +101,16 @@
 //	    _ = result.Total.Value
 //	    _ = result.Total.Relation
 //	}
-//	_ = result.Hits
+//	type productSource struct {
+//	    ID int64 `json:"id"`
+//	}
+//	products, err := elasticsearchx.DecodeSources[productSource](result.Hits)
+//	if err != nil {
+//	    return err
+//	}
+//	for _, product := range products {
+//	    _ = product.ID
+//	}
 //	_ = result.Aggregations
 //	return nil
 //
