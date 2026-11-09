@@ -1,4 +1,4 @@
-//go:build !pixiu_bootstrap_no_mysql
+//go:build !pixiu_bootstrap_no_mysql || !pixiu_bootstrap_no_pgsql
 
 package bootstrap
 
@@ -11,7 +11,6 @@ import (
 
 	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/env"
-	"github.com/bpcoder16/pixiu/infra/mysqlx"
 	"github.com/bpcoder16/pixiu/infra/schemamigrate"
 	"gorm.io/gorm"
 )
@@ -31,21 +30,9 @@ type SeedOptions struct {
 	Timeout time.Duration
 }
 
-// RunMySQLMigration 从配置目录严格读取 migrate.<name>.yaml，在命名 MySQL 的主库执行迁移策略。
-// enabled 默认 false；关闭或空清单不获取客户端。timeout 默认 5 分钟，负数非法。
-// 调用方在 MustBaseInit 后、业务服务启动前显式调用，错误和部分执行报告交回项目。
-// 本入口内部创建启动期 Context，并通过配置限制整体迁移时间。
-func RunMySQLMigration(name string, tables []schemamigrate.Table) (schemamigrate.Report, error) {
-	return RunMySQLInitialization(name, tables, SeedOptions{})
-}
-
-// RunMySQLInitialization 先执行表结构迁移，再在同一主库校准种子数据。
-// 沿用 migrate.<name>.yaml 的 enabled 同时控制两阶段；关闭时不获取数据库或读取 SQL。
-// 配置 timeout 只限制结构迁移；种子使用 SeedOptions.Timeout，从种子阶段开始独立计时。
-// tables 为空时仍可对已有表执行种子；任一阶段失败均立即返回，不应继续启动业务。
-// 返回的 Report 仅记录表结构迁移结果；种子错误保留文件、行号（适用时）及底层错误链。
-func RunMySQLInitialization(name string, tables []schemamigrate.Table, seeds SeedOptions) (schemamigrate.Report, error) {
-	if err := validateInstanceName("MySQL migration", name); err != nil {
+// 两个数据库入口共用配置、期限和迁移顺序，仅由调用方提供对应主库。
+func runSQLInitialization(kind, name string, tables []schemamigrate.Table, seeds SeedOptions, masterDB func(context.Context) *gorm.DB) (schemamigrate.Report, error) {
+	if err := validateInstanceName(kind+" migration", name); err != nil {
 		return schemamigrate.Report{}, err
 	}
 	file := filepath.Join(env.ConfigDirPath(), "migrate."+name+".yaml")
@@ -67,13 +54,10 @@ func RunMySQLInitialization(name string, tables []schemamigrate.Table, seeds See
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
-	masterDB := func(ctx context.Context) *gorm.DB {
-		return mysqlx.Named(name).MasterDB(ctx)
-	}
 	report, err := schemamigrate.Apply(ctx, masterDB, tables)
 	cancel()
 	if err != nil {
-		return report, fmt.Errorf("bootstrap: MySQL migration %q: %w", name, err)
+		return report, fmt.Errorf("bootstrap: %s migration %q: %w", kind, name, err)
 	}
 	if len(seeds.Seeds) == 0 {
 		return report, nil
@@ -84,7 +68,7 @@ func RunMySQLInitialization(name string, tables []schemamigrate.Table, seeds See
 	seedCtx, seedCancel := context.WithTimeout(context.Background(), seeds.Timeout)
 	defer seedCancel()
 	if seedErr := schemamigrate.ApplySeeds(seedCtx, masterDB, seeds.Files, seeds.Seeds); seedErr != nil {
-		return report, fmt.Errorf("bootstrap: MySQL seeds %q: %w", name, seedErr)
+		return report, fmt.Errorf("bootstrap: %s seeds %q: %w", kind, name, seedErr)
 	}
 	return report, nil
 }

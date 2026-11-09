@@ -13,11 +13,11 @@ import (
 var baseInitStarted bool
 
 // MustBaseInit 执行通用初始化；参数缺失时 panic。
-// 参数校验通过后封闭注册；先应用 env 时区，再依次初始化日志、OSS、STS、阿里云 ES、MySQL、Redis、Elasticsearch 和 NATS。
+// 参数校验通过后封闭注册；先应用 env 时区，再依次初始化日志、OSS、STS、阿里云 ES、MySQL、PostgreSQL、Redis、Elasticsearch 和 NATS。
 // 共享客户端就绪后构造并登记 WebSocket 命名实例，不监听、不运行、不向资源栈登记关闭。
 // Redis 就绪后按代码声明装配 lockx 默认及命名执行器，不读取锁配置文件或新增资源所有权。
 // 必须在其他 goroutine 并发使用时间或日志前调用，运行期不再修改 time.Local。
-// 服务停止后，共享资源按 NATS、Elasticsearch、Redis、MySQL、阿里云 ES、STS、OSS、日志的顺序关闭；未声明的组件跳过。
+// 服务停止后，共享资源按 NATS、Elasticsearch、Redis、PostgreSQL、MySQL、阿里云 ES、STS、OSS、日志的顺序关闭；未声明的组件跳过。
 // 成功返回后再创建和保存模块 Logger；重复调用或初始化失败后重试会 panic。
 // resources 由应用创建为空栈并负责关闭，调用方须提前登记关闭 defer。
 // NATS 消费者由 Start 排空后，才回收资源栈中的客户端；服务排空超时先取消任务，再执行有界资源栈回收。
@@ -59,6 +59,9 @@ func mustBaseInit(config *appconfig.AppConfig, resources *lifecycle.Stack, initi
 	}
 	if err := initMySQL(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize MySQL: %w", err))
+	}
+	if err := initPostgreSQL(resources); err != nil {
+		panic(fmt.Errorf("bootstrap: initialize PostgreSQL: %w", err))
 	}
 	if err := initRedis(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize Redis: %w", err))

@@ -2,7 +2,7 @@ GO ?= go
 
 BOOTSTRAP_DISABLE_TAGS := pixiu_bootstrap_no_es pixiu_bootstrap_no_aliyun_oss \
 	pixiu_bootstrap_no_aliyun_sts pixiu_bootstrap_no_aliyun_es \
-	pixiu_bootstrap_no_mysql pixiu_bootstrap_no_redis pixiu_bootstrap_no_nats
+	pixiu_bootstrap_no_mysql pixiu_bootstrap_no_pgsql pixiu_bootstrap_no_redis pixiu_bootstrap_no_nats
 
 .PHONY: test test-race test-bootstrap-tags
 
@@ -17,7 +17,7 @@ test-race:
 	$(GO) test -race -tags=natsintegration ./biz/bootstrap -run '^TestNATSFromConfig$$'
 	$(MAKE) test-bootstrap-tags BOOTSTRAP_TEST_FLAGS=-race
 
-# 各标签独立验证，再覆盖全部禁用及 Redis/NATS 组合；不枚举没有新增行为的全部排列。
+# 各标签独立验证，再覆盖全部禁用、Redis/NATS 组合及仅保留 PostgreSQL 的数据库装配。
 test-bootstrap-tags:
 	@set -e; \
 	bootstrap_all_tags=$$(printf '%s' "$(BOOTSTRAP_DISABLE_TAGS)" | tr ' ' ','); \
@@ -26,3 +26,4 @@ test-bootstrap-tags:
 		$(GO) test $(BOOTSTRAP_TEST_FLAGS) -tags="$$bootstrap_tags" ./biz/bootstrap \
 			-run '^(TestBootstrapWithout|TestCronWithoutRedis|TestCronStandaloneDoesNotNeedHTTPAndShutdownBeforeRun)'; \
 	done
+	$(GO) test $(BOOTSTRAP_TEST_FLAGS) -tags=pixiu_bootstrap_no_mysql ./biz/bootstrap -run '^TestPostgreSQL'

@@ -173,7 +173,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | --- | --- | --- |
 | [`biz/common`](biz/common/doc.go) | 按应用时区生成 ID、格式化时间，int64 万分之一整数与百分比精确互转，名称脱敏 | 常规业务工具；ID 与时间依赖 env，百分比支持负数，MaskName 支持自定义符号 |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
-| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin / HTTP / WebSocket / Cron 服务构造、NATS 消费配置装配与显式 MySQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
+| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin / HTTP / WebSocket / Cron 服务构造、NATS 消费配置装配与显式 MySQL / PostgreSQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
 | [`biz/realtime`](biz/realtime/doc.go) | WebSocket 身份、独立业务状态、scene/action 路由、ProtoJSON/PB 编解码、响应与主动事件 | 通过 bootstrap.NewWebSocketService 使用具名独立端口，或挂载到已有 HTTP 并显式管理生命周期 |
 | [`biz/ossservice`](biz/ossservice/doc.go) | multipart 上传、指定对象的 STS 凭据签发、URL 内容 MD5 | 上传需要 OSS，签发另需 STS；MD5FromURL 为独立包函数，无需客户端 |
 | [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
@@ -277,11 +277,12 @@ NewHTTPService 构造不监听，Start 接管服务与信号；Stop 统一封闭
 
 ### 应用配置与多实例初始化
 
-将 [`app.yaml`](biz/appconfig/conf.example/app.yaml) 复制到应用的 `conf/app.yaml`。本例声明七个组件实例，需将对应模板复制到同一配置目录，并填写实际连接信息：
+将 [`app.yaml`](biz/appconfig/conf.example/app.yaml) 复制到应用的 `conf/app.yaml`。按下表选择组件并复制模板到同一配置目录，填写实际连接信息；完整示例使用其中七个组件：
 
 | 声明 | 配置文件 | 模板 |
 | --- | --- | --- |
 | `MustRegisterMySQL("orders", true)` | `conf/mysql.orders.yaml` | [MySQL](biz/bootstrap/conf.example/mysql.example.yaml) |
+| `MustRegisterPostgreSQL("orders", true)` | `conf/pgsql.orders.yaml` | [PostgreSQL](biz/bootstrap/conf.example/pgsql.example.yaml) |
 | `MustRegisterRedis("cache", true)` | `conf/redis.cache.yaml` | [Redis](biz/bootstrap/conf.example/redis.example.yaml) |
 | `MustRegisterElasticsearch("search", true)` | `conf/elasticsearch.search.yaml` | [Elasticsearch](biz/bootstrap/conf.example/elasticsearch.example.yaml) |
 | `MustRegisterAliyunOSS("assets", true)` | `conf/aliyunossx.assets.yaml` | [阿里云 OSS](biz/bootstrap/conf.example/aliyunossx.example.yaml) |
@@ -331,6 +332,8 @@ func main() {
 
 </details>
 
+PostgreSQL 项目将示例中的 MySQL 声明替换为 `bootstrap.MustRegisterPostgreSQL("orders", true)`，使用 `pgsql.orders.yaml`，初始化后通过 `pgsqlx.Default()` 或 `pgsqlx.Named("orders")` 获取客户端。以 PostgreSQL 18 为验证基准；配置、TLS、时区和缓存开关见模板。
+
 各组件独立选择默认实例，`Default()` 与 `Named(默认名称)` 返回同一客户端。共享组件由 bootstrap 各登记一次 `CloseAll`，业务无需重复登记单个客户端关闭。初始化失败会 panic，提前登记的 defer 负责回收已创建资源；初始化只在启动阶段串行执行，失败后不支持重试。
 
 此示例只展示初始化；常驻 HTTP 应用还需接入上面的服务管理器。`MustRegisterNATS` 声明实例，`MustBaseInit` 只完成连接初始化，不会自动准备 Stream 或启动消费。
@@ -352,6 +355,7 @@ OSS 上传与临时凭据签发可通过 [`biz/ossservice`](biz/ossservice/doc.g
 | 阿里云 STS | `pixiu_bootstrap_no_aliyun_sts` |
 | 阿里云 ES 管理端 | `pixiu_bootstrap_no_aliyun_es` |
 | MySQL | `pixiu_bootstrap_no_mysql` |
+| PostgreSQL | `pixiu_bootstrap_no_pgsql` |
 | Redis | `pixiu_bootstrap_no_redis` |
 | NATS | `pixiu_bootstrap_no_nats` |
 
@@ -370,8 +374,8 @@ go build -tags=pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats -o app .
 # 不使用三个阿里云组件。
 go build -tags=pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es -o app .
 
-# 排除全部七个组件；构建、运行和测试使用同一组标签。
-BOOTSTRAP_TAGS='pixiu_bootstrap_no_es,pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es,pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats'
+# 排除全部八个组件；构建、运行和测试使用同一组标签。
+BOOTSTRAP_TAGS='pixiu_bootstrap_no_es,pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es,pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_pgsql,pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats'
 go build -tags="$BOOTSTRAP_TAGS" -o app .
 go run -tags="$BOOTSTRAP_TAGS" .
 go test -tags="$BOOTSTRAP_TAGS" ./...
@@ -379,15 +383,17 @@ go test -tags="$BOOTSTRAP_TAGS" ./...
 
 禁用后，基础 `MustRegisterXxx(name, isDefault)` 方法仍保留，显式调用立即 panic 并指出对应标签；基础初始化跳过该模块，不读取其配置或登记关闭。
 
-涉及 SDK 类型的专用 API 随模块排除：禁用 MySQL 时没有 `SeedOptions`、`RunMySQLMigration` 和 `RunMySQLInitialization`；禁用 Redis 时没有 `MustRegisterRedisLock`；禁用 NATS 时没有 `NewNATSConsumerService`。应用仍调用这些入口时会编译失败，应一并移除或用对应构建约束隔离相关业务文件。
+涉及 SDK 类型的专用 API 随模块排除：禁用 MySQL 时没有 `RunMySQLMigration` 和 `RunMySQLInitialization`；禁用 PostgreSQL 时没有 `RunPostgreSQLMigration` 和 `RunPostgreSQLInitialization`；只有两者都禁用才排除共享的 `SeedOptions` 和迁移核心依赖；禁用 Redis 时没有 `MustRegisterRedisLock`；禁用 NATS 时没有 `NewNATSConsumerService`。应用仍调用这些入口时会编译失败，应一并移除或用对应构建约束隔离相关业务文件。
 
 日志、时区、HTTP/Gin、WebSocket 和普通 Cron 保留。禁用 Redis 后，Cron 配置中出现非空 `lock`（包括 `{}`）会明确返回标签错误，不会降级为无锁执行；省略 `lock` 或配置 `lock: null` 不受影响。
 
 标签只排除 bootstrap 引入的依赖，不删除 `go.mod` 中的模块；其他已启用组件共享的依赖、应用自身直接导入的 SDK 或适配包仍会参与编译。在 Pixiu 库仓库执行 `go build -tags=... ./...` 仍会构建独立的 infra 适配包；裁剪应用应针对业务入口构建。
 
-### 显式执行 MySQL 表结构迁移
+### 显式执行 MySQL / PostgreSQL 表结构迁移
 
 项目维护 `[]schemamigrate.Table` 模型清单，在 `MustBaseInit` 完成后、业务服务启动前调用 `bootstrap.RunMySQLMigration("orders", tables)`，并检查返回的报告与错误。名称对应已声明的 MySQL 实例，迁移在其主库执行；失败时停止启动，不忽略错误后开放业务入口。
+
+PostgreSQL 使用 `bootstrap.RunPostgreSQLMigration("orders", tables)`；需要同时校准种子时使用 `RunPostgreSQLInitialization`，参数与下方 MySQL 示例相同。当前 PostgreSQL 不支持 `Table.Comment`、`Charset`、`Collation`，应省略这些字段，显式配置会报错。两个数据库入口均读取 `migrate.<name>.yaml`，同名实例共享迁移开关，需要独立控制时使用不同实例名。
 
 将 [`migrate.example.yaml`](biz/bootstrap/conf.example/migrate.example.yaml) 复制为 `conf/migrate.orders.yaml`。调用迁移入口时文件必须存在，`enabled` 默认 false，显式开启后执行；`timeout` 默认 5 分钟。迁移不会自动挂到 `MustBaseInit` 或连接构造中，关闭或空清单不获取数据库。
 
@@ -753,7 +759,7 @@ make test
 make test-race
 ```
 
-`make test` 和 `make test-race` 是完整测试入口，依次运行默认构建、NATS 配置注册集成测试和 bootstrap 构建标签矩阵。矩阵覆盖七个单独禁用、全部禁用及 Redis/NATS 组合，检查注册错误、生产依赖和 HTTP/Cron 基础行为。CI 可直接使用这两个入口，等价命令如下：
+`make test` 和 `make test-race` 是完整测试入口，依次运行默认构建、NATS 配置注册集成测试和 bootstrap 构建标签矩阵。矩阵覆盖八个单独禁用、全部禁用及 Redis/NATS 组合，检查注册错误、生产依赖和 HTTP/Cron 基础行为，并验证仅保留 PostgreSQL 时的数据库装配。CI 可直接使用这两个入口，等价命令如下：
 
 ```bash
 go test ./...
