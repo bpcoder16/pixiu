@@ -181,81 +181,9 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，默认及命名执行器，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
 
-`biz/appconfig` 直接定义应用共用的环境与日志配置；HTTP、Cron 各自独立配置，由 bootstrap 显式装配。原 httpconfig 和 baseconfig 已删除，不保留兼容入口。
-
-`appconfig.MustLoadAppConfig` 使用 `configx.Parse`，支持 YAML / TOML / JSON，拒绝未知字段和弱类型转换；配置只返回给调用方，环境由 `env.Init` 一次性发布。应用配置文件所在目录作为 `env.ConfigDirPath()`，供 bootstrap 查找实例配置。加载配置不会初始化日志或修改 `time.Local`；`bootstrap.MustBaseInit` 在日志创建前应用环境时区，再依次初始化日志、OSS、STS、阿里云 ES、MySQL、Redis、Elasticsearch 和 NATS，共享客户端仅初始化已声明的实例。
-
-HTTP、Cron 和 NATS 统一停收，共享默认 30 秒并行排空；超时取消剩余任务。正常和超时路径都执行资源回收，lifecycle.Stack 默认整体 20 秒，可用 `lifecycle.New(timeout)` 设置；到期停止发起后续关闭，入口退出。资源逆序回收，日志最后关闭；同一模块的多命名实例不保证关闭顺序。初始化前登记收尾 defer，初始化失败同样有界回收。
-
-共享业务锁通过 `bootstrap.MustRegisterRedisLock(name, isDefault, redisName, redislock.Config{...})` 在代码中声明，无需锁配置文件。`MustBaseInit` 在 Redis 就绪后装配执行器，业务使用 `lockx.Default().Do/TryDo` 或 `lockx.Named(name).Do/TryDo`。多个锁实例可共享同一个 Redis，分别设置租期与等待参数；默认执行器也是对应的命名实例。Redis 须设置 `maxRetries: -1`，执行器不创建或关闭连接池，实例名不改变业务 key。独立装配可使用 `lockx.New/NewNamed/NewDefault`，具体示例见 [bootstrap](biz/bootstrap/doc.go) 和 [lockx](biz/lockx/doc.go)。
-
-初始化完成后可调用 bootstrap.NewAppManager() 创建默认 30 秒管理器，也可传入不小于 5 秒的自定义时长。NewHTTPService(handler) 严格读取 http.yaml，并适配 Run/Stop/Wait/Cancel。登记后调用 RunSignals，返回后关闭资源栈。
-
-常见启动流程直接使用 bootstrap.Start(factories...)，按顺序构造和登记，再接管 SIGINT/SIGTERM。构造失败逆序清理已构造服务；运行后统一停收并共享默认 30 秒。StartWithConfig 的 ShutdownTimeout 自定义服务预算，资源栈由应用单独持有。
-
-`bootstrap.NewCronService(handlers...)` 从独立的 [cron.yaml](biz/bootstrap/conf.example/cron.yaml) 读取调度，按名称绑定 `cronx.NamedHandler`，返回供 Manager 使用的服务和构造错误。也可使用 `cronx.MustNewHandlerRegistry(handlers...).Handlers()...` 提供声明。启用 lock 段时直接组合命名 Redis 与 gocron-redis-lock，设置租期和自动续租，不扩展 lockx。任务超时只取消 context，实际返回后才解锁；失租不会自动取消业务，不保证集群每周期只执行一次。
-
-HTTP、Cron 不再保留独立关闭计时器；http.yaml 的 shutdownTimeout 以及 cron.yaml 的 shutdownTimeout、drainTimeout 须删除，业务任务自身 timeout 保留。服务登记顺序不决定停收顺序。示例见 [bootstrap 文档](biz/bootstrap/doc.go) 与 [pixiu-demo](https://github.com/bpcoder16/pixiu-demo)。
-
-### 规划中的能力
-
-`biz/realtime` 提供 Session、JSON/PB 和 bootstrap 接入。构造服务时通过 `Config.RegisterHandlers` 集中登记场景和动作，Pixiu 负责分发、默认未命中回复和回复发送失败的处置。可在 MustBaseInit 前通过 MustRegisterWebSocket 声明命名实例，之后用 NewWebSocketService(name) 接管运行和关闭，业务通过 realtime.Named(name) 获取。Server 通过 Broadcast、PushToUser、PushToDevice 在本端本节点投递事件。跨节点可使用 PushCommand，将 kind、id 与嵌套的 message 编码为统一 JSON，发布、订阅和按端分发由调用方装配。其他尚未实现的包不属于当前可用 API，实际能力以上述模块导航为准。
-
 ## 分层架构
 
-```text
-pixiu/
-├── logit/                 结构化日志与请求上下文
-├── rotatefile/            通用时间轮转文件
-├── lifecycle/             资源关闭栈
-├── conc/                  单次调用的并发任务编排
-├── jsonx/                 JSON 首值解码
-├── cryptox/               HMAC-SHA256、AES-GCM 与分享 token
-├── netx/                  网络基础能力
-├── validx/                参数格式验证
-├── moneyx/                元字符串与分金额转换，支持负数
-├── infra/                 通用技术能力与 SDK 适配
-│   ├── apprun/             常驻服务运行监督与关闭
-│   ├── configx/            结构体配置解析与命名获取
-│   ├── env/                通用应用运行环境
-│   ├── cronx/              Cron、固定/随机间隔与限时排空
-│   ├── httpcall/           HTTP 下游调用
-│   ├── httpserver/         HTTP 服务端
-│   ├── websocketx/         原始长连接、心跳、有界收发与排空
-│   ├── ginx/               Gin 请求处理
-│   ├── jwtx/               JWT 签发、验签与声明校验
-│   ├── taskpool/           本地异步任务池
-│   ├── lrucache/           LRU / TTL 缓存
-│   ├── mysqlx/             MySQL
-│   ├── gormx/              Repository 主、从库会话依赖与 LIKE 包含匹配
-│   ├── schemamigrate/      显式表结构迁移、MySQL 表注释与 SQL 种子校准
-│   ├── pgsqlx/             PostgreSQL
-│   ├── clickhousex/        ClickHouse
-│   ├── sqlitex/            SQLite
-│   ├── redisx/             Redis
-│   ├── natsx/              NATS
-│   ├── elasticsearchx/     Elasticsearch 与 v7 / v8 / v9 适配
-│   ├── estextsearch/       Elasticsearch 短文本查询 DSL
-│   ├── aliyun/             阿里云 SDK 适配
-│   │   ├── ossx/           阿里云 OSS 上传
-│   │   ├── stsx/           阿里云 STS 临时凭据
-│   │   └── esx/            阿里云 ES 管理 API
-│   └── internal/           infra 内部共用实现
-├── biz/
-│   ├── common/             应用时区 ID、时间格式化与百分比转换
-│   ├── bootstrap/          组件初始化、运行管理器与 HTTP/realtime/Cron 服务构造
-│   ├── realtime/           WebSocket 身份、业务状态与 JSON/PB 双向消息
-│   ├── elasticsearchservice/ 同义词库索引验证与临时资源清理
-│   ├── ossservice/         multipart 上传、OSS 授权与 URL 内容 MD5
-│   ├── appconfig/          应用 env/log 配置加载与环境初始化
-│   ├── httpauth/           命名认证方案与统一身份
-│   │   └── ginauth/        Gin 认证中间件
-│   └── lockx/              锁契约与业务执行流程
-│       └── redislock/      Redis 锁实现
-└── assets/                吉祥物 Logo
-```
-
-依赖规则：
+项目按基础模块、基础功能（`infra/`）和通用业务功能（`biz/`）分层：
 
 1. 顶层基础模块的生产代码只使用标准库，不依赖其他基础模块、`infra/` 或 `biz/`。
 2. `infra/` 可依赖基础模块、第三方包和 `infra/internal/`，不依赖其他公开 `infra` 包或 `biz/`。`infra/internal/` 不反向依赖公开包。既有 Elasticsearch 版本适配子包对父包的依赖保留为迁移边界。
@@ -265,7 +193,7 @@ pixiu/
 
 ## 使用示例
 
-下面的示例可分别保存为独立程序，安装相应包后运行。每个示例展示一种组合方式；完整配置与边界请阅读对应包文档。
+下面的完整示例可分别保存为独立程序，安装相应包后运行。完整配置与边界请阅读对应包文档；应用组合示例可参考 [pixiu-demo](https://github.com/bpcoder16/pixiu-demo)。
 
 ### 最小 HTTP 应用
 
@@ -341,7 +269,7 @@ NewHTTPService 构造不监听，Start 接管服务与信号；Stop 统一封闭
 - **debug/test**：自动注册 OpenAPI 与内嵌的 Stoplight Elements。应用须先使用 Swag CLI 生成文档（例如 `swag init -o ./openapi`），并在入口 blank import 生成包；未注册文档时构造返回错误。默认页面为 `/docs`，文档为 `/openapi/doc.json`。
 - **release**：不自动注册文档路由，也不要求生成文档。
 
-多模块应用可向 `NewGinEngine` 传入 `ginx.OpenAPIModule`，以 `Name` 对应 Swag 的命名文档实例，`Title` 作为导航标题。每个模块提供 `/openapi/<Name>.json` 和 `/docs/<Name>`，`/docs` 展示首个模块；静态资源位于 `/docs/assets/`。旧 `/elements` 及其子路径不注册，也不重定向。生成参数、Bearer 前缀补齐等用法见 [`ginx` 包文档](infra/ginx/doc.go)。
+多模块应用可向 `NewGinEngine` 传入 `ginx.OpenAPIModule`，以 `Name` 对应 Swag 的命名文档实例，`Title` 作为导航标题。每个模块提供 `/openapi/<Name>.json` 和 `/docs/<Name>`，`/docs` 展示首个模块；静态资源位于 `/docs/assets/`。生成参数、Bearer 前缀补齐等用法见 [`ginx` 包文档](infra/ginx/doc.go)。
 
 文档路由在 Engine 构造时注册，之后添加的业务中间件不会作用于它们，也不会自动增加认证。需要控制文档访问时，可使用 `ginx.New`，在带认证中间件的路由组调用 `ginx.RegisterOpenAPI`。
 
@@ -349,7 +277,7 @@ NewHTTPService 构造不监听，Start 接管服务与信号；Stop 统一封闭
 
 ### 应用配置与多实例初始化
 
-将 [`app.yaml`](biz/appconfig/conf.example/app.yaml) 复制到应用的 `conf/app.yaml`。本例声明六个组件实例，需将对应模板复制到同一配置目录，并填写实际连接信息：
+将 [`app.yaml`](biz/appconfig/conf.example/app.yaml) 复制到应用的 `conf/app.yaml`。本例声明七个组件实例，需将对应模板复制到同一配置目录，并填写实际连接信息：
 
 | 声明 | 配置文件 | 模板 |
 | --- | --- | --- |
@@ -393,6 +321,7 @@ func main() {
 	bootstrap.MustRegisterRedis("cache", true)
 	bootstrap.MustRegisterElasticsearch("search", true)
 	bootstrap.MustRegisterAliyunOSS("assets", true)
+	bootstrap.MustRegisterAliyunSTS("upload", true)
 	bootstrap.MustRegisterAliyunES("search-control", true)
 	bootstrap.MustRegisterNATS("events", true)
 	bootstrap.MustBaseInit(cfg, &resources)
@@ -406,23 +335,11 @@ func main() {
 
 此示例只展示初始化；常驻 HTTP 应用还需接入上面的服务管理器。`MustRegisterNATS` 声明实例，`MustBaseInit` 只完成连接初始化，不会自动准备 Stream 或启动消费。
 
-需要消费时，通过 natsx.MustNewJetStreamHandlerRegistry / MustNewCoreHandlerRegistry 登记 Handler，在 Start 工厂中直接返回 `bootstrap.NewNATSConsumerService(instanceName, jetStreamHandlers, coreHandlers)`。该函数读取消费配置并绑定 Handler，返回服务和构造错误。Run 注册，Stop 停收，Wait 等待回调与确认，Cancel 协作取消。与 HTTP/Cron 共用默认 30 秒，登记顺序不表示启动或停机依赖。排空期间保留连接及发布能力，随后由资源栈关闭。JetStream 消费者放在 `streams[].consumers`，自动继承父级 name；每项 Stream 必须声明 subjects，统一创建或校验。旧顶层 jetStreamConsumers、消费者的 stream 字段及仅引用外部 Stream 的配置方式已移除。可选参数继续以注释展示，随消费者嵌套，按需取消注释。模板见 [NATS 消费配置](biz/bootstrap/conf.example/nats-register.example.yaml)；具名函数默认保留原始大小写，闭包、方法值、泛型函数须显式命名。
+需要消费时，通过 `natsx.MustNewJetStreamHandlerRegistry` / `MustNewCoreHandlerRegistry` 登记 Handler，在 `Start` 工厂中返回 `bootstrap.NewNATSConsumerService(instanceName, jetStreamHandlers, coreHandlers)`。消费清单见 [NATS 消费配置](biz/bootstrap/conf.example/nats-register.example.yaml)；消费者在服务运行时注册，与 HTTP/Cron 共用停机预算。JetStream 按 Handler 返回结果确认或重投，业务应保证幂等，不自行 ACK / NAK / Term；注册失败应中止启动。
 
-注册文件中的 `streamDefaults.replicas` 显式配置时必须为正整数；省略或 `null` 时使用对应实例初始化时 `nats.<name>.yaml` 中 `urls` 的条目数，不去重、不计入自动发现节点。最终全局值作为逐项副本数上限，即使清单为空也校验；仅列部分种子地址、使用代理入口或需要不同副本策略时，应显式配置。每个客户端的三类注册入口各只允许调用一次，通过入口检查后，空清单或失败也占用次数；配置装配不能与手动注册混用，失败后应中止启动并关闭客户端，不在同一实例上重试。JetStream 处理函数完成本条业务后返回，由组件根据返回结果确认或重投，业务不自行 ACK / NAK / Term，仍需保证幂等。
+NATS 连接文件可配置 `namespace` 和 `loggerName`。配置装配、注册限制及各组件日志默认值见 [`bootstrap` 包文档](biz/bootstrap/doc.go)，主题映射与消息处理契约见 [`natsx` 包文档](infra/natsx/doc.go)。
 
-连接文件可配置 `loggerName: "nats"`，并在 app.yaml 的 `log.names` 中声明 nats；连接、异步错误、订阅及消费链路写入 nats 命名日志。Handler 及其下游沿用消息 ctx 即可继承；HTTP/Cron 中发布 NATS 的调用日志继续跟随调用方 ctx。省略或未注册 Logger 名称时回退默认日志。
-
-可选 `namespace` 配置在连接文件 `nats.events.yaml`，注册文件不接受该字段。非空值仅允许 ASCII 字母、数字、`_`、`-`；例如 `test1` 会将主题 `orders.created` 映射为 `test1.orders.created`，将 Stream `ORDERS` 映射为 `test1_ORDERS`，Durable、Core 名称及非空 Queue 也添加 `test1_`。注册与发布 / Request 均填写原始名称或主题，Handler 名称不变；回调主题已含前缀，原生 `Conn()` / `JetStream()` 不自动添加前缀。修改 namespace 不会迁移或删除旧资源，完整边界见 [`natsx` 包文档](infra/natsx/doc.go)。
-
-NATS 消费者可在启动时保存客户端引用，也可在消费排空期间查询 `Default` / `Named` 并继续发布。关闭完成后查询仍按原约定 panic；其他客户端的关闭与查询行为不变。先停止并等待外部生产者，再由资源栈排空 NATS，随后关闭数据库等依赖，日志最后关闭。
-
-OSS 文件必填 `region`、`bucket`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`HeadObject` 查询元数据，`PresignGetObject` 签发下载 URL。`requestTimeout` 默认 60s，`slowThreshold` 默认 500ms，`logRequests` 默认关闭。初始化不联网校验 Bucket 或权限，业务通过 `ossx.Default()` / `Named(name)` 取得固定 Bucket 的实例。
-
-STS 文件必填 `region`、`accessKeyID`、`accessKeySecret`，`endpoint` 留空时使用地域公网地址；`requestTimeout` 默认 60s，`slowThreshold` 默认 500ms，`logRequests` 默认关闭。业务通过 `stsx.Default()` / `Named(name)` 调用 `AssumeRole`，在请求中提供角色 ARN、会话名、时长和可选策略。OSS 上传可通过 [`biz/ossservice`](biz/ossservice/doc.go) 组合已有 OSS、STS 客户端，按指定对象构造上传策略并签发凭据；文件校验、Key 生成和记录保存由应用负责，STS 模块不依赖 Bucket。迁移旧配置时，从 OSS 文件移除 `stsRoleARN`、`stsSessionName`、`stsEndpoint`；前两项转入业务配置，`stsEndpoint` 改为 STS 文件的 `endpoint`。
-
-阿里云 ES 管理端文件必填 `region`、`instanceID`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`requestTimeout` 默认 60s，`slowThreshold` 默认 200ms，`logRequests` 默认关闭。初始化不联网验证实例或权限，业务通过 `esx.Default()` / `Named(name)` 取得固定 InstanceID 的客户端。
-
-Elasticsearch 经 bootstrap 创建时，省略 `logRequests` 默认开启结果日志，`logDetails` 默认关闭；这与直接调用版本适配包 `New` 默认关闭结果日志不同。Redis 模板显式开启 `logCommands`，省略该字段则关闭正常命令日志，慢调用和错误日志仍会输出。完整参数与边界见 [`bootstrap` 包文档](biz/bootstrap/doc.go)。
+OSS 上传与临时凭据签发可通过 [`biz/ossservice`](biz/ossservice/doc.go) 组合已有 OSS、STS 客户端，应用负责文件校验、Key 生成和记录保存。各阿里云组件的连接参数与默认值见上方配置模板及模块导航中的包文档。
 
 ### 按需裁剪 bootstrap 编译依赖
 
@@ -476,7 +393,7 @@ go test -tags="$BOOTSTRAP_TAGS" ./...
 
 每张表通过 `Model` 登记，可选 `Name` 指定物理表名、`Comment` 管理 MySQL 表注释。只迁移显式登记的表，关联表和多对多中间表须单独登记，不自动创建关联外键。没有跨实例迁移锁，发布时应避免多实例同时执行；DDL 失败或超时可能已部分生效，不能保证整批回滚。完整样例与报告语义见 [`schemamigrate` 包文档](infra/schemamigrate/doc.go)。
 
-需要同时初始化 SQL 种子时使用组合入口，原 `RunMySQLMigration` 调用保持兼容：
+需要同时初始化 SQL 种子时使用组合入口：
 
 ```go
 report, err := bootstrap.RunMySQLInitialization("orders", tables, bootstrap.SeedOptions{
