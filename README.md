@@ -171,7 +171,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 
 | 包 | 能力 | 典型用途 |
 | --- | --- | --- |
-| [`biz/common`](biz/common/doc.go) | 按应用时区生成 ID、格式化时间，int64 万分之一整数与百分比精确互转 | 常规业务工具；ID 与时间依赖 env，百分比支持负数 |
+| [`biz/common`](biz/common/doc.go) | 按应用时区生成 ID、格式化时间，int64 万分之一整数与百分比精确互转，名称脱敏 | 常规业务工具；ID 与时间依赖 env，百分比支持负数，MaskName 支持自定义符号 |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
 | [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin / HTTP / WebSocket / Cron 服务构造、NATS 消费配置装配与显式 MySQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
 | [`biz/realtime`](biz/realtime/doc.go) | WebSocket 身份、独立业务状态、scene/action 路由、ProtoJSON/PB 编解码、响应与主动事件 | 通过 bootstrap.NewWebSocketService 使用具名独立端口，或挂载到已有 HTTP 并显式管理生命周期 |
