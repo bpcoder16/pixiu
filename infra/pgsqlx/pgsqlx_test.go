@@ -110,7 +110,7 @@ func TestPrepareConnectionAndPool(t *testing.T) {
 		cfg.Database != "orders/test" || cfg.User != "a@b" || cfg.Password != "p@ss:word" ||
 		cfg.ConnectTimeout != 2*time.Second || cfg.RuntimeParams["timezone"] != "Asia/Shanghai" ||
 		cfg.RuntimeParams["client_encoding"] != "UTF8" || prepared.location.String() != "Asia/Shanghai" ||
-		cfg.DefaultQueryExecMode != pgx.QueryExecModeExec || cfg.TLSConfig != nil {
+		cfg.DefaultQueryExecMode != pgx.QueryExecModeCacheDescribe || cfg.StatementCacheCapacity != 0 || cfg.TLSConfig != nil {
 		t.Fatalf("连接配置映射错误: host=%q port=%d db=%q user=%q mode=%v", cfg.Host, cfg.Port, cfg.Database, cfg.User, cfg.DefaultQueryExecMode)
 	}
 	if prepared.pool.MaxOpenConns != 3 || prepared.pool.MaxIdleConns != 3 ||

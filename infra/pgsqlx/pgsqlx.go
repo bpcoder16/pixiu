@@ -70,7 +70,8 @@ type Config struct {
 	LogSQL bool
 	// InterpolateSQL 控制日志 SQL 是否用参数值替换占位符；开启后可能记录业务数据。
 	InterpolateSQL bool
-	// DisableStatementCache 为不支持预备语句缓存的代理选择 pgx exec 模式。
+	// DisableStatementCache 禁用 pgx 自动命名预备语句缓存，改用 cache_describe
+	// 缓存参数和结果类型；类型描述未命中时多一次往返。
 	DisableStatementCache bool
 }
 
@@ -201,7 +202,9 @@ func prepare(endpoint Endpoint, name, sessionTimeZone string, disableStatementCa
 		driver.RuntimeParams["timezone"] = sessionTimeZone
 	}
 	if disableStatementCache {
-		driver.DefaultQueryExecMode = pgx.QueryExecModeExec
+		// 按数据库参数类型编码，避免 exec 将 time.Time 转为 UTC 后写入无时区字段。
+		driver.DefaultQueryExecMode = pgx.QueryExecModeCacheDescribe
+		driver.StatementCacheCapacity = 0
 	}
 	return preparedEndpoint{
 		name:     name,

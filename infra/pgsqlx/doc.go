@@ -64,6 +64,10 @@
 // 日志仍由会话 Logger 接收，但其 ParameterizedQueries 不覆盖 Scan 的插值配置。
 // 需要隐藏绑定参数时，在创建客户端时设置 InterpolateSQL=false；普通 Row/Rows 沿用会话过滤规则。
 // Charset 固定为 UTF8；Location 默认 Asia/Shanghai，只解释无时区 timestamp，不改变 timestamptz。
+// DisableStatementCache 禁用 pgx 自动命名预备语句缓存，改用 cache_describe 按数据库参数类型编码，
+// 保留无时区 timestamp 的年月日时分秒及 timestamptz 的时刻；此开关不禁止显式 Prepare 或 GORM PrepareStmt。
+// 类型描述未命中时多一次往返，后续复用描述；表结构或 search_path 变化可能使描述失效并导致查询报错，
+// 模块不自动重试。代理须支持扩展查询协议的 Parse/Describe。
 // 初始化错误保留网络、TLS 和证书配置的具体原因，服务端错误保留 SQLSTATE；
 // 返回错误不携带完整连接 URI 或含凭据的驱动配置。
 // ctx 已调用 logit.WithStart 时，每次 GORM Trace 以 PostgreSQL_<Name> 为前缀自动编号记录下游耗时，
