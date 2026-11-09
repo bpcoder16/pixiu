@@ -223,8 +223,6 @@ func TestTryDoRejectsInvalidInputsBeforeAcquire(t *testing.T) {
 		wantErr   error
 	}{
 		{name: "空 context", key: "key"},
-		{name: "空 key", ctx: context.Background()},
-		{name: "空白 key", ctx: context.Background(), key: " \t "},
 		{name: "空实例", ctx: context.Background(), key: "key", nilLocker: true},
 		{name: "空回调", ctx: context.Background(), key: "key", nilFunc: true},
 		{name: "请求已取消", ctx: ctx, key: "key", wantErr: context.Canceled},
@@ -250,6 +248,37 @@ func TestTryDoRejectsInvalidInputsBeforeAcquire(t *testing.T) {
 				t.Fatalf("未拒绝无效输入: executed=%v err=%v", executed, err)
 			}
 		})
+	}
+}
+
+func TestKeyValidationPreservesBackendError(t *testing.T) {
+	want := errors.New("后端拒绝 key")
+	for _, key := range []string{"", " \t "} {
+		calls := 0
+		acquire := func(_ context.Context, got string) (Lock, error) {
+			calls++
+			if got != key {
+				t.Fatalf("key 被改变: %q", got)
+			}
+			return nil, want
+		}
+		work := func(context.Context) error {
+			t.Fatal("后端拒绝 key 后不能执行业务")
+			return nil
+		}
+		if err := Do(context.Background(), lockerFunc(acquire), key, work); !errors.Is(err, want) {
+			t.Fatalf("Do 丢失后端校验错误: %v", err)
+		}
+		backend := tryLockerFunc(func(ctx context.Context, key string) (Lock, bool, error) {
+			h, err := acquire(ctx, key)
+			return h, false, err
+		})
+		if executed, err := TryDo(context.Background(), backend, key, work); executed || !errors.Is(err, want) {
+			t.Fatalf("TryDo 丢失后端校验错误: %v %v", executed, err)
+		}
+		if calls != 2 {
+			t.Fatalf("应各调用一次后端: %d", calls)
+		}
 	}
 }
 

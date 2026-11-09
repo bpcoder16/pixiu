@@ -121,12 +121,23 @@ func TestLockValidatesBeforeCommands(t *testing.T) {
 		key string
 	}{
 		{nil, "key"},
+		{context.Background(), ""},
 		{context.Background(), " \t "},
 		{canceled, "key"},
 		{expiredContext{context.Background()}, "key"},
 	} {
 		if h, err := locker.Lock(tt.ctx, tt.key); h != nil || err == nil {
 			t.Fatalf("无效请求未拒绝: handle=%v err=%v", h, err)
+		}
+		work := func(context.Context) error {
+			t.Fatal("无效 key 不能执行业务")
+			return nil
+		}
+		if err := lockx.Do(tt.ctx, locker, tt.key, work); err == nil {
+			t.Fatal("Do 放行无效请求")
+		}
+		if executed, err := lockx.TryDo(tt.ctx, locker, tt.key, work); executed || err == nil {
+			t.Fatalf("TryDo 放行无效请求: %v %v", executed, err)
 		}
 	}
 	for _, l := range []*Locker{nil, {}} {

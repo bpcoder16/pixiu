@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/bpcoder16/pixiu/biz/lockx/internal/lockctx"
@@ -12,6 +11,7 @@ import (
 
 // Locker 定义分布式阻塞锁接口。
 // 锁被占用时等待其他持有者释放；等待上限由实现配置与 ctx 共同约束。
+// 实现负责拒绝空或全空白 key，有效 key 原样使用。
 type Locker interface {
 	Lock(ctx context.Context, key string) (Lock, error)
 }
@@ -19,6 +19,7 @@ type Locker interface {
 // TryLocker 定义分布式非阻塞锁接口。
 // 只尝试一次，锁被占用时返回竞争失败，不等待其他持有者释放。
 // 非阻塞仅针对锁竞争，连接池与网络操作仍可能等待。
+// 实现负责拒绝空或全空白 key，有效 key 原样使用。
 type TryLocker interface {
 	// TryLock 成功返回句柄、true、nil；确认竞争失败返回 nil、false、nil。
 	// 取消、下游错误和结果不确定返回 nil、false、error。
@@ -48,9 +49,6 @@ func Do(ctx context.Context, locker Locker, key string, fn func(context.Context)
 	if locker == nil {
 		return errors.New("lockx: nil locker")
 	}
-	if strings.TrimSpace(key) == "" {
-		return errors.New("lockx: empty key")
-	}
 	_, err := run(ctx, fn, func() (Lock, bool, error) {
 		lock, err := locker.Lock(ctx, key)
 		return lock, err == nil, err
@@ -63,9 +61,6 @@ func Do(ctx context.Context, locker Locker, key string, fn func(context.Context)
 func TryDo(ctx context.Context, locker TryLocker, key string, fn func(context.Context) error) (bool, error) {
 	if locker == nil {
 		return false, errors.New("lockx: nil locker")
-	}
-	if strings.TrimSpace(key) == "" {
-		return false, errors.New("lockx: empty key")
 	}
 	return run(ctx, fn, func() (Lock, bool, error) {
 		return locker.TryLock(ctx, key)
