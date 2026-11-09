@@ -29,9 +29,10 @@
 // 不支持库名或 schema 限定名，目标数据库由传入的连接选定，本包不解析库名或切库。
 // MySQL 建表使用 InnoDB；可指定 Charset/Collation，仅用于建表，不转换已有表。
 // 每张登记表独立使用自己的建表选项，不展开关联，也不检查或调整关联依赖顺序。
-// 非空 Comment 单独维护 MySQL 表注释，仅变化时执行 ALTER TABLE。
-// 空 Comment 表示不管理注释，不会清空已有注释。其他方言设置这些 MySQL 选项会报错。
-// 不带上述选项时直接使用连接现有的 GORM 方言；本包用 SQLite 验证通用流程、MySQL 验证专属行为。
+// 非空 Comment 单独维护 MySQL 或 PostgreSQL 表注释，仅变化时执行对应的注释 DDL。
+// PostgreSQL 使用 COMMENT ON TABLE，表名沿用连接的 search_path，注释不依赖会话的字符串转义设置。
+// 空 Comment 表示不管理注释，不会清空已有注释；Charset/Collation 仍仅支持 MySQL。
+// 其他方言显式设置不支持的选项会在整批 DDL 前报错；不带选项时使用连接现有的 GORM 方言。
 // 不要把不归项目管理的表登记到迁移清单。
 //
 // 每次传入非 nil Context，主库提供函数返回无历史查询条件的会话；不接受外部事务或 DryRun。
@@ -61,5 +62,9 @@
 //
 // 种子按数量校准，不比较内容；同数量下修改 SQL 不会覆盖数据库。
 // 数量变化会覆盖该范围的自定义内容，并可能改变自增 ID；只用于允许整体重建的受管数据。
+// PostgreSQL 的 serial/bigserial 或允许显式值的 identity 列插入固定 ID 时不会自动推进序列，
+// 后续默认生成 ID 可能冲突。优先省略自增 ID 或填写 DEFAULT；若必须混用固定 ID 和自动生成 ID，
+// 由项目在单实例初始化期间显式校准对应序列，本包不自动发现、推进或重置序列。
+// PostgreSQL 序列取号或 setval 不随事务回滚，不纳入种子删除与插入的回滚保证。
 // 没有跨实例锁，应由单个实例在业务流量进入前执行；复杂业务回填仍由项目显式管理。
 package schemamigrate

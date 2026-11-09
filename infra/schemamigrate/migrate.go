@@ -11,14 +11,14 @@ import (
 
 // Table 声明项目维护的表。Name 为空时沿用 GORM 命名；非空时用于指定物理分表。
 // 只迁移显式登记的表；最终表名不得包含点号，不支持库名或 schema 限定名。
-// Comment、Charset、Collation 为可选 MySQL 设置；空 Comment 表示不管理表注释。
-// Charset/Collation 仅用于建表，不转换已有表。
+// Comment 支持 MySQL 和 PostgreSQL；空 Comment 表示不管理表注释。
+// Charset/Collation 仅用于 MySQL 建表，不转换已有表。
 type Table struct {
 	// Model 为必填的 GORM 模型，用于解析待迁移的表结构。
 	Model any
 	// Name 指定物理表名，仅允许字母、数字和下划线；为空时沿用 GORM 命名。
 	Name string
-	// Comment 指定 MySQL 表注释；为空时不管理或清空已有注释。
+	// Comment 指定 MySQL 或 PostgreSQL 表注释；为空时不管理或清空已有注释。
 	Comment string
 	// Charset 指定 MySQL 建表字符集，不转换已有表；为空时使用数据库默认值。
 	Charset string
@@ -82,7 +82,12 @@ func Apply(ctx context.Context, masterDB func(context.Context) *gorm.DB, tables 
 		}
 		migrateErr := tx.AutoMigrate(d.table.Model)
 		if migrateErr == nil && d.table.Comment != "" {
-			migrateErr = ensureMySQLComment(db, d.resolvedName, d.table.Comment)
+			switch db.Dialector.Name() {
+			case "mysql":
+				migrateErr = ensureMySQLComment(db, d.resolvedName, d.table.Comment)
+			case "postgres":
+				migrateErr = ensurePostgreSQLComment(db, d.resolvedName, d.table.Comment)
+			}
 		}
 		result := TableResult{Name: d.resolvedName, Action: "applied"}
 		if migrateErr != nil {

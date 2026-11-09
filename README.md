@@ -145,7 +145,7 @@ func main() {
 | [`infra/lrucache`](infra/lrucache/doc.go) | 泛型有界 LRU、默认 / 单条目 TTL、独立及命名实例 | ttlcache v3 |
 | [`infra/mysqlx`](infra/mysqlx/doc.go) | MySQL 连接池、显式主从选择、查询日志 | GORM、MySQL 驱动、logit |
 | [`infra/gormx`](infra/gormx/doc.go) | Repository 主、从库会话依赖 Sessions，按关键词原文进行 LIKE 包含匹配 | GORM |
-| [`infra/schemamigrate`](infra/schemamigrate/doc.go) | AutoMigrate、物理分表、MySQL 表注释及按数量校准 SQL 种子 | GORM |
+| [`infra/schemamigrate`](infra/schemamigrate/doc.go) | AutoMigrate、物理分表、MySQL / PostgreSQL 表注释及按数量校准 SQL 种子 | GORM |
 | [`infra/postgresqlx`](infra/postgresqlx/doc.go) | PostgreSQL 连接池、显式主从选择、查询日志 | GORM、pgx、logit |
 | [`infra/clickhousex`](infra/clickhousex/doc.go) | ClickHouse 连接池、显式主从选择、查询日志 | GORM、ClickHouse 驱动、logit |
 | [`infra/sqlitex`](infra/sqlitex/doc.go) | SQLite 单库连接池、常用参数配置、查询日志 | GORM、go-sqlite3、logit |
@@ -393,11 +393,11 @@ go test -tags="$BOOTSTRAP_TAGS" ./...
 
 项目维护 `[]schemamigrate.Table` 模型清单，在 `MustBaseInit` 完成后、业务服务启动前调用 `bootstrap.RunMySQLInitialization("orders", tables, bootstrap.SeedOptions{})`，并检查返回的报告与错误。空 `SeedOptions` 表示只迁移结构。名称对应已声明的 MySQL 实例，迁移在其主库执行；失败时停止启动，不忽略错误后开放业务入口。
 
-PostgreSQL 使用 `bootstrap.RunPostgreSQLInitialization("orders", tables, bootstrap.SeedOptions{})`；需要同时校准种子时，在 `SeedOptions` 中填写种子配置，参数与下方 MySQL 示例相同。当前 PostgreSQL 不支持 `Table.Comment`、`Charset`、`Collation`，应省略这些字段，显式配置会报错。两个数据库入口均读取 `migrate.<name>.yaml`，同名实例共享迁移开关，需要独立控制时使用不同实例名。
+PostgreSQL 使用 `bootstrap.RunPostgreSQLInitialization("orders", tables, bootstrap.SeedOptions{})`；需要同时校准种子时，在 `SeedOptions` 中填写种子配置，参数与下方 MySQL 示例相同。PostgreSQL 支持 `Table.Comment`，仅注释变化时执行 `COMMENT ON TABLE`，空值不管理已有注释；`Charset`、`Collation` 仍仅支持 MySQL，PostgreSQL 显式配置会在整批 DDL 前报错。两个数据库入口均读取 `migrate.<name>.yaml`，同名实例共享迁移开关，需要独立控制时使用不同实例名。
 
 将 [`migrate.example.yaml`](biz/bootstrap/conf.example/migrate.example.yaml) 复制为 `conf/migrate.orders.yaml`。调用初始化入口时文件必须存在，`enabled` 默认 false，显式开启后执行；`timeout` 默认 5 分钟。迁移不会自动挂到 `MustBaseInit` 或连接构造中，关闭或表与种子清单均为空时不获取数据库。
 
-每张表通过 `Model` 登记，可选 `Name` 指定物理表名、`Comment` 管理 MySQL 表注释。只迁移显式登记的表，关联表和多对多中间表须单独登记，不自动创建关联外键。没有跨实例迁移锁，发布时应避免多实例同时执行；DDL 失败或超时可能已部分生效，不能保证整批回滚。完整样例与报告语义见 [`schemamigrate` 包文档](infra/schemamigrate/doc.go)。
+每张表通过 `Model` 登记，可选 `Name` 指定物理表名、`Comment` 管理 MySQL / PostgreSQL 表注释。只迁移显式登记的表，关联表和多对多中间表须单独登记，不自动创建关联外键。没有跨实例迁移锁，发布时应避免多实例同时执行；DDL 失败或超时可能已部分生效，不能保证整批回滚。完整样例与报告语义见 [`schemamigrate` 包文档](infra/schemamigrate/doc.go)。
 
 需要同时初始化 SQL 种子时使用组合入口：
 
@@ -416,6 +416,8 @@ report, err := bootstrap.RunMySQLInitialization("orders", tables, bootstrap.Seed
 种子 SQL 每个有效行必须是一条以分号结束、插入一行的 `INSERT INTO`；关键字不区分大小写，空行与 `--` 整行注释不计数。空文件、跨行 SQL 及其他语句报错。有效行数与 `Where` 范围内的物理记录数（含软删除记录）相同则保留内容；不同则事务 DELETE 该范围并重建，空 `Where` 明确作用于整表。每条 INSERT 必须影响一行，完成后再次核对范围内数量；失败回滚当前项的删除与插入并停止，之前完成的项保留。
 
 SQL 是可信部署代码，调用方负责其目标表及条件正确，并使用支持事务的表；本组件不解析 SQL 或隔离权限。不重置自增序列，重建可能改变 ID 和覆盖自定义数据，只适用于可整体重建的受管数据。数量相同不会发现内容差异。底层可直接调用 `schemamigrate.ApplySeeds(ctx, masterDB, files, seeds)`，由调用方提供带期限的 Context；没有跨实例锁，须由单个实例在业务流量进入前执行。
+
+PostgreSQL 的 `serial` / `bigserial` 或允许显式值的 identity 列插入固定 ID 时，不会自动推进对应序列，后续默认生成 ID 可能发生主键冲突。优先省略自增 ID 或填写 `DEFAULT`；必须混用固定 ID 和自动生成 ID 时，由项目在单实例初始化期间显式校准对应序列，组件不自动处理。序列取号或 `setval` 不随事务回滚，不属于种子删除与插入的回滚保证。参见 [PostgreSQL 18 serial 说明](https://www.postgresql.org/docs/18/datatype-numeric.html#DATATYPE-SERIAL)及[序列函数](https://www.postgresql.org/docs/18/functions-sequence.html)。
 
 ### 日志写入轮转文件
 
