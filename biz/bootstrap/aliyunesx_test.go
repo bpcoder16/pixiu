@@ -1,3 +1,5 @@
+//go:build !pixiu_bootstrap_no_aliyun_es
+
 package bootstrap_test
 
 import (

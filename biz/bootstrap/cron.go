@@ -12,8 +12,6 @@ import (
 	"github.com/bpcoder16/pixiu/infra/cronx"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/logit"
-	redislock "github.com/go-co-op/gocron-redis-lock/v2"
-	"github.com/go-co-op/gocron/v2"
 )
 
 // NewCronService 严格读取 cron.yaml，绑定 Handler 并构造名为 cron 的服务，构造错误原样返回。
@@ -150,35 +148,4 @@ func (c *cronConfig) bind(handlers []cronx.NamedHandler) ([]cronx.Job, error) {
 		jobs = append(jobs, job)
 	}
 	return jobs, nil
-}
-
-func (c cronLockConfig) locker() (gocron.Locker, error) {
-	if c.RedisName == "" || strings.TrimSpace(c.RedisName) != c.RedisName {
-		return nil, errors.New("invalid redisName")
-	}
-	if c.KeyPrefix == "" || strings.TrimSpace(c.KeyPrefix) != c.KeyPrefix {
-		return nil, errors.New("invalid keyPrefix")
-	}
-	if c.TTL < 0 || c.RenewInterval < 0 {
-		return nil, errors.New("negative ttl or renewInterval")
-	}
-	if c.TTL == 0 {
-		c.TTL = 30 * time.Second
-	}
-	if c.RenewInterval == 0 {
-		c.RenewInterval = c.TTL / 3
-	}
-	if c.RenewInterval <= 0 || c.RenewInterval >= c.TTL {
-		return nil, errors.New("renewInterval must be positive and less than ttl")
-	}
-	client, err := namedRedis(c.RedisName)
-	if err != nil {
-		return nil, err
-	}
-	return redislock.NewRedisLockerWithOptions(
-		client.Client(),
-		redislock.WithKeyPrefix(c.KeyPrefix),
-		redislock.WithAutoExtendDuration(c.RenewInterval),
-		redislock.WithRedsyncOptions(redislock.WithExpiry(c.TTL), redislock.WithTries(1)),
-	)
 }

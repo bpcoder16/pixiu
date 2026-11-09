@@ -1,4 +1,4 @@
-//go:build natsintegration
+//go:build natsintegration && !pixiu_bootstrap_no_nats
 
 package bootstrap
 

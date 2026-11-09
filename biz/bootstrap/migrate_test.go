@@ -1,8 +1,11 @@
+//go:build !pixiu_bootstrap_no_mysql
+
 package bootstrap_test
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -137,5 +140,18 @@ func TestInitializationSeedsUseIndependentCallerTimeout(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func TestMySQLMigrationNameValidation(t *testing.T) {
+	for _, name := range []string{"", "实例", "bad.name", "../name", `a\b`, "a b"} {
+		// 名称错误必须先于环境和客户端查询返回。
+		want := fmt.Sprintf("bootstrap: invalid MySQL migration name %q", name)
+		if name != "" {
+			want += ": only ASCII letters, digits, '_' and '-' are allowed"
+		}
+		if _, err := bootstrap.RunMySQLMigration(name, nil); err == nil || err.Error() != want {
+			t.Errorf("名称校验错误 = %v，预期 %q", err, want)
+		}
 	}
 }

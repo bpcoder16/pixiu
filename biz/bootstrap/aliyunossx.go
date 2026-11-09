@@ -1,9 +1,12 @@
+//go:build !pixiu_bootstrap_no_aliyun_oss
+
 package bootstrap
 
 import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/infra/aliyun/ossx"
+	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
 var aliyunOSSInstances = instanceGroup[aliyunOSSFileConfig, aliyunOSSInstanceConfig, *ossx.Client]{
@@ -24,6 +27,10 @@ var aliyunOSSInstances = instanceGroup[aliyunOSSFileConfig, aliyunOSSInstanceCon
 // MustBaseInit 读取 env.ConfigDirPath() 下的 aliyunossx.<name>.yaml，失败时 panic。
 func MustRegisterAliyunOSS(name string, isDefault bool) {
 	aliyunOSSInstances.mustRegister(name, isDefault)
+}
+
+func initAliyunOSS(resources *lifecycle.Stack) error {
+	return aliyunOSSInstances.initialize(resources)
 }
 
 // 文件只提供固定 AK/SK；实例身份来自声明，零值和语义校验由 ossx 负责。

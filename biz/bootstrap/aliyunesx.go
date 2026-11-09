@@ -1,9 +1,12 @@
+//go:build !pixiu_bootstrap_no_aliyun_es
+
 package bootstrap
 
 import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/infra/aliyun/esx"
+	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
 var aliyunESInstances = instanceGroup[aliyunESFileConfig, aliyunESInstanceConfig, *esx.Client]{
@@ -24,6 +27,10 @@ var aliyunESInstances = instanceGroup[aliyunESFileConfig, aliyunESInstanceConfig
 // MustBaseInit 读取 env.ConfigDirPath() 下的 aliyunesx.<name>.yaml，失败时 panic。
 func MustRegisterAliyunES(name string, isDefault bool) {
 	aliyunESInstances.mustRegister(name, isDefault)
+}
+
+func initAliyunES(resources *lifecycle.Stack) error {
+	return aliyunESInstances.initialize(resources)
 }
 
 // 文件只提供固定 AK/SK；实例身份来自声明，零值和语义校验由 esx 负责。

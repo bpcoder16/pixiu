@@ -1,3 +1,5 @@
+//go:build !pixiu_bootstrap_no_nats
+
 package bootstrap
 
 import (
@@ -7,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/infra/natsx"
+	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
 var natsInstances = instanceGroup[natsFileConfig, natsx.Config, *natsx.Client]{
@@ -28,6 +31,10 @@ var natsInstances = instanceGroup[natsFileConfig, natsx.Config, *natsx.Client]{
 // 客户端关闭登记到资源栈；资源回收前由 Start 排空 NATS 消费服务。
 func MustRegisterNATS(name string, isDefault bool) {
 	natsInstances.mustRegister(name, isDefault)
+}
+
+func initNATS(resources *lifecycle.Stack) error {
+	return natsInstances.initialize(resources)
 }
 
 // 实例身份来自声明；文件开放连接参数、日志路由和 namespace，不解码完整官方选项或业务消费配置。

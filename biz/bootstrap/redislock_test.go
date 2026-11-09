@@ -1,3 +1,5 @@
+//go:build !pixiu_bootstrap_no_redis
+
 package bootstrap_test
 
 import (

@@ -48,28 +48,28 @@ func mustBaseInit(config *appconfig.AppConfig, resources *lifecycle.Stack, initi
 			panic(fmt.Errorf("bootstrap: initialize log: %w", err))
 		}
 	}
-	if err := aliyunOSSInstances.initialize(resources); err != nil {
+	if err := initAliyunOSS(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize Aliyun OSS: %w", err))
 	}
-	if err := aliyunSTSInstances.initialize(resources); err != nil {
+	if err := initAliyunSTS(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize Aliyun STS: %w", err))
 	}
-	if err := aliyunESInstances.initialize(resources); err != nil {
+	if err := initAliyunES(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize Aliyun ES: %w", err))
 	}
-	if err := mysqlInstances.initialize(resources); err != nil {
+	if err := initMySQL(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize MySQL: %w", err))
 	}
-	if err := redisInstances.initialize(resources); err != nil {
+	if err := initRedis(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize Redis: %w", err))
 	}
 	if err := initRedisLocks(); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize RedisLock: %w", err))
 	}
-	if err := elasticsearchInstances.initialize(resources); err != nil {
+	if err := initElasticsearch(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize Elasticsearch: %w", err))
 	}
-	if err := natsInstances.initialize(resources); err != nil {
+	if err := initNATS(resources); err != nil {
 		panic(fmt.Errorf("bootstrap: initialize NATS: %w", err))
 	}
 	if err := initWebSockets(); err != nil {

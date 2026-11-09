@@ -1,9 +1,12 @@
+//go:build !pixiu_bootstrap_no_mysql
+
 package bootstrap
 
 import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/infra/mysqlx"
+	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
 var mysqlInstances = instanceGroup[mysqlFileConfig, mysqlx.Config, *mysqlx.Client]{
@@ -20,6 +23,10 @@ var mysqlInstances = instanceGroup[mysqlFileConfig, mysqlx.Config, *mysqlx.Clien
 // MustBaseInit 从 env.ConfigDirPath() 下读取 mysql.<name>.yaml，失败时 panic。
 func MustRegisterMySQL(name string, isDefault bool) {
 	mysqlInstances.mustRegister(name, isDefault)
+}
+
+func initMySQL(resources *lifecycle.Stack) error {
+	return mysqlInstances.initialize(resources)
 }
 
 // 文件不接受 Name 或 IsDefault，避免声明与部署配置产生两份实例身份。

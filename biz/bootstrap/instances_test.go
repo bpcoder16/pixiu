@@ -19,13 +19,5 @@ func TestInstanceNameValidation(t *testing.T) {
 		if err := validateInstanceName("Redis", name); err == nil || err.Error() != want {
 			t.Errorf("注册校验错误 = %v，预期 %q", err, want)
 		}
-		want = fmt.Sprintf("bootstrap: invalid NATS instance name %q", name) + detail
-		if _, err := NewNATSConsumerService(name, nil, nil); err == nil || err.Error() != want {
-			t.Errorf("NATS 构造错误 = %v，预期 %q", err, want)
-		}
-		want = fmt.Sprintf("bootstrap: invalid MySQL migration name %q", name) + detail
-		if _, err := RunMySQLMigration(name, nil); err == nil || err.Error() != want {
-			t.Errorf("MySQL 迁移错误 = %v，预期 %q", err, want)
-		}
 	}
 }

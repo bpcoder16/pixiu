@@ -1,6 +1,9 @@
+//go:build !pixiu_bootstrap_no_nats
+
 package bootstrap
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,5 +92,18 @@ func TestNATSConfigLoggerName(t *testing.T) {
 				t.Fatalf("日志路由未传入客户端: cfg=%+v, err=%v", cfg, err)
 			}
 		})
+	}
+}
+
+func TestNATSConsumerNameValidation(t *testing.T) {
+	for _, name := range []string{"", "实例", "bad.name", "../name", `a\b`, "a b"} {
+		// 名称错误必须先于环境和客户端查询返回。
+		want := fmt.Sprintf("bootstrap: invalid NATS instance name %q", name)
+		if name != "" {
+			want += ": only ASCII letters, digits, '_' and '-' are allowed"
+		}
+		if _, err := NewNATSConsumerService(name, nil, nil); err == nil || err.Error() != want {
+			t.Errorf("名称校验错误 = %v，预期 %q", err, want)
+		}
 	}
 }

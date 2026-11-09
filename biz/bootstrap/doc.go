@@ -1,6 +1,49 @@
 // Package bootstrap 提供日志、MySQL、Redis、Elasticsearch、OSS、STS、阿里云 ES 和 NATS 多实例的通用初始化入口，
 // 以及应用运行管理器、Gin Engine、HTTP、realtime 和 Cron 服务的构造方法，供项目自己的 bootstrap 组装。
 //
+// # 可选构建标签
+//
+// 默认保留全部组件，运行时仅初始化已声明实例。以下标签可独立使用或以逗号组合，排除对应编译依赖：
+//
+//   - pixiu_bootstrap_no_es：Elasticsearch 7/8/9。
+//   - pixiu_bootstrap_no_aliyun_oss：阿里云 OSS。
+//   - pixiu_bootstrap_no_aliyun_sts：阿里云 STS。
+//   - pixiu_bootstrap_no_aliyun_es：阿里云 ES 管理端，与 Elasticsearch 数据面独立。
+//   - pixiu_bootstrap_no_mysql：MySQL 及 bootstrap 的迁移、种子初始化入口。
+//   - pixiu_bootstrap_no_redis：Redis、RedisLock 装配及 Cron 的 Redis 分布式锁。
+//   - pixiu_bootstrap_no_nats：NATS 客户端装配、消费服务及注册配置解析。
+//
+// 在业务应用包含 main 包的入口目录执行：
+//
+//	# 不使用 Elasticsearch 或 MySQL。
+//	go build -tags=pixiu_bootstrap_no_es -o app .
+//	go build -tags=pixiu_bootstrap_no_mysql -o app .
+//	# 不使用 Redis 和 NATS。
+//	go build -tags=pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats -o app .
+//	# 不使用三个阿里云组件。
+//	go build -tags=pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es -o app .
+//	# 全部禁用；构建、运行和测试使用一致的标签。
+//	BOOTSTRAP_TAGS='pixiu_bootstrap_no_es,pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es,pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats'
+//	go build -tags="$BOOTSTRAP_TAGS" -o app .
+//	go run -tags="$BOOTSTRAP_TAGS" .
+//	go test -tags="$BOOTSTRAP_TAGS" ./...
+//
+// 禁用后的基础 MustRegisterXxx(name, isDefault) 仍存在，但显式调用立即 panic 并指出标签。
+// 基础初始化不读取该模块配置、不创建客户端、不登记关闭；app.yaml 不新增 enabled 开关。
+// 禁用 MySQL 时，SeedOptions、RunMySQLMigration、RunMySQLInitialization 不参与构建；
+// 禁用 Redis 时没有 MustRegisterRedisLock；禁用 NATS 时没有 NewNATSConsumerService。
+// 仍调用这些专用 API 的应用会编译失败，须移除相关调用或用对应构建约束隔离业务文件。
+// 日志、时区、HTTP/Gin、WebSocket 和普通 Cron 保留；禁用 Redis 后配置非空 Cron lock（含 {}）会明确报错，
+// 不降级为无锁执行；省略 lock 或设为 null 不受影响。
+// 共享依赖和应用直接导入的适配包不受这些标签控制，go.mod 也不会因此移除 SDK。
+// 在库仓库构建 ./... 仍会编译独立的 infra 适配包；应用裁剪须针对业务入口。
+// 在 Pixiu 仓库执行以下命令验证标签矩阵；完整入口 make test 与 make test-race 已包含对应检查：
+//
+//	make test-bootstrap-tags
+//	make test-bootstrap-tags BOOTSTRAP_TEST_FLAGS=-race
+//
+// # 应用装配
+//
 // 应用负责加载配置、创建资源关闭栈，并在初始化前登记关闭流程。
 // 以下片段放在具名返回 runErr error 的 run 函数内；main 在返回错误后退出：
 //
@@ -245,6 +288,8 @@
 // 再依次关闭 Elasticsearch、Redis、MySQL、阿里云 ES、STS、OSS 与日志。资源栈共享总期限，超时后入口立即退出。
 //
 // Elasticsearch 使用 MustRegisterElasticsearch(name, isDefault) 声明，与 MySQL、Redis 独立判重。
+// 默认构建支持全部三个版本；pixiu_bootstrap_no_es 排除该装配，具体命令见可选构建标签。
+// 阿里云 ES 管理端使用独立的装配入口和 pixiu_bootstrap_no_aliyun_es 标签。
 // Redis 初始化后读取 elasticsearch.<name>.yaml，文件前缀统一小写；未声明时跳过。
 // 模板见 conf.example/elasticsearch.example.yaml，version 必填且支持 7/8/9，文件不接受 name、isDefault。
 // 全部 ES 文件严格解析并准备后，再登记一次 elasticsearchx.CloseAll，按版本创建默认或命名客户端。

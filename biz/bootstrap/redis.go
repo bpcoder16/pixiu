@@ -1,3 +1,5 @@
+//go:build !pixiu_bootstrap_no_redis
+
 package bootstrap
 
 import (
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/infra/redisx"
+	"github.com/bpcoder16/pixiu/lifecycle"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -39,6 +42,10 @@ func namedRedis(name string) (client *redisx.Client, err error) {
 // MustBaseInit 从 env.ConfigDirPath() 下读取 redis.<name>.yaml，失败时 panic。
 func MustRegisterRedis(name string, isDefault bool) {
 	redisInstances.mustRegister(name, isDefault)
+}
+
+func initRedis(resources *lifecycle.Stack) error {
+	return redisInstances.initialize(resources)
 }
 
 // 文件只开放单节点 TCP 所需的参数，实例身份由声明注入。

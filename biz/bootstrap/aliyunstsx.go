@@ -1,9 +1,12 @@
+//go:build !pixiu_bootstrap_no_aliyun_sts
+
 package bootstrap
 
 import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/infra/aliyun/stsx"
+	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
 var aliyunSTSInstances = instanceGroup[aliyunSTSFileConfig, aliyunSTSInstanceConfig, *stsx.Client]{
@@ -24,6 +27,10 @@ var aliyunSTSInstances = instanceGroup[aliyunSTSFileConfig, aliyunSTSInstanceCon
 // MustBaseInit 读取 env.ConfigDirPath() 下的 aliyunstsx.<name>.yaml，失败时 panic。
 func MustRegisterAliyunSTS(name string, isDefault bool) {
 	aliyunSTSInstances.mustRegister(name, isDefault)
+}
+
+func initAliyunSTS(resources *lifecycle.Stack) error {
+	return aliyunSTSInstances.initialize(resources)
 }
 
 // 文件只提供固定 AK/SK；实例身份来自声明，零值和语义校验由 stsx 负责。

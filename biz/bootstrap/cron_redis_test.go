@@ -1,3 +1,5 @@
+//go:build !pixiu_bootstrap_no_redis
+
 package bootstrap_test
 
 import (
@@ -135,6 +137,32 @@ func TestCronRedisLeaseAndDrain(t *testing.T) {
 		}
 		if stats := logit.Default().(logit.WriteErrorStats); stats.WriteErrors() != 0 {
 			t.Fatalf("排空期间日志写入失败: %v", stats.LastWriteError())
+		}
+	})
+}
+
+func TestCronLockedTimeoutValidatedByScheduler(t *testing.T) {
+	isolatedLog(t, func() {
+		cfg := loadLogConfig(t, "debug", "log:\n  format: text\n  hookStd: false\n")
+		server := newBootstrapRedisServer(t, "", "+PONG\r\n")
+		writeRedisConfig(t, "cron-lock", redisConfigYAML(server.port))
+		bootstrap.MustRegisterRedis("cron-lock", false)
+		var resources lifecycle.Stack
+		defer resources.Close()
+		bootstrap.MustBaseInit(cfg, &resources)
+		for _, timeout := range []string{"0s", "-1s"} {
+			writeCronConfig(t, fmt.Sprintf("lock: {redisName: cron-lock, keyPrefix: 'test:'}\njobs:\n  - name: job\n    every: 1s\n    timeout: %s\n", timeout))
+			s, err := bootstrap.NewCronService(cronx.NamedHandler{
+				Name:    "job",
+				Handler: func(context.Context) error { return nil },
+			})
+			if err == nil {
+				_ = stopAndWait(s.Stop, s.Wait, s.Cancel)
+				t.Fatalf("启用锁时应拒绝 timeout=%s", timeout)
+			}
+			if !strings.Contains(err.Error(), "cron.yaml") || !strings.Contains(err.Error(), "cronx: job \"job\": timeout") {
+				t.Fatalf("超时校验应来自 cronx 并保留配置路径，实际: %v", err)
+			}
 		}
 	})
 }

@@ -345,7 +345,7 @@ NewHTTPService 构造不监听，Start 接管服务与信号；Stop 统一封闭
 
 文档路由在 Engine 构造时注册，之后添加的业务中间件不会作用于它们，也不会自动增加认证。需要控制文档访问时，可使用 `ginx.New`，在带认证中间件的路由组调用 `ginx.RegisterOpenAPI`。
 
-文档页面、JSON 端点和内嵌静态资源的 GET 路由会自动跳过 ginx 访问日志、请求和响应详情采集及 `Observe`，仍保留请求作用域、组中间件与 Recovery。`gin.yaml` 模板对业务路由开启完整请求和响应详情，可按需调整对应开关；其他需要跳过观察的路由可通过 `ginx.RegisterIgnoredRoute` 显式登记。
+文档页面、JSON 端点和内嵌静态资源的 GET 路由会自动跳过 ginx 访问日志、请求和响应详情采集及 `Observe`，仍保留请求作用域、组中间件与 Recovery。`gin.yaml` 模板默认保留普通访问日志，关闭请求和响应详情。已复制旧模板的服务需自行将 `logRequestInfo`、`logResponseInfo` 改为 `false`。其他需要跳过观察的路由可通过 `ginx.RegisterIgnoredRoute` 显式登记。
 
 ### 应用配置与多实例初始化
 
@@ -423,6 +423,50 @@ STS 文件必填 `region`、`accessKeyID`、`accessKeySecret`，`endpoint` 留�
 阿里云 ES 管理端文件必填 `region`、`instanceID`、`accessKeyID`、`accessKeySecret`，可选 `endpoint`；`requestTimeout` 默认 60s，`slowThreshold` 默认 200ms，`logRequests` 默认关闭。初始化不联网验证实例或权限，业务通过 `esx.Default()` / `Named(name)` 取得固定 InstanceID 的客户端。
 
 Elasticsearch 经 bootstrap 创建时，省略 `logRequests` 默认开启结果日志，`logDetails` 默认关闭；这与直接调用版本适配包 `New` 默认关闭结果日志不同。Redis 模板显式开启 `logCommands`，省略该字段则关闭正常命令日志，慢调用和错误日志仍会输出。完整参数与边界见 [`bootstrap` 包文档](biz/bootstrap/doc.go)。
+
+### 按需裁剪 bootstrap 编译依赖
+
+默认构建保留全部组件，只有通过 `MustRegisterXxx` 声明的实例才会初始化。构建标签用于进一步排除不需要的组件编译依赖，与 `app.yaml` 的运行时配置无关；省略标签不改变现有行为。
+
+| 不使用的组件 | 构建标签 |
+| --- | --- |
+| Elasticsearch 7/8/9 | `pixiu_bootstrap_no_es` |
+| 阿里云 OSS | `pixiu_bootstrap_no_aliyun_oss` |
+| 阿里云 STS | `pixiu_bootstrap_no_aliyun_sts` |
+| 阿里云 ES 管理端 | `pixiu_bootstrap_no_aliyun_es` |
+| MySQL | `pixiu_bootstrap_no_mysql` |
+| Redis | `pixiu_bootstrap_no_redis` |
+| NATS | `pixiu_bootstrap_no_nats` |
+
+在业务应用包含 `main` 包的入口目录执行，多个标签用逗号分隔：
+
+```bash
+# 不使用 Elasticsearch 数据面，阿里云 ES 管理端仍可单独使用。
+go build -tags=pixiu_bootstrap_no_es -o app .
+
+# 不使用 MySQL。
+go build -tags=pixiu_bootstrap_no_mysql -o app .
+
+# 不使用 Redis 和 NATS。
+go build -tags=pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats -o app .
+
+# 不使用三个阿里云组件。
+go build -tags=pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es -o app .
+
+# 排除全部七个组件；构建、运行和测试使用同一组标签。
+BOOTSTRAP_TAGS='pixiu_bootstrap_no_es,pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es,pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats'
+go build -tags="$BOOTSTRAP_TAGS" -o app .
+go run -tags="$BOOTSTRAP_TAGS" .
+go test -tags="$BOOTSTRAP_TAGS" ./...
+```
+
+禁用后，基础 `MustRegisterXxx(name, isDefault)` 方法仍保留，显式调用立即 panic 并指出对应标签；基础初始化跳过该模块，不读取其配置或登记关闭。
+
+涉及 SDK 类型的专用 API 随模块排除：禁用 MySQL 时没有 `SeedOptions`、`RunMySQLMigration` 和 `RunMySQLInitialization`；禁用 Redis 时没有 `MustRegisterRedisLock`；禁用 NATS 时没有 `NewNATSConsumerService`。应用仍调用这些入口时会编译失败，应一并移除或用对应构建约束隔离相关业务文件。
+
+日志、时区、HTTP/Gin、WebSocket 和普通 Cron 保留。禁用 Redis 后，Cron 配置中出现非空 `lock`（包括 `{}`）会明确返回标签错误，不会降级为无锁执行；省略 `lock` 或配置 `lock: null` 不受影响。
+
+标签只排除 bootstrap 引入的依赖，不删除 `go.mod` 中的模块；其他已启用组件共享的依赖、应用自身直接导入的 SDK 或适配包仍会参与编译。在 Pixiu 库仓库执行 `go build -tags=... ./...` 仍会构建独立的 infra 适配包；裁剪应用应针对业务入口构建。
 
 ### 显式执行 MySQL 表结构迁移
 
@@ -792,14 +836,16 @@ make test
 make test-race
 ```
 
-`make test` 和 `make test-race` 是完整测试入口，每个入口顺序执行常规测试与 NATS 配置注册集成测试两轮。等价的 Go 命令如下，CI 也应执行完整两轮：
+`make test` 和 `make test-race` 是完整测试入口，依次运行默认构建、NATS 配置注册集成测试和 bootstrap 构建标签矩阵。矩阵覆盖七个单独禁用、全部禁用及 Redis/NATS 组合，检查注册错误、生产依赖和 HTTP/Cron 基础行为。CI 可直接使用这两个入口，等价命令如下：
 
 ```bash
 go test ./...
 go test -tags=natsintegration ./biz/bootstrap -run '^TestNATSFromConfig$'
+make test-bootstrap-tags
 
 go test -race ./...
 go test -race -tags=natsintegration ./biz/bootstrap -run '^TestNATSFromConfig$'
+make test-bootstrap-tags BOOTSTRAP_TEST_FLAGS=-race
 ```
 
 NATS 集成测试与被测代码保持同目录，通过 `natsintegration` build tag 编入内嵌服务端，无需预先安装服务端或在测试中另行构建可执行文件。常规测试不编入该组用例；带标签的第二轮仅运行 `TestNATSFromConfig`，其中不调用会修改 `time.Local` 的 `MustBaseInit`。不要使用 `go test -tags=natsintegration ./...` 混跑全部用例，否则 macOS 上服务端初始化的后台采样可能与时区初始化测试发生竞争。直接执行 `go test ./...` 或 `go test -race ./...` 只完成第一轮。
@@ -809,7 +855,7 @@ NATS 集成测试与被测代码保持同目录，通过 `natsintegration` build
 1. 先确认能力所属层次和职责边界，复用既有实现，保持变更聚焦。
 2. 功能变更先用测试定义预期行为；修复问题时提供可复现的输入或场景。
 3. 新增公开包时补充中文 `doc.go` 和调用示例；公开 API 变化同步更新文档。
-4. 提交前运行 `make test` 与 `make test-race`，确保包含两轮测试，并使用 `gofmt` 格式化本次修改的 Go 文件。
+4. 提交前运行 `make test` 与 `make test-race`，并使用 `gofmt` 格式化本次修改的 Go 文件。
 5. 日志或轮转热路径变更需运行与功能等价的性能基准，保留正确性门禁和原始结果。
 
 数据库、Redis 和 Elasticsearch 的真实服务验证需要相应环境；具体条件与跳过行为以各包测试为准。全量构建包含 SQLite 驱动，需要 CGO 与 C 编译器。

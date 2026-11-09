@@ -1,3 +1,5 @@
+//go:build !pixiu_bootstrap_no_es
+
 package bootstrap
 
 import (
@@ -11,6 +13,7 @@ import (
 	esv8 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v8"
 	esv9 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v9"
 	"github.com/bpcoder16/pixiu/infra/env"
+	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
 var elasticsearchInstances = instanceGroup[elasticsearchFileConfig, elasticsearchInstanceConfig, *elasticsearchx.Client]{
@@ -31,6 +34,10 @@ var elasticsearchInstances = instanceGroup[elasticsearchFileConfig, elasticsearc
 // 从 env.ConfigDirPath() 读取 elasticsearch.<name>.yaml，version 必填且支持 7/8/9。
 func MustRegisterElasticsearch(name string, isDefault bool) {
 	elasticsearchInstances.mustRegister(name, isDefault)
+}
+
+func initElasticsearch(resources *lifecycle.Stack) error {
+	return elasticsearchInstances.initialize(resources)
 }
 
 // 文件只提供部署参数；名称和默认标记来自声明，版本与选项不进入公共实例组。
