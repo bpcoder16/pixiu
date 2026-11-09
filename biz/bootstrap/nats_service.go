@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -71,10 +70,8 @@ type natsConsumer struct {
 
 // newNATSConsumer 读取配置并绑定 Handler，准备可取消的注册 context。
 func newNATSConsumer(instanceName string, jetStreamHandlers *natsx.JetStreamHandlerRegistry, coreHandlers *natsx.CoreHandlerRegistry) (*natsConsumer, error) {
-	if instanceName == "" || strings.IndexFunc(instanceName, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-')
-	}) >= 0 {
-		return nil, fmt.Errorf("bootstrap: invalid NATS instance name %q", instanceName)
+	if err := validateInstanceName("NATS instance", instanceName); err != nil {
+		return nil, err
 	}
 	// 先查询命名实例，避免未初始化的配置环境遮蔽 Named 的 panic。
 	client := natsx.Named(instanceName)

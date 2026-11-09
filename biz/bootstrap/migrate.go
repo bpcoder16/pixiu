@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/bpcoder16/pixiu/infra/configx"
@@ -44,13 +43,8 @@ func RunMySQLMigration(name string, tables []schemamigrate.Table) (schemamigrate
 // tables 为空时仍可对已有表执行种子；任一阶段失败均立即返回，不应继续启动业务。
 // 返回的 Report 仅记录表结构迁移结果；种子错误保留文件、行号（适用时）及底层错误链。
 func RunMySQLInitialization(name string, tables []schemamigrate.Table, seeds SeedOptions) (schemamigrate.Report, error) {
-	if name == "" || strings.ContainsAny(name, `/\.`) {
-		return schemamigrate.Report{}, fmt.Errorf("bootstrap: invalid MySQL migration name %q", name)
-	}
-	for _, ch := range name {
-		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '_' || ch == '-') {
-			return schemamigrate.Report{}, fmt.Errorf("bootstrap: invalid MySQL migration name %q", name)
-		}
+	if err := validateInstanceName("MySQL migration", name); err != nil {
+		return schemamigrate.Report{}, err
 	}
 	file := filepath.Join(env.ConfigDirPath(), "migrate."+name+".yaml")
 	cfg, err := configx.Parse[migrationConfig](file)

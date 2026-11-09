@@ -8,7 +8,7 @@ trustedProxies: []
 loggerName: "http"
 # 关闭访问日志及两侧详情采集，不影响 panic 错误日志。
 disableAccessLog: false
-# 详情完整记录且不脱敏；本示例默认开启。
+# 请求和响应详情会完整记录凭据和正文，默认关闭。
 # 请求正文在业务中间件之前预读，开启前须在 Engine 外层限制大小及读取期限。
-logRequestInfo: true
-logResponseInfo: true
+logRequestInfo: false
+logResponseInfo: false

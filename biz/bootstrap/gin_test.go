@@ -145,11 +145,9 @@ func TestGinEngineReadsConfigurationAtConstruction(t *testing.T) {
 		}{
 			{name: "零值默认", content: "{}\n", clientIP: "127.0.0.1"},
 			{
-				name:         "配置模板",
-				content:      string(template),
-				clientIP:     "127.0.0.1",
-				requestInfo:  true,
-				responseInfo: true,
+				name:     "配置模板",
+				content:  string(template),
+				clientIP: "127.0.0.1",
 			},
 			{
 				name:        "命名日志与可信代理和请求详情",
@@ -188,22 +186,34 @@ func TestGinEngineReadsConfigurationAtConstruction(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				payload := "probe-body"
+				if tc.name == "配置模板" {
+					payload += strings.Repeat("x", 1<<20)
+				}
+				reader := strings.NewReader(payload)
 				engine.POST("/probe", func(c *gin.Context) {
+					if !tc.requestInfo && reader.Len() != len(payload) {
+						t.Errorf("进入 handler 前已读取 %d 字节", len(payload)-reader.Len())
+					}
 					body, err := io.ReadAll(c.Request.Body)
 					if err != nil {
 						t.Error(err)
 					}
-					c.String(http.StatusOK, string(body))
+					if string(body) != payload {
+						t.Error("业务收到的请求正文发生变化")
+					}
+					c.String(http.StatusOK, "probe-response")
 				})
 				// 构造后改变文件不应影响现有 Engine，也不应在请求期间重新解析。
 				writeGinConfig(t, "unknown: true\n")
-				request := httptest.NewRequest(http.MethodPost, "/probe", strings.NewReader("probe-body"))
+				request := httptest.NewRequest(http.MethodPost, "/probe", reader)
+				request.Header.Set("Authorization", "Bearer probe-credential")
 				request.RemoteAddr = "127.0.0.1:1234"
 				request.Header.Set("X-Forwarded-For", "198.51.100.7")
 				request.Header.Set(ginx.TraceHeader, "probe-trace")
 				writer := httptest.NewRecorder()
 				engine.ServeHTTP(writer, request)
-				if writer.Code != http.StatusOK || writer.Body.String() != "probe-body" || writer.Header().Get(ginx.TraceHeader) != "probe-trace" {
+				if writer.Code != http.StatusOK || writer.Body.String() != "probe-response" || writer.Header().Get(ginx.TraceHeader) != "probe-trace" {
 					t.Fatalf("配置不应改变正文读取或日志 ID: %d, %q, %v", writer.Code, writer.Body.String(), writer.Header())
 				}
 				if tc.disabled {
@@ -218,6 +228,12 @@ func TestGinEngineReadsConfigurationAtConstruction(t *testing.T) {
 				}
 				if unused.Len() != 0 {
 					t.Fatal("请求日志写入了错误的 Logger")
+				}
+				if !tc.requestInfo && (strings.Contains(output.String(), "probe-credential") || strings.Contains(output.String(), "probe-body")) {
+					t.Fatal("关闭请求详情后仍记录了请求凭据或正文")
+				}
+				if !tc.responseInfo && strings.Contains(output.String(), "probe-response") {
+					t.Fatal("关闭响应详情后仍记录了响应正文")
 				}
 				var record map[string]any
 				if err := json.Unmarshal(output.Bytes(), &record); err != nil {
