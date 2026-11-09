@@ -158,6 +158,30 @@ func TestAssumeRoleFailureLogs(t *testing.T) {
 	}
 }
 
+func TestSlowLogThresholdBoundary(t *testing.T) {
+	buf := captureLogs(t)
+	cfg := testConfig("")
+	cfg.SlowThreshold = 25 * time.Millisecond
+	client := newTestClient(t, cfg, OptLogRequests(true))
+	for _, tc := range []struct {
+		duration time.Duration
+		level    string
+	}{
+		{duration: cfg.SlowThreshold, level: "INFO"},
+		{duration: cfg.SlowThreshold + time.Nanosecond, level: "WARN"},
+	} {
+		buf.Reset()
+		client.finish(context.Background(), "AssumeRole", "rid", 200, nil, tc.duration)
+		var record map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record["level"] != tc.level {
+			t.Errorf("耗时 %v，级别 = %v，预期 %s", tc.duration, record["level"], tc.level)
+		}
+	}
+}
+
 func TestAssumeRoleTimeoutAndClose(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.Copy(io.Discard, r.Body); <-r.Context().Done() }))
 	defer server.Close()

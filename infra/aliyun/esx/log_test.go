@@ -3,6 +3,7 @@ package esx
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,8 +12,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alibabacloud-go/tea/tea"
 	"github.com/bpcoder16/pixiu/logit"
 )
+
+func TestSDKErrorLogMetadata(t *testing.T) {
+	buf := captureLogs(t)
+	client := newTestClient(t, testConfig(""), OptLogRequests(true))
+	for _, tc := range []struct {
+		data   string
+		wantID string
+	}{
+		{data: `{"RequestId":"sdk-id"}`, wantID: "sdk-id"},
+		{data: `{"RequestId":`, wantID: "response-id"},
+		{data: `{}`, wantID: ""},
+	} {
+		buf.Reset()
+		err := fmt.Errorf("wrapped: %w", &tea.SDKError{
+			StatusCode: tea.Int(503),
+			Code:       tea.String("SDKCode"),
+			Data:       tea.String(tc.data),
+		})
+		client.finish(context.Background(), "DescribeInstance", "response-id", 403, err, time.Millisecond)
+		var record map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
+			t.Fatal(err)
+		}
+		details := record[logit.DownstreamDetailsKey].(map[string]any)
+		if record["level"] != "WARN" || details["status"] != float64(403) || details["error_code"] != "SDKCode" || details["request_id"] != tc.wantID {
+			t.Errorf("实际 HTTP 状态应优先，并按 SDK Data 解析结果选取请求 ID: data=%q, record=%v", tc.data, record)
+		}
+	}
+}
 
 func TestMalformedResponseLogging(t *testing.T) {
 	for _, operation := range []string{"ListSynonymsDicts", "UpdateSynonymsDicts", "DescribeInstance"} {
