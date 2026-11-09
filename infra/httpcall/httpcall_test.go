@@ -165,8 +165,8 @@ func TestRequestMethodsAndUnifiedLog(t *testing.T) {
 			t.Errorf("第 %d 条方法仍位于顶层: %v", i, log)
 		}
 	}
-	if url := downstreamDetails(t, logs[0])["url"]; url != "https://user:password@example.test/items?token=private-query" {
-		t.Errorf("请求 URL 未保留原文: %v", url)
+	if url := downstreamDetails(t, logs[0])["url"]; url != "https://example.test/items" {
+		t.Errorf("默认摘要应保留主机和路径: %v", url)
 	}
 	if strings.Contains(buf.String(), "private-body") {
 		t.Fatalf("日志意外包含请求体: %s", buf.String())
@@ -604,11 +604,8 @@ func TestHTTPStatusAndTransportError(t *testing.T) {
 	if len(logs) != 2 || logs[0]["level"] != "WARN" || downstreamDetails(t, logs[0])["status"] != float64(400) {
 		t.Fatalf("HTTP 错误状态日志: %v", logs)
 	}
-	if logs[1]["level"] != "ERROR" || !strings.Contains(downstreamDetails(t, logs[1])["err"].(string), "dial failed") {
+	if logs[1]["level"] != "ERROR" || downstreamDetails(t, logs[1])["err"] != "transport error" {
 		t.Fatalf("传输错误日志: %v", logs[1])
-	}
-	if got := downstreamDetails(t, logs[1])["err"]; got != err.Error() {
-		t.Fatalf("错误日志未保留原始错误文本: got %v, want %q", got, err.Error())
 	}
 	if details := downstreamDetails(t, logs[1]); len(details) != 5 || details["status"] != float64(0) {
 		t.Fatalf("传输错误未包含固定状态字段: %v", details)
@@ -698,8 +695,8 @@ func TestOptRestySuccessHookPanicLogsOnce(t *testing.T) {
 	if len(logs) != 1 || logs[0]["level"] != "ERROR" {
 		t.Fatalf("回调 panic 应只记录一条 Error: %v", logs)
 	}
-	if errText, _ := downstreamDetails(t, logs[0])["err"].(string); !strings.Contains(errText, "callback failed") {
-		t.Fatalf("Error 未包含回调 panic: %v", logs[0])
+	if errText, _ := downstreamDetails(t, logs[0])["err"].(string); errText != "request failed" {
+		t.Fatalf("默认摘要缺少回调失败说明: %v", logs[0])
 	}
 	logit.InfoDuration(ctx, "request done")
 	logs = records(t, buf)
@@ -818,8 +815,8 @@ func TestRestyWarningsAndErrorsGoToStderr(t *testing.T) {
 		}
 	}
 	fullURL := "https://user:password@example.test/items?token=private"
-	if !strings.Contains(stderr, fullURL) || !strings.Contains(logs.String(), fullURL) {
-		t.Fatalf("诊断或结果日志未保留完整 URL: stderr=%q logit=%q", stderr, logs.String())
+	if !strings.Contains(stderr, fullURL) || strings.Contains(logs.String(), "token=private") {
+		t.Fatalf("stderr 应保留原始诊断且结果摘要应去除签名: stderr=%q logit=%q", stderr, logs.String())
 	}
 	if got := len(records(t, logs)); got != 1 {
 		t.Fatalf("logit 结果日志 %d 条, want 1", got)
@@ -890,5 +887,44 @@ func TestRequestDeadlineCoversRetryWait(t *testing.T) {
 	}
 	if got := attempts.Load(); got != 1 {
 		t.Fatalf("截止时间到期后仍重试: %d 次", got)
+	}
+}
+
+func TestDefaultSummaryOmitsSignedURL(t *testing.T) {
+	const marker = "synthetic-signature-9248"
+	const signed = "https://user:" + marker + "@example.test/a%2Fb?signature=" + marker + "#" + marker
+	for _, tc := range []struct {
+		name    string
+		target  string
+		failure error
+		wantURL string
+	}{
+		{name: "成功", target: signed, wantURL: "https://example.test/a%2Fb"},
+		{name: "传输失败", target: signed, failure: errors.New("download failed for " + signed), wantURL: "https://example.test/a%2Fb"},
+		{name: "非法地址", target: "https://example.test/%zz?signature=" + marker},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := captureLogs(t)
+			client := httpcall.New("download", httpcall.OptResty(func(r *resty.Client) {
+				r.SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					if tc.failure != nil {
+						return nil, tc.failure
+					}
+					return response(req, http.StatusOK), nil
+				}))
+			}))
+			_, err := client.Request(context.Background()).Get(tc.target)
+			if (err != nil) != (tc.failure != nil || tc.wantURL == "") {
+				t.Fatalf("非预期请求结果: %v", err)
+			}
+			logs := records(t, buf)
+			if len(logs) != 1 || strings.Contains(buf.String(), marker) {
+				t.Fatalf("摘要应恰好一条且无签名: %s", buf)
+			}
+			details := downstreamDetails(t, logs[0])
+			if details["url"] != tc.wantURL || (err != nil && details["err"] == "") {
+				t.Fatalf("摘要缺少目标或错误说明: %v", details)
+			}
+		})
 	}
 }

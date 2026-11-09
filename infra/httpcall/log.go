@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -128,16 +129,12 @@ func (c *Client) log(req *resty.Request, level logit.Level, resp *resty.Response
 	if resp != nil {
 		status = resp.StatusCode()
 	}
-	errText := ""
-	if err != nil {
-		errText = err.Error()
-	}
 	details := map[string]any{
 		"method":  req.Method,
 		"attempt": req.Attempt,
-		"url":     requestURL(req),
+		"url":     requestURL(req, c.logDetails),
 		"status":  status,
-		"err":     errText,
+		"err":     resultError(err, c.logDetails),
 	}
 	if c.logDetails {
 		appendHTTPDetails(details, req, resp)
@@ -214,10 +211,56 @@ func requestBodyForLog(req *resty.Request) string {
 	return string(body)
 }
 
-// 已构造时取初始 HTTP 请求的完整 URL；尚未构造时取请求配置中的地址。
-func requestURL(req *resty.Request) string {
+// 优先使用实际构造的初始请求；仅显式开启详情时记录原始地址。
+func requestURL(req *resty.Request, detailed bool) string {
+	var target *url.URL
 	if req.RawRequest != nil && req.RawRequest.URL != nil {
-		return req.RawRequest.URL.String()
+		target = req.RawRequest.URL
+		if detailed {
+			return target.String()
+		}
+	} else {
+		if detailed {
+			return req.URL
+		}
+		var err error
+		target, err = url.Parse(req.URL)
+		if err != nil {
+			return ""
+		}
 	}
-	return req.URL
+	if target.Opaque != "" {
+		return ""
+	}
+	public := url.URL{
+		Scheme:  target.Scheme,
+		Host:    target.Host,
+		Path:    target.Path,
+		RawPath: target.RawPath,
+	}
+	return public.String()
+}
+
+// SDK、传输层及自定义回调均可能在错误链中回显签名，不在默认摘要中拼接错误原文。
+func resultError(err error, detailed bool) string {
+	switch {
+	case err == nil:
+		return ""
+	case detailed:
+		return err.Error()
+	case errors.Is(err, context.Canceled):
+		return "request canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "request timed out"
+	}
+	if urlErr, ok := errors.AsType[*url.Error](err); ok {
+		if urlErr.Op == "parse" {
+			return "invalid URL"
+		}
+		if urlErr.Timeout() {
+			return "request timed out"
+		}
+		return "transport error"
+	}
+	return "request failed"
 }

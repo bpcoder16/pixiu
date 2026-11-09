@@ -76,6 +76,8 @@
 // 每次调用通过 logit 记录统一的 downstream_type、downstream_duration_ms、
 // downstream_id 和 downstream_details；details 固定包含 method、attempt、url、status、err，
 // 缺值时字符串为 ""、数字为 0；attempt 为实际尝试次数。
+// 默认摘要 URL 仅含协议、主机和路径；无法解析或为不透明 URI 时留空。err 仅给出错误类别。
+// 显式开启详情时保留完整初始 URL 和错误原文。
 // URL 优先取已构造的 RawRequest.URL，否则取 req.URL；不兼容同次调用的重试 URL 变更。
 // OptLogRequests 默认开启；设为 false 时不输出上述 HttpCall 结果日志，
 // OptLogDetails 此时也不输出详细内容，Resty 自身的 stderr 诊断仍会保留。
