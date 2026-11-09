@@ -1,4 +1,4 @@
-//go:build pixiu_bootstrap_no_mysql && pixiu_bootstrap_no_pgsql
+//go:build pixiu_bootstrap_no_mysql && pixiu_bootstrap_no_postgresql
 
 package bootstrap_test
 
@@ -9,7 +9,7 @@ import (
 )
 
 func TestBootstrapWithoutSQLDependencies(t *testing.T) {
-	cmd := exec.CommandContext(t.Context(), "go", "list", "-deps", "-tags=pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_pgsql", ".")
+	cmd := exec.CommandContext(t.Context(), "go", "list", "-deps", "-tags=pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_postgresql", ".")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go list -deps: %v\n%s", err, out)

@@ -1,4 +1,4 @@
-package pgsqlx
+package postgresqlx
 
 import (
 	"bytes"
@@ -369,12 +369,12 @@ func TestGORMDiagnosticCallerAndLogMode(t *testing.T) {
 		record := records[i]
 		details := record[logit.DownstreamDetailsKey].(map[string]any)
 		caller, ok := record["caller"].(string)
-		if details["msg"] != want || !ok || !strings.HasPrefix(caller, "infra/pgsqlx/log.go:") || seen[caller] {
+		if details["msg"] != want || !ok || !strings.HasPrefix(caller, "infra/postgresqlx/log.go:") || seen[caller] {
 			t.Fatalf("GORM LogMode 或诊断 caller 错误: %v", records)
 		}
 		seen[caller] = true
 	}
-	if caller, ok := records[3]["caller"].(string); !ok || !strings.HasPrefix(caller, "infra/pgsqlx/log.go:") || seen[caller] {
+	if caller, ok := records[3]["caller"].(string); !ok || !strings.HasPrefix(caller, "infra/postgresqlx/log.go:") || seen[caller] {
 		t.Fatalf("查询日志 caller 未指向 Trace 入口: %v", records[3])
 	}
 }

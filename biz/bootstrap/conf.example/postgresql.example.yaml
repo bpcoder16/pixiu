@@ -1,6 +1,6 @@
-# PostgreSQL 18 参考配置；复制为 pgsql.<name>.yaml。
+# PostgreSQL 18 参考配置；复制为 postgresql.<name>.yaml。
 # name 和 isDefault 仅由 MustRegisterPostgreSQL(name, isDefault) 指定。
-# 时间使用带单位字符串；除日志开关外，默认值及校验沿用 pgsqlx。
+# 时间使用带单位字符串；除日志开关外，默认值及校验沿用 postgresqlx。
 initTimeout: "10s"
 
 # 会话时区与无时区 timestamp 的读取时区独立，不继承应用时区。

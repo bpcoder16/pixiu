@@ -26,14 +26,14 @@ func TestMigrationConfigIsStrictAndDisabledDoesNotAcquireDatabase(t *testing.T) 
 		if err := env.Init(env.Config{AppName: "migration-test", RunMode: "test", TimeLocation: "UTC", ConfigDirPath: dir, LocalIP: "127.0.0.1"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := bootstrap.RunMySQLMigration("cards", nil); !errors.Is(err, os.ErrNotExist) {
+		if _, err := bootstrap.RunMySQLInitialization("cards", nil, bootstrap.SeedOptions{}); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("文件必须存在: %v", err)
 		}
 		for _, content := range []string{"enabled: invalid\n", "enabled: false\nextra: true\n", "enabled: false\ntimeout: -1s\n", "mode: apply\nowner: test\n"} {
 			if err := os.WriteFile(filepath.Join(dir, "migrate.cards.yaml"), []byte(content), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := bootstrap.RunMySQLMigration("cards", nil); err == nil {
+			if _, err := bootstrap.RunMySQLInitialization("cards", nil, bootstrap.SeedOptions{}); err == nil {
 				t.Fatalf("非法配置被接受: %q", content)
 			}
 		}
@@ -41,16 +41,16 @@ func TestMigrationConfigIsStrictAndDisabledDoesNotAcquireDatabase(t *testing.T) 
 			t.Fatal(err)
 		}
 		tables := []schemamigrate.Table{{Model: &struct{ ID uint64 }{}}}
-		if _, err := bootstrap.RunMySQLMigration("cards", tables); err != nil {
+		if _, err := bootstrap.RunMySQLInitialization("cards", tables, bootstrap.SeedOptions{}); err != nil {
 			t.Fatalf("默认关闭，不应查询未注册的实例: %v", err)
 		}
 		if err := os.WriteFile(filepath.Join(dir, "migrate.cards.yaml"), []byte("enabled: true\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := bootstrap.RunMySQLMigration("cards", nil); err != nil {
+		if _, err := bootstrap.RunMySQLInitialization("cards", nil, bootstrap.SeedOptions{}); err != nil {
 			t.Fatalf("空清单不应取实例: %v", err)
 		}
-		if _, err := bootstrap.RunMySQLMigration("../cards", nil); err == nil {
+		if _, err := bootstrap.RunMySQLInitialization("../cards", nil, bootstrap.SeedOptions{}); err == nil {
 			t.Fatal("应拒绝实例路径穿越")
 		}
 	})
@@ -143,14 +143,14 @@ func TestInitializationSeedsUseIndependentCallerTimeout(t *testing.T) {
 	}
 }
 
-func TestMySQLMigrationNameValidation(t *testing.T) {
+func TestMySQLInitializationNameValidation(t *testing.T) {
 	for _, name := range []string{"", "实例", "bad.name", "../name", `a\b`, "a b"} {
 		// 名称错误必须先于环境和客户端查询返回。
 		want := fmt.Sprintf("bootstrap: invalid MySQL migration name %q", name)
 		if name != "" {
 			want += ": only ASCII letters, digits, '_' and '-' are allowed"
 		}
-		if _, err := bootstrap.RunMySQLMigration(name, nil); err == nil || err.Error() != want {
+		if _, err := bootstrap.RunMySQLInitialization(name, nil, bootstrap.SeedOptions{}); err == nil || err.Error() != want {
 			t.Errorf("名称校验错误 = %v，预期 %q", err, want)
 		}
 	}

@@ -2,7 +2,7 @@ GO ?= go
 
 BOOTSTRAP_DISABLE_TAGS := pixiu_bootstrap_no_es pixiu_bootstrap_no_aliyun_oss \
 	pixiu_bootstrap_no_aliyun_sts pixiu_bootstrap_no_aliyun_es \
-	pixiu_bootstrap_no_mysql pixiu_bootstrap_no_pgsql pixiu_bootstrap_no_redis pixiu_bootstrap_no_nats
+	pixiu_bootstrap_no_mysql pixiu_bootstrap_no_postgresql pixiu_bootstrap_no_redis pixiu_bootstrap_no_nats
 
 .PHONY: test test-race test-bootstrap-tags
 

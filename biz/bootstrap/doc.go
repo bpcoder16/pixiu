@@ -10,7 +10,7 @@
 //   - pixiu_bootstrap_no_aliyun_sts：阿里云 STS。
 //   - pixiu_bootstrap_no_aliyun_es：阿里云 ES 管理端，与 Elasticsearch 数据面独立。
 //   - pixiu_bootstrap_no_mysql：MySQL 及对应的迁移、种子初始化入口。
-//   - pixiu_bootstrap_no_pgsql：PostgreSQL 及对应的迁移、种子初始化入口。
+//   - pixiu_bootstrap_no_postgresql：PostgreSQL 及对应的迁移、种子初始化入口。
 //   - pixiu_bootstrap_no_redis：Redis、RedisLock 装配及 Cron 的 Redis 分布式锁。
 //   - pixiu_bootstrap_no_nats：NATS 客户端装配、消费服务及注册配置解析。
 //
@@ -24,15 +24,15 @@
 //	# 不使用三个阿里云组件。
 //	go build -tags=pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es -o app .
 //	# 全部禁用；构建、运行和测试使用一致的标签。
-//	BOOTSTRAP_TAGS='pixiu_bootstrap_no_es,pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es,pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_pgsql,pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats'
+//	BOOTSTRAP_TAGS='pixiu_bootstrap_no_es,pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es,pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_postgresql,pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats'
 //	go build -tags="$BOOTSTRAP_TAGS" -o app .
 //	go run -tags="$BOOTSTRAP_TAGS" .
 //	go test -tags="$BOOTSTRAP_TAGS" ./...
 //
 // 禁用后的基础 MustRegisterXxx(name, isDefault) 仍存在，但显式调用立即 panic 并指出标签。
 // 基础初始化不读取该模块配置、不创建客户端、不登记关闭；app.yaml 不新增 enabled 开关。
-// 禁用 MySQL 时，RunMySQLMigration、RunMySQLInitialization 不参与构建；
-// 禁用 PostgreSQL 时，RunPostgreSQLMigration、RunPostgreSQLInitialization 不参与构建。
+// 禁用 MySQL 时，RunMySQLInitialization 不参与构建；
+// 禁用 PostgreSQL 时，RunPostgreSQLInitialization 不参与构建。
 // 只有同时禁用两者时才排除共享的 SeedOptions 和迁移核心依赖；
 // 禁用 Redis 时没有 MustRegisterRedisLock；禁用 NATS 时没有 NewNATSConsumerService。
 // 仍调用这些专用 API 的应用会编译失败，须移除相关调用或用对应构建约束隔离业务文件。
@@ -274,17 +274,17 @@
 // 首个实例创建前只登记一次 mysqlx.CloseAll，不再逐个登记 Client.Close；
 // 部分创建失败的连接由 mysqlx 清理，此前已完成的实例由应用栈统一关闭。
 //
-// PostgreSQL 使用 MustRegisterPostgreSQL(name, isDefault) 声明，读取 pgsql.<name>.yaml。
-// 模板见 conf.example/pgsql.example.yaml，兼容性验证以 PostgreSQL 18 为基准。
+// PostgreSQL 使用 MustRegisterPostgreSQL(name, isDefault) 声明，读取 postgresql.<name>.yaml。
+// 模板见 conf.example/postgresql.example.yaml，兼容性验证以 PostgreSQL 18 为基准。
 // 声明、默认实例和 CloseAll 管理方式与 MySQL 一致，两个组件独立判重；未声明则跳过。
 // 主从只配置 host、port，其他字段在顶层共享；省略 logSQL、interpolateSQL 时默认 true。
-// TLS 使用 sslMode、sslRootCert、sslCert、sslKey；证书路径原样传递，配置解释见 pgsqlx 包文档。
-// disableStatementCache 沿用 pgsqlx 的类型描述缓存模式，不新增读写超时配置。
-// 在 MustBaseInit 前声明实例，初始化后使用 pgsqlx.Default()/Named(name)；例如：
+// TLS 使用 sslMode、sslRootCert、sslCert、sslKey；证书路径原样传递，配置解释见 postgresqlx 包文档。
+// disableStatementCache 沿用 postgresqlx 的类型描述缓存模式，不新增读写超时配置。
+// 在 MustBaseInit 前声明实例，初始化后使用 postgresqlx.Default()/Named(name)；例如：
 //
 //	bootstrap.MustRegisterPostgreSQL("orders", true)
 //	bootstrap.MustBaseInit(config, &resources)
-//	client := pgsqlx.Default()
+//	client := postgresqlx.Default()
 //	_ = client
 //
 // Redis 使用 MustRegisterRedis(name, isDefault) 声明，与 MySQL 独立判重，允许同名。
@@ -472,13 +472,13 @@
 // 接入后台任务后，应用必须先停止入口并等待任务退出，再关闭下游资源；
 // 取消 context 不能代替等待。注册及 MustBaseInit 仅供启动期串行调用；
 // 参数校验通过即封闭注册，重复初始化或失败后重试会 panic。
-// 项目可在 MustBaseInit 后、业务启动前调用 RunMySQLMigration(name, tables)，
+// 项目可在 MustBaseInit 后、业务启动前调用 RunMySQLInitialization(name, tables, SeedOptions{})，
 // tables 使用 infra/schemamigrate.Table；严格读取 migrate.<name>.yaml，文件必需。
 // enabled 默认 false；开启后逐表执行 GORM AutoMigrate，内部创建 Context，timeout 默认 5m。
 // 只迁移显式登记的表，忽略模型关联及其外键；关联表和多对多中间表须单独登记。
-// 关闭或空清单不取数据库；迁移核心从 mysqlx.Named(name) 获取主库，失败返回错误与部分报告。
+// 关闭或表与种子清单均为空时不取数据库；迁移核心从 mysqlx.Named(name) 获取主库，失败返回错误与部分报告。
 // 迁移不会自动挂到 MustBaseInit 或连接构造中；没有迁移锁，发布时避免多实例同时执行。
-// PostgreSQL 对应 RunPostgreSQLMigration、RunPostgreSQLInitialization，从 pgsqlx.Named(name) 获取主库。
+// PostgreSQL 对应 RunPostgreSQLInitialization(name, tables, SeedOptions{})，从 postgresqlx.Named(name) 获取主库。
 // 两类入口共用 migrate.<name>.yaml、SeedOptions 和超时规则；同名实例共享配置文件，
 // 需要分别控制时使用不同实例名。PostgreSQL 当前须省略 Table.Comment、Charset、Collation。
 // 模板见 conf.example/migrate.example.yaml，详细契约见 infra/schemamigrate/doc.go。

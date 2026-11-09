@@ -1,4 +1,4 @@
-//go:build !pixiu_bootstrap_no_pgsql
+//go:build !pixiu_bootstrap_no_postgresql
 
 package bootstrap
 
@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/infra/configx"
-	"github.com/bpcoder16/pixiu/infra/pgsqlx"
+	"github.com/bpcoder16/pixiu/infra/postgresqlx"
 )
 
 func TestPostgreSQLFileConfiguration(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "pgsql.orders.yaml")
+	file := filepath.Join(t.TempDir(), "postgresql.orders.yaml")
 	const content = `initTimeout: 9s
 database: orders
 username: app
@@ -44,7 +44,7 @@ slaves:
 	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := configx.Parse[pgsqlFileConfig](file)
+	cfg, err := configx.Parse[postgresqlFileConfig](file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ slaves:
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantEndpoint := pgsqlx.Endpoint{
+	wantEndpoint := postgresqlx.Endpoint{
 		Host:        "master.example",
 		Port:        5433,
 		Database:    "orders",
@@ -65,7 +65,7 @@ slaves:
 		SSLCert:     "/certs/client.pem",
 		SSLKey:      "/certs/client.key",
 		DialTimeout: 2 * time.Second,
-		Pool: pgsqlx.Pool{
+		Pool: postgresqlx.Pool{
 			MaxOpenConns:    7,
 			MaxIdleConns:    2,
 			ConnMaxLifetime: 4 * time.Minute,
@@ -85,7 +85,7 @@ slaves:
 	if err := os.WriteFile(file, []byte(content+"logSQL: false\ninterpolateSQL: false\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err = configx.Parse[pgsqlFileConfig](file)
+	cfg, err = configx.Parse[postgresqlFileConfig](file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ slaves:
 	if err != nil || got.LogSQL || got.InterpolateSQL {
 		t.Fatal("显式 false 必须关闭日志开关")
 	}
-	if _, err := configx.Parse[pgsqlFileConfig]("conf.example/pgsql.example.yaml"); err != nil {
+	if _, err := configx.Parse[postgresqlFileConfig]("conf.example/postgresql.example.yaml"); err != nil {
 		t.Fatalf("配置模板应能严格解析: %v", err)
 	}
 }

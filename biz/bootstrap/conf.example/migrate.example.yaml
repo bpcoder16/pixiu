@@ -1,5 +1,6 @@
 # 命名 MySQL / PostgreSQL 实例 example 对应 migrate.example.yaml。
-# 项目显式调用 RunMySQLMigration / RunPostgreSQLMigration 或对应 Initialization 时读取，文件必需；{} 默认关闭。
+# 项目显式调用 RunMySQLInitialization / RunPostgreSQLInitialization 时读取，文件必需；{} 默认关闭。
+# 仅迁移表结构时传入 SeedOptions{}。
 # 开启后每次启动交给 GORM AutoMigrate 检查所有登记表。
 # 只迁移显式登记的表；不自动迁移关联表、中间表或创建关联外键。
 # 没有跨实例迁移锁，发布时避免多个实例同时迁移。

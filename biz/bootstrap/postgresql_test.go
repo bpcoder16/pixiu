@@ -1,4 +1,4 @@
-//go:build !pixiu_bootstrap_no_pgsql
+//go:build !pixiu_bootstrap_no_postgresql
 
 package bootstrap_test
 
@@ -12,14 +12,14 @@ import (
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
 	"github.com/bpcoder16/pixiu/infra/env"
-	"github.com/bpcoder16/pixiu/infra/pgsqlx"
+	"github.com/bpcoder16/pixiu/infra/postgresqlx"
 	"github.com/bpcoder16/pixiu/infra/schemamigrate"
 	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
 func writePostgreSQLConfig(t *testing.T, name, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(env.ConfigDirPath(), "pgsql."+name+".yaml"), []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(env.ConfigDirPath(), "postgresql."+name+".yaml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -38,13 +38,13 @@ func TestPostgreSQLDeclarationsAndUnregisteredModule(t *testing.T) {
 	t.Run("declarations", func(t *testing.T) {
 		isolatedLog(t, func() {
 			for _, name := range []string{"", "../orders", "a.b", "实例"} {
-				requirePostgreSQLPanic(t, "invalid PgSQL name", func() { bootstrap.MustRegisterPostgreSQL(name, true) })
+				requirePostgreSQLPanic(t, "invalid PostgreSQL name", func() { bootstrap.MustRegisterPostgreSQL(name, true) })
 			}
 			bootstrap.MustRegisterPostgreSQL("orders_1-main", true)
 			requirePostgreSQLPanic(t, "already registered", func() { bootstrap.MustRegisterPostgreSQL("orders_1-main", false) })
-			requirePostgreSQLPanic(t, "default PgSQL", func() { bootstrap.MustRegisterPostgreSQL("reports", true) })
+			requirePostgreSQLPanic(t, "default PostgreSQL", func() { bootstrap.MustRegisterPostgreSQL("reports", true) })
 			bootstrap.MustRegisterPostgreSQL("reports", false)
-			if recoverValue(func() { pgsqlx.Named("orders_1-main") }) == nil {
+			if recoverValue(func() { postgresqlx.Named("orders_1-main") }) == nil {
 				t.Fatal("声明阶段不得创建客户端")
 			}
 		})
@@ -60,7 +60,7 @@ func TestPostgreSQLDeclarationsAndUnregisteredModule(t *testing.T) {
 			if err := resources.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := pgsqlx.NewNamed(pgsqlx.Config{Name: "probe"}); err == nil || strings.Contains(err.Error(), "clients closed") {
+			if _, err := postgresqlx.NewNamed(postgresqlx.Config{Name: "probe"}); err == nil || strings.Contains(err.Error(), "clients closed") {
 				t.Fatalf("未声明时不应登记 PostgreSQL 关闭: %v", err)
 			}
 		})
@@ -73,7 +73,7 @@ func TestPostgreSQLParsesAllFilesBeforeConnecting(t *testing.T) {
 		content string
 		want    string
 	}{
-		{name: "missing", want: "pgsql.other.yaml"},
+		{name: "missing", want: "postgresql.other.yaml"},
 		{name: "unknown", content: "typo: true\n", want: "typo"},
 		{name: "identity", content: "name: other\n", want: "name"},
 		{name: "default", content: "isDefault: true\n", want: "isdefault"},
@@ -93,7 +93,7 @@ func TestPostgreSQLParsesAllFilesBeforeConnecting(t *testing.T) {
 				var resources lifecycle.Stack
 				defer resources.Close()
 				err := requirePostgreSQLPanic(t, tc.want, func() { bootstrap.MustBaseInit(cfg, &resources) })
-				if !strings.Contains(err.Error(), "pgsql.other.yaml") || tc.name == "missing" && !errors.Is(err, os.ErrNotExist) {
+				if !strings.Contains(err.Error(), "postgresql.other.yaml") || tc.name == "missing" && !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("配置错误路径或底层错误链丢失: %v", err)
 				}
 			})
@@ -101,13 +101,13 @@ func TestPostgreSQLParsesAllFilesBeforeConnecting(t *testing.T) {
 	}
 }
 
-func TestPostgreSQLMigrationConfiguration(t *testing.T) {
+func TestPostgreSQLInitializationConfiguration(t *testing.T) {
 	isolatedLog(t, func() {
 		loadLogConfig(t, "debug", "log:\n  format: text\n  hookStd: false\n")
-		if _, err := bootstrap.RunPostgreSQLMigration("../orders", nil); err == nil {
+		if _, err := bootstrap.RunPostgreSQLInitialization("../orders", nil, bootstrap.SeedOptions{}); err == nil {
 			t.Fatal("应先拒绝非法实例名")
 		}
-		if _, err := bootstrap.RunPostgreSQLMigration("orders", nil); !errors.Is(err, os.ErrNotExist) {
+		if _, err := bootstrap.RunPostgreSQLInitialization("orders", nil, bootstrap.SeedOptions{}); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("迁移配置必须存在: %v", err)
 		}
 		file := filepath.Join(env.ConfigDirPath(), "migrate.orders.yaml")
@@ -115,7 +115,7 @@ func TestPostgreSQLMigrationConfiguration(t *testing.T) {
 			if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := bootstrap.RunPostgreSQLMigration("orders", nil); err == nil {
+			if _, err := bootstrap.RunPostgreSQLInitialization("orders", nil, bootstrap.SeedOptions{}); err == nil {
 				t.Fatalf("接受了非法迁移配置: %q", content)
 			}
 		}
@@ -131,7 +131,7 @@ func TestPostgreSQLMigrationConfiguration(t *testing.T) {
 		if err := os.WriteFile(file, []byte("enabled: true\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := bootstrap.RunPostgreSQLMigration("orders", nil); err != nil {
+		if _, err := bootstrap.RunPostgreSQLInitialization("orders", nil, bootstrap.SeedOptions{}); err != nil {
 			t.Fatalf("空清单不应查询实例: %v", err)
 		}
 		if _, err := bootstrap.RunPostgreSQLInitialization("orders", nil, bootstrap.SeedOptions{Timeout: -time.Second}); err == nil {

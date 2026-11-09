@@ -146,7 +146,7 @@ func main() {
 | [`infra/mysqlx`](infra/mysqlx/doc.go) | MySQL 连接池、显式主从选择、查询日志 | GORM、MySQL 驱动、logit |
 | [`infra/gormx`](infra/gormx/doc.go) | Repository 主、从库会话依赖 Sessions，按关键词原文进行 LIKE 包含匹配 | GORM |
 | [`infra/schemamigrate`](infra/schemamigrate/doc.go) | AutoMigrate、物理分表、MySQL 表注释及按数量校准 SQL 种子 | GORM |
-| [`infra/pgsqlx`](infra/pgsqlx/doc.go) | PostgreSQL 连接池、显式主从选择、查询日志 | GORM、pgx、logit |
+| [`infra/postgresqlx`](infra/postgresqlx/doc.go) | PostgreSQL 连接池、显式主从选择、查询日志 | GORM、pgx、logit |
 | [`infra/clickhousex`](infra/clickhousex/doc.go) | ClickHouse 连接池、显式主从选择、查询日志 | GORM、ClickHouse 驱动、logit |
 | [`infra/sqlitex`](infra/sqlitex/doc.go) | SQLite 单库连接池、常用参数配置、查询日志 | GORM、go-sqlite3、logit |
 | [`infra/redisx`](infra/redisx/doc.go) | 单机 Redis 客户端、初始化验活、命令结果日志 | go-redis v9、logit |
@@ -282,7 +282,7 @@ NewHTTPService 构造不监听，Start 接管服务与信号；Stop 统一封闭
 | 声明 | 配置文件 | 模板 |
 | --- | --- | --- |
 | `MustRegisterMySQL("orders", true)` | `conf/mysql.orders.yaml` | [MySQL](biz/bootstrap/conf.example/mysql.example.yaml) |
-| `MustRegisterPostgreSQL("orders", true)` | `conf/pgsql.orders.yaml` | [PostgreSQL](biz/bootstrap/conf.example/pgsql.example.yaml) |
+| `MustRegisterPostgreSQL("orders", true)` | `conf/postgresql.orders.yaml` | [PostgreSQL](biz/bootstrap/conf.example/postgresql.example.yaml) |
 | `MustRegisterRedis("cache", true)` | `conf/redis.cache.yaml` | [Redis](biz/bootstrap/conf.example/redis.example.yaml) |
 | `MustRegisterElasticsearch("search", true)` | `conf/elasticsearch.search.yaml` | [Elasticsearch](biz/bootstrap/conf.example/elasticsearch.example.yaml) |
 | `MustRegisterAliyunOSS("assets", true)` | `conf/aliyunossx.assets.yaml` | [阿里云 OSS](biz/bootstrap/conf.example/aliyunossx.example.yaml) |
@@ -332,7 +332,7 @@ func main() {
 
 </details>
 
-PostgreSQL 项目将示例中的 MySQL 声明替换为 `bootstrap.MustRegisterPostgreSQL("orders", true)`，使用 `pgsql.orders.yaml`，初始化后通过 `pgsqlx.Default()` 或 `pgsqlx.Named("orders")` 获取客户端。以 PostgreSQL 18 为验证基准；配置、TLS、时区和缓存开关见模板。
+PostgreSQL 项目将示例中的 MySQL 声明替换为 `bootstrap.MustRegisterPostgreSQL("orders", true)`，使用 `postgresql.orders.yaml`，初始化后通过 `postgresqlx.Default()` 或 `postgresqlx.Named("orders")` 获取客户端。以 PostgreSQL 18 为验证基准；配置、TLS、时区和缓存开关见模板。
 
 各组件独立选择默认实例，`Default()` 与 `Named(默认名称)` 返回同一客户端。共享组件由 bootstrap 各登记一次 `CloseAll`，业务无需重复登记单个客户端关闭。初始化失败会 panic，提前登记的 defer 负责回收已创建资源；初始化只在启动阶段串行执行，失败后不支持重试。
 
@@ -355,7 +355,7 @@ OSS 上传与临时凭据签发可通过 [`biz/ossservice`](biz/ossservice/doc.g
 | 阿里云 STS | `pixiu_bootstrap_no_aliyun_sts` |
 | 阿里云 ES 管理端 | `pixiu_bootstrap_no_aliyun_es` |
 | MySQL | `pixiu_bootstrap_no_mysql` |
-| PostgreSQL | `pixiu_bootstrap_no_pgsql` |
+| PostgreSQL | `pixiu_bootstrap_no_postgresql` |
 | Redis | `pixiu_bootstrap_no_redis` |
 | NATS | `pixiu_bootstrap_no_nats` |
 
@@ -375,7 +375,7 @@ go build -tags=pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats -o app .
 go build -tags=pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es -o app .
 
 # 排除全部八个组件；构建、运行和测试使用同一组标签。
-BOOTSTRAP_TAGS='pixiu_bootstrap_no_es,pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es,pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_pgsql,pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats'
+BOOTSTRAP_TAGS='pixiu_bootstrap_no_es,pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es,pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_postgresql,pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats'
 go build -tags="$BOOTSTRAP_TAGS" -o app .
 go run -tags="$BOOTSTRAP_TAGS" .
 go test -tags="$BOOTSTRAP_TAGS" ./...
@@ -383,7 +383,7 @@ go test -tags="$BOOTSTRAP_TAGS" ./...
 
 禁用后，基础 `MustRegisterXxx(name, isDefault)` 方法仍保留，显式调用立即 panic 并指出对应标签；基础初始化跳过该模块，不读取其配置或登记关闭。
 
-涉及 SDK 类型的专用 API 随模块排除：禁用 MySQL 时没有 `RunMySQLMigration` 和 `RunMySQLInitialization`；禁用 PostgreSQL 时没有 `RunPostgreSQLMigration` 和 `RunPostgreSQLInitialization`；只有两者都禁用才排除共享的 `SeedOptions` 和迁移核心依赖；禁用 Redis 时没有 `MustRegisterRedisLock`；禁用 NATS 时没有 `NewNATSConsumerService`。应用仍调用这些入口时会编译失败，应一并移除或用对应构建约束隔离相关业务文件。
+涉及 SDK 类型的专用 API 随模块排除：禁用 MySQL 时没有 `RunMySQLInitialization`；禁用 PostgreSQL 时没有 `RunPostgreSQLInitialization`；只有两者都禁用才排除共享的 `SeedOptions` 和迁移核心依赖；禁用 Redis 时没有 `MustRegisterRedisLock`；禁用 NATS 时没有 `NewNATSConsumerService`。应用仍调用这些入口时会编译失败，应一并移除或用对应构建约束隔离相关业务文件。
 
 日志、时区、HTTP/Gin、WebSocket 和普通 Cron 保留。禁用 Redis 后，Cron 配置中出现非空 `lock`（包括 `{}`）会明确返回标签错误，不会降级为无锁执行；省略 `lock` 或配置 `lock: null` 不受影响。
 
@@ -391,11 +391,11 @@ go test -tags="$BOOTSTRAP_TAGS" ./...
 
 ### 显式执行 MySQL / PostgreSQL 表结构迁移
 
-项目维护 `[]schemamigrate.Table` 模型清单，在 `MustBaseInit` 完成后、业务服务启动前调用 `bootstrap.RunMySQLMigration("orders", tables)`，并检查返回的报告与错误。名称对应已声明的 MySQL 实例，迁移在其主库执行；失败时停止启动，不忽略错误后开放业务入口。
+项目维护 `[]schemamigrate.Table` 模型清单，在 `MustBaseInit` 完成后、业务服务启动前调用 `bootstrap.RunMySQLInitialization("orders", tables, bootstrap.SeedOptions{})`，并检查返回的报告与错误。空 `SeedOptions` 表示只迁移结构。名称对应已声明的 MySQL 实例，迁移在其主库执行；失败时停止启动，不忽略错误后开放业务入口。
 
-PostgreSQL 使用 `bootstrap.RunPostgreSQLMigration("orders", tables)`；需要同时校准种子时使用 `RunPostgreSQLInitialization`，参数与下方 MySQL 示例相同。当前 PostgreSQL 不支持 `Table.Comment`、`Charset`、`Collation`，应省略这些字段，显式配置会报错。两个数据库入口均读取 `migrate.<name>.yaml`，同名实例共享迁移开关，需要独立控制时使用不同实例名。
+PostgreSQL 使用 `bootstrap.RunPostgreSQLInitialization("orders", tables, bootstrap.SeedOptions{})`；需要同时校准种子时，在 `SeedOptions` 中填写种子配置，参数与下方 MySQL 示例相同。当前 PostgreSQL 不支持 `Table.Comment`、`Charset`、`Collation`，应省略这些字段，显式配置会报错。两个数据库入口均读取 `migrate.<name>.yaml`，同名实例共享迁移开关，需要独立控制时使用不同实例名。
 
-将 [`migrate.example.yaml`](biz/bootstrap/conf.example/migrate.example.yaml) 复制为 `conf/migrate.orders.yaml`。调用迁移入口时文件必须存在，`enabled` 默认 false，显式开启后执行；`timeout` 默认 5 分钟。迁移不会自动挂到 `MustBaseInit` 或连接构造中，关闭或空清单不获取数据库。
+将 [`migrate.example.yaml`](biz/bootstrap/conf.example/migrate.example.yaml) 复制为 `conf/migrate.orders.yaml`。调用初始化入口时文件必须存在，`enabled` 默认 false，显式开启后执行；`timeout` 默认 5 分钟。迁移不会自动挂到 `MustBaseInit` 或连接构造中，关闭或表与种子清单均为空时不获取数据库。
 
 每张表通过 `Model` 登记，可选 `Name` 指定物理表名、`Comment` 管理 MySQL 表注释。只迁移显式登记的表，关联表和多对多中间表须单独登记，不自动创建关联外键。没有跨实例迁移锁，发布时应避免多实例同时执行；DDL 失败或超时可能已部分生效，不能保证整批回滚。完整样例与报告语义见 [`schemamigrate` 包文档](infra/schemamigrate/doc.go)。
 

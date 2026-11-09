@@ -1,4 +1,4 @@
-package pgsqlx
+package postgresqlx
 
 import (
 	"database/sql"
@@ -42,7 +42,7 @@ func TestNewNamedFailureDoesNotReserveName(t *testing.T) {
 	if _, err := NewNamed(Config{Name: name}); err == nil {
 		t.Fatal("无效端点配置被接受")
 	}
-	assertNamedPanic(t, fmt.Sprintf("pgsqlx: client %q is not registered", name), func() {
+	assertNamedPanic(t, fmt.Sprintf("postgresqlx: client %q is not registered", name), func() {
 		Named(name)
 	})
 }
