@@ -194,6 +194,8 @@
 // MaxRequestBatch 和 MaxRequestExpires 保留零值，不额外指定拉取批量或期限上限。
 // BackOff 为空、RetryDelay 为零；可通过 consumer.Config 覆盖 AckWait、MaxDeliver、MaxAckPending 或设置 BackOff。
 // handler 后可传入多个过滤主题，复制到 FilterSubjects，要求 NATS Server >= 2.10；不传主题时消费整个 Stream。
+// 非空 namespace 绑定整条 Stream 需要读取 Stream Info，且全部主题都须属于该 namespace。
+// 混合或历史混存主题、镜像、来源流和主题转换须显式过滤。已有普通 Stream 和 Durable 继续沿用原 ACK 进度。
 // 构造函数不设置 FilterSubject；调用方后续设置该字段时须清空 FilterSubjects，两者不能同时使用。
 // Workers 默认设为 1；MaxMessages 保留零值，注册时为有效 Workers 的两倍。
 // 默认构造函数不校验参数；手写消费声明仍须显式配置确认超时。

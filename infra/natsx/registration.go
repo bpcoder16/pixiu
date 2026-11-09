@@ -244,6 +244,11 @@ func (c *Client) RegisterJetStreamConsumers(ctx context.Context, consumers ...Je
 		spec.Config.FilterSubject = namespaceValue(c.subjectPrefix, spec.Config.FilterSubject)
 		spec.Config.FilterSubjects = namespaceSubjects(c.subjectPrefix, spec.Config.FilterSubjects)
 	}
+	if c.subjectPrefix != "" {
+		if err := c.checkUnfilteredStreams(ctx, specs); err != nil {
+			return err
+		}
+	}
 	prepared := make([]jetstream.Consumer, len(specs))
 	for i, spec := range specs {
 		consumer, err := c.js.CreateConsumer(ctx, spec.Stream, spec.Config)

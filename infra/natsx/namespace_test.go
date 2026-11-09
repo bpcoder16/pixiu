@@ -280,3 +280,166 @@ func TestNamespaceDoesNotMaskInvalidInput(t *testing.T) {
 		})
 	}
 }
+
+func TestNamespaceLegacyStreamAndDurable(t *testing.T) {
+	serverURL := startServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	connect := func(t *testing.T, namespace string) *Client {
+		t.Helper()
+		c, err := New(Config{
+			Name:      "upgrade",
+			Namespace: namespace,
+			URLs:      []string{serverURL},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		return c
+	}
+	// 按旧版本实际使用的物理名称预置资源，避免新代码的命名逻辑同时充当测试依据。
+	legacy := connect(t, "")
+	stream, err := legacy.JetStream().CreateStream(ctx, DefaultStreamConfig("qa_blue_orders", 1, "qa.events"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	durable, err := stream.CreateConsumer(ctx, DefaultJetStreamConsumer("qa_blue_orders", "qa_reader", nil).Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, data := range []string{"acked", "pending"} {
+		if _, err := legacy.JetStream().Publish(ctx, "qa.events", []byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	msg, err := durable.Next(jetstream.FetchMaxWait(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := msg.DoubleAck(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before, err := durable.Info(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.AckFloor.Stream != 1 || before.NumPending != 1 {
+		t.Fatalf("旧 Durable 未形成预期确认进度: %+v", before)
+	}
+
+	t.Run("拒绝碰撞", func(t *testing.T) {
+		foreign := connect(t, "qa_blue")
+		called := make(chan struct{}, 2)
+		spec := DefaultJetStreamConsumer("orders", "reader", func(context.Context, jetstream.Msg) error {
+			called <- struct{}{}
+			return nil
+		})
+		err := foreign.RegisterJetStreamConsumers(ctx, spec)
+		if err == nil || !strings.Contains(err.Error(), "qa_blue_orders") || !strings.Contains(err.Error(), "qa.events") || !strings.Contains(err.Error(), `namespace "qa_blue"`) {
+			t.Fatalf("应报告 namespace、冲突 Stream 和主题: %v", err)
+		}
+		if _, err := stream.Consumer(ctx, "qa_blue_reader"); !errors.Is(err, jetstream.ErrConsumerNotFound) {
+			t.Fatalf("冲突注册创建了 Durable: %v", err)
+		}
+		if len(called) != 0 {
+			t.Fatal("冲突注册启动了 handler")
+		}
+	})
+
+	t.Run("接续旧进度", func(t *testing.T) {
+		c := connect(t, "qa")
+		if err := c.RegisterStreams(ctx, DefaultStreamConfig("blue_orders", 1, "events")); err != nil {
+			t.Fatal(err)
+		}
+		received := make(chan string, 2)
+		spec := DefaultJetStreamConsumer("blue_orders", "reader", func(_ context.Context, msg jetstream.Msg) error {
+			received <- string(msg.Data())
+			return nil
+		})
+		if err := c.RegisterJetStreamConsumers(ctx, spec); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case got := <-received:
+			if got != "pending" {
+				t.Fatalf("应从积压消息接续，收到 %q", got)
+			}
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		for {
+			info, err := durable.Info(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !info.Created.Equal(before.Created) {
+				t.Fatal("旧 Durable 被重建")
+			}
+			if info.AckFloor.Stream == 2 && info.AckFloor.Consumer == 2 && info.NumPending == 0 && info.NumAckPending == 0 {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatalf("旧 Durable 的 ACK 进度未接续: %+v", info)
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	})
+}
+
+func TestNamespaceMixedStreamRequiresFilter(t *testing.T) {
+	c := registrationClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cfg := DefaultStreamConfig("qa_mixed", 1, "qa.events", "other.events")
+	stream, err := c.JetStream().CreateStream(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, filter := range []bool{false, true} {
+		client, err := New(Config{
+			Name:      "mixed",
+			Namespace: "qa",
+			URLs:      []string{c.Conn().ConnectedUrl()},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		received := make(chan string, 2)
+		spec := DefaultJetStreamConsumer("mixed", "reader", func(_ context.Context, msg jetstream.Msg) error {
+			received <- msg.Subject()
+			return nil
+		})
+		if filter {
+			spec.Config.FilterSubject = "events"
+		}
+		err = client.RegisterJetStreamConsumers(ctx, spec)
+		if !filter {
+			if err == nil || !strings.Contains(err.Error(), "other.events") {
+				t.Fatalf("混合主题应要求显式过滤: %v", err)
+			}
+			if _, err := stream.Consumer(ctx, "qa_reader"); !errors.Is(err, jetstream.ErrConsumerNotFound) {
+				t.Fatalf("整流注册失败后不应存在 Consumer: %v", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, subject := range []string{"other.events", "qa.events"} {
+			if _, err := c.JetStream().Publish(ctx, subject, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		select {
+		case subject := <-received:
+			if subject != "qa.events" {
+				t.Fatalf("显式过滤后收到其他 namespace 主题 %q", subject)
+			}
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+}
