@@ -122,6 +122,13 @@ func TestNewProtectsMemoryDSN(t *testing.T) {
 		"file:%3Amemory%3A",
 		"file:%3amemory%3a",
 		"file:sample?mode=memory#anchor",
+		"sqlitex-test-private?vfs=memdb",
+		"%2Fsqlitex-test-private?vfs=memdb",
+		"/?vfs=memdb",
+		"file:/?vfs=memdb",
+		"file://localhost/?vfs=memdb",
+		"file:/sqlitex-test-native-memory?mode=memory&vfs=memdb",
+		"file:/sqlitex-test-native-private?mode=memory&cache=private&vfs=memdb",
 	} {
 		for _, tc := range []struct {
 			name    string
@@ -149,6 +156,16 @@ func TestNewProtectsMemoryDSN(t *testing.T) {
 				journal: JournalModeWAL,
 				want:    "WAL requires a file database",
 			},
+			{
+				name:    "lowercase WAL",
+				journal: "wal",
+				want:    "WAL requires a file database",
+			},
+			{
+				name:    "mixed-case WAL",
+				journal: "wAl",
+				want:    "WAL requires a file database",
+			},
 		} {
 			t.Run(dsn+"/"+tc.name, func(t *testing.T) {
 				client, err := New(Config{
@@ -173,6 +190,12 @@ func TestSharedMemoryUsesSameDatabase(t *testing.T) {
 		"file:%3Amemory%3A?cache=shared",
 		"file:%2Fsqlitex-escaped-memdb?vfs=memdb",
 		"file:sample?mode=memory&cache=shared#anchor",
+		"/sqlitex-test-plain-shared?vfs=memdb",
+		"/sqlitex-test-plain-mode-ignored?vfs=memdb&mode=memory",
+		"file:/sqlitex-test-native-shared?mode=memory&cache=shared&vfs=memdb",
+		"file://localhost/sqlitex-test-authority-shared?mode=memory&cache=shared&vfs=memdb",
+		"\\sqlitex-test-backslash-shared?vfs=memdb",
+		"file:%5Csqlitex-test-backslash-shared?vfs=memdb",
 	} {
 		t.Run(dsn, func(t *testing.T) {
 			ctx := context.Background()
@@ -216,7 +239,7 @@ func TestSharedMemoryUsesSameDatabase(t *testing.T) {
 func TestEscapedFileDSNPreservesPath(t *testing.T) {
 	for _, useURI := range []bool{false, true} {
 		t.Run(fmt.Sprintf("URI=%t", useURI), func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "%3Amemory%3A#data.db")
+			path := filepath.Join(t.TempDir(), "%00%3Amemory%3A#data.db")
 			dsn := path
 			if useURI {
 				uri := url.URL{Scheme: "file", Path: path}
@@ -288,6 +311,22 @@ func TestNewProtectsMemDB(t *testing.T) {
 				Name: "shared",
 				DSN:  "file:/sqlitex-test-memdb-shared?vfs=memdb",
 				Pool: Pool{ConnMaxLifetime: time.Millisecond},
+			},
+			want: "in-memory database cannot recycle connections",
+		},
+		{
+			cfg: Config{
+				Name: "plain-shared-lifetime",
+				DSN:  "/sqlitex-test-plain-memdb-lifetime?vfs=memdb",
+				Pool: Pool{ConnMaxLifetime: time.Millisecond},
+			},
+			want: "in-memory database cannot recycle connections",
+		},
+		{
+			cfg: Config{
+				Name: "plain-shared-idle",
+				DSN:  "/sqlitex-test-plain-memdb-idle?vfs=memdb",
+				Pool: Pool{ConnMaxIdleTime: time.Millisecond},
 			},
 			want: "in-memory database cannot recycle connections",
 		},
@@ -392,6 +431,72 @@ func TestOperationContextDoesNotCloseClient(t *testing.T) {
 	}
 	if err := client.DB(context.Background()).Exec("SELECT 1").Error; err == nil {
 		t.Fatal("显式关闭后仍可执行查询")
+	}
+}
+
+// 事务取消触发 database/sql 自动回滚并丢弃连接；内存库可能随最后一条连接关闭而消失。
+func TestCanceledTransactionDatabaseLifetime(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		dsn    string
+		memory bool
+	}{
+		{
+			name:   "private memory",
+			dsn:    ":memory:",
+			memory: true,
+		},
+		{
+			name:   "shared memory",
+			dsn:    "file:sqlitex-test-canceled-tx?mode=memory&cache=shared",
+			memory: true,
+		},
+		{
+			name: "file",
+			dsn:  testDSN(t),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := New(Config{
+				Name: tc.name,
+				DSN:  tc.dsn,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			db := client.DB(t.Context())
+			if err := db.Exec("CREATE TABLE records (id INTEGER)").Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Exec("INSERT INTO records VALUES (1)").Error; err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			tx := client.DB(ctx).Begin()
+			if tx.Error != nil {
+				t.Fatal(tx.Error)
+			}
+			cancel()
+			// 等待异步回滚完成，不主动 Rollback，以免改变连接是否被丢弃的行为。
+			deadline := time.Now().Add(5 * time.Second)
+			for client.pool.Stats().OpenConnections != 0 {
+				if time.Now().After(deadline) {
+					t.Fatal("事务取消后连接未被回收")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			var count int
+			err = client.pool.QueryRowContext(t.Context(), "SELECT count(*) FROM records").Scan(&count)
+			if tc.memory {
+				if err == nil || !strings.Contains(err.Error(), "no such table") {
+					t.Fatalf("最后一条连接关闭后内存库应消失: count=%d err=%v", count, err)
+				}
+			} else if err != nil || count != 1 {
+				t.Fatalf("文件库已提交的数据应保留: count=%d err=%v", count, err)
+			}
+		})
 	}
 }
 
@@ -531,6 +636,55 @@ func TestTypedOptionsApplyToEveryConnection(t *testing.T) {
 		if journalMode != "wal" || synchronous != 2 || busyTimeout != 2000 || enabled != 1 {
 			t.Fatalf("第 %d 条连接配置未生效: journal=%s synchronous=%d busy=%d foreign_keys=%d", i+1, journalMode, synchronous, busyTimeout, enabled)
 		}
+	}
+}
+
+func TestTypedOptionsAcceptDriverAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		journal     JournalMode
+		synchronous SynchronousMode
+	}{
+		{
+			name:        "lowercase",
+			journal:     "wal",
+			synchronous: "full",
+		},
+		{
+			name:        "mixed case",
+			journal:     "wAl",
+			synchronous: "FuLl",
+		},
+		{
+			name:        "numeric synchronous",
+			journal:     JournalModeWAL,
+			synchronous: "2",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := New(Config{
+				Name:        "driver-aliases",
+				DSN:         testDSN(t),
+				JournalMode: tc.journal,
+				Synchronous: tc.synchronous,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			db := client.DB(context.Background())
+			var journal string
+			var synchronous int
+			if err := db.Raw("PRAGMA journal_mode").Scan(&journal).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Raw("PRAGMA synchronous").Scan(&synchronous).Error; err != nil {
+				t.Fatal(err)
+			}
+			if journal != "wal" || synchronous != 2 {
+				t.Fatalf("驱动支持的配置别名未生效: journal=%s synchronous=%d", journal, synchronous)
+			}
+		})
 	}
 }
 
@@ -859,5 +1013,172 @@ func TestRealGORMQueryLoggingAndInterpolation(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "visible-value") {
 		t.Fatalf("显式插值未输出参数: %s", buf.String())
+	}
+}
+
+func TestScanLoggingRespectsInterpolation(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		query     string
+		logSQL    bool
+		threshold time.Duration
+		level     string
+	}{
+		{
+			name:      "普通查询",
+			query:     "SELECT ?",
+			logSQL:    true,
+			threshold: time.Hour,
+			level:     "INFO",
+		},
+		{
+			name:      "关闭普通日志的慢查询",
+			query:     "SELECT ?",
+			threshold: time.Nanosecond,
+			level:     "WARN",
+		},
+		{
+			name:      "关闭普通日志的错误查询",
+			query:     "SELECT ? FROM missing_records",
+			threshold: time.Hour,
+			level:     "ERROR",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			buf, ctx := captureRecords(t)
+			// 两种配置同时存活，验证后创建的客户端不会改变前一个客户端的过滤规则。
+			var clients []*Client
+			for _, interpolate := range []bool{false, true} {
+				client, err := New(Config{
+					Name:           fmt.Sprintf("scan-%t", interpolate),
+					DSN:            ":memory:",
+					LogSQL:         tc.logSQL,
+					SlowThreshold:  tc.threshold,
+					InterpolateSQL: interpolate,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = client.Close() })
+				clients = append(clients, client)
+			}
+			for i, client := range clients {
+				buf.Reset()
+				var value string
+				err := client.DB(ctx).Raw(tc.query, "scan-secret").Scan(&value).Error
+				if (err != nil) != (tc.level == "ERROR") {
+					t.Fatalf("查询错误与预期不符: %v", err)
+				}
+				if err == nil && value != "scan-secret" {
+					t.Fatalf("日志过滤改变了实际绑定参数: %q", value)
+				}
+				records := parseRecords(t, buf)
+				if len(records) != 1 || records[0]["level"] != tc.level {
+					t.Fatalf("Scan 日志数量或级别错误: %s", buf.String())
+				}
+				sql := records[0][logit.DownstreamDetailsKey].(map[string]any)["sql"].(string)
+				if i == 0 && sql != tc.query {
+					t.Errorf("关闭插值后 SQL 应保留占位符: %s", sql)
+				}
+				if i == 1 && !strings.Contains(sql, "scan-secret") {
+					t.Errorf("开启插值后 SQL 应包含绑定参数: %s", sql)
+				}
+			}
+		})
+	}
+}
+
+func TestNewRejectsAmbiguousURIPath(t *testing.T) {
+	for _, tc := range []struct {
+		dsn    string
+		reason string
+	}{
+		{dsn: "file:", reason: "empty"},
+		{dsn: "file:?cache=private", reason: "empty"},
+		{dsn: "file://", reason: "empty"},
+		{dsn: "file://localhost", reason: "empty"},
+		{dsn: "file::memory:%00tail", reason: "NUL"},
+	} {
+		t.Run(tc.dsn, func(t *testing.T) {
+			client, err := New(Config{
+				Name: "local",
+				DSN:  tc.dsn,
+				Pool: Pool{MaxOpenConns: 2},
+			})
+			if client != nil {
+				_ = client.Close()
+				t.Fatal("不明确的文件路径通过了连接池校验")
+			}
+			if err == nil || !strings.Contains(err.Error(), "DSN") || !strings.Contains(err.Error(), tc.reason) {
+				t.Fatalf("应指出 DSN 路径原因 %q: %v", tc.reason, err)
+			}
+		})
+	}
+}
+
+func TestNewRejectsNULDSN(t *testing.T) {
+	dsn := testDSN(t)
+	for _, invalid := range []string{
+		":memory:\x00tail",
+		dsn + "&mode=memory\x00tail",
+		dsn + "&mode=memory%00tail",
+		dsn + "&mode%00tail=memory",
+		dsn + "&cache=shared%00tail",
+		dsn + "&cache%00tail=shared",
+		dsn + "&vfs=memdb%00tail",
+		dsn + "&vfs%00tail=memdb",
+	} {
+		t.Run(invalid, func(t *testing.T) {
+			client, err := New(Config{
+				Name: "nul-dsn",
+				DSN:  invalid,
+				Pool: Pool{MaxOpenConns: 2},
+			})
+			if client != nil {
+				_ = client.Close()
+				t.Fatal("含 NUL 的 DSN 被接受")
+			}
+			if err == nil || !strings.Contains(err.Error(), "NUL") || !strings.Contains(err.Error(), "DSN") {
+				t.Fatalf("未指出 DSN 中的 NUL: %v", err)
+			}
+		})
+	}
+}
+
+func TestNewPassesUnrelatedNULParametersToDriver(t *testing.T) {
+	for _, query := range []string{
+		"extra=%00",
+		"extra=ok&extra=%00",
+		"extra%00tail=memory",
+		"mode_extra%00tail=memory",
+	} {
+		t.Run(query, func(t *testing.T) {
+			client, err := New(Config{
+				Name:        "driver-parameters",
+				DSN:         testDSN(t) + "&" + query,
+				BusyTimeout: time.Second,
+				Pool: Pool{
+					MaxOpenConns: 2,
+					MaxIdleConns: 2,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			first, err := client.pool.Conn(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer first.Close()
+			if _, err := first.ExecContext(t.Context(), "CREATE TABLE records (id INTEGER)"); err != nil {
+				t.Fatal(err)
+			}
+			// 保持第一条连接占用，确认另一条连接仍访问同一个文件库。
+			var count int
+			if err := client.pool.QueryRowContext(t.Context(), "SELECT count(*) FROM records").Scan(&count); err != nil {
+				t.Fatalf("无关参数改变了文件库的连接行为: %v", err)
+			}
+		})
 	}
 }

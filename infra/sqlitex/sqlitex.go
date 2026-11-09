@@ -16,7 +16,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// JournalMode 是 SQLite 支持的日志模式；空值沿用 DSN 或驱动默认值。
+// JournalMode 是 SQLite 日志模式；非空值由驱动校验，空值沿用 DSN 或驱动默认值。
 type JournalMode string
 
 const (
@@ -28,7 +28,7 @@ const (
 	JournalModeOff      JournalMode = "OFF"
 )
 
-// SynchronousMode 是 SQLite 支持的同步级别；空值沿用 DSN 或驱动默认值。
+// SynchronousMode 是 SQLite 同步级别；非空值由驱动校验，空值沿用 DSN 或驱动默认值。
 type SynchronousMode string
 
 const (
@@ -132,19 +132,11 @@ func New(cfg Config) (*Client, error) {
 }
 
 func configureDSN(cfg Config, isMemory bool) (string, error) {
-	switch cfg.JournalMode {
-	case "", JournalModeDelete, JournalModeTruncate, JournalModePersist, JournalModeMemory, JournalModeWAL, JournalModeOff:
-	default:
-		return "", errors.New("sqlitex: invalid journal mode")
-	}
-	if isMemory && cfg.JournalMode == JournalModeWAL {
+	// 模式取值由驱动校验；内存库不支持 WAL，不能让驱动静默降级。
+	if isMemory && strings.EqualFold(string(cfg.JournalMode), string(JournalModeWAL)) {
 		return "", errors.New("sqlitex: WAL requires a file database")
 	}
-	switch cfg.Synchronous {
-	case "", SynchronousOff, SynchronousNormal, SynchronousFull, SynchronousExtra:
-	default:
-		return "", errors.New("sqlitex: invalid synchronous mode")
-	}
+	// 转换为驱动使用的整数毫秒前，拒绝负值、精度丢失和溢出。
 	if cfg.BusyTimeout < 0 || cfg.BusyTimeout%time.Millisecond != 0 || cfg.BusyTimeout/time.Millisecond > 1<<31-1 {
 		return "", errors.New("sqlitex: invalid busy timeout")
 	}
@@ -186,10 +178,29 @@ func normalizePool(pool Pool) (Pool, error) {
 
 // 私有内存库的每条物理连接各自持有一份数据；所有内存库都会在最后一条连接关闭后消失。
 func classifyMemoryDSN(dsn string) (memory, private bool, err error) {
+	// 驱动把 DSN 传给 C 字符串；必须在分类前拒绝会截断实际文件名或参数的 NUL。
+	if strings.IndexByte(dsn, 0) >= 0 {
+		return false, false, errors.New("sqlitex: NUL in DSN")
+	}
 	name, rawQuery, _ := strings.Cut(dsn, "?")
 	query, err := url.ParseQuery(rawQuery)
 	if err != nil {
 		return false, false, fmt.Errorf("sqlitex: invalid DSN parameters: %w", err)
+	}
+	for key, values := range query {
+		// 只保护影响内存库分类的参数；SQLite 会截断参数名中的 NUL 后缀。
+		parameter, _, _ := strings.Cut(key, "\x00")
+		if parameter != "mode" && parameter != "cache" && parameter != "vfs" {
+			continue
+		}
+		if parameter != key {
+			return false, false, errors.New("sqlitex: NUL in DSN parameters")
+		}
+		for _, value := range values {
+			if strings.IndexByte(value, 0) >= 0 {
+				return false, false, errors.New("sqlitex: NUL in DSN parameters")
+			}
+		}
 	}
 	// Go 和 SQLite 对重复 URI 参数的取值顺序不同，必须在内存库校验前拒绝。
 	for _, key := range []string{"mode", "cache", "vfs"} {
@@ -200,20 +211,36 @@ func classifyMemoryDSN(dsn string) (memory, private bool, err error) {
 	if name == ":memory:" {
 		return true, true, nil
 	}
-	if !strings.HasPrefix(name, "file:") {
+	rawPath, fileURI := strings.CutPrefix(name, "file:")
+	if !fileURI {
+		// 驱动对普通文件名也解析 vfs，但不对文件名进行 URI 解码。
+		if name != "" && query.Get("vfs") == "memdb" {
+			return true, len(name) <= 1 || (name[0] != '/' && name[0] != '\\'), nil
+		}
 		return false, false, nil
 	}
 	// SQLite 按解码后的 URI 路径识别内存库；仅用于分类，不改写传给驱动的 DSN。
-	path, err := url.PathUnescape(strings.TrimPrefix(name, "file:"))
+	// 空文件名会让每条物理连接打开自己的临时库。单独的 authority 也没有文件名。
+	if authority, ok := strings.CutPrefix(rawPath, "//"); rawPath == "" || (ok && !strings.Contains(authority, "/")) {
+		return false, false, errors.New("sqlitex: empty DSN file path")
+	} else if ok {
+		// authority 不属于文件名，例如 file://localhost/ 的实际路径只有一个分隔符。
+		rawPath = authority[strings.IndexByte(authority, '/'):]
+	}
+	path, err := url.PathUnescape(rawPath)
 	if err != nil {
 		return false, false, fmt.Errorf("sqlitex: invalid DSN path: %w", err)
 	}
-	if query.Get("vfs") == "memdb" {
-		// memdb VFS 的名称以 / 开头时，物理连接共享同一内存库。
-		return true, !strings.HasPrefix(path, "/"), nil
+	if strings.IndexByte(path, 0) >= 0 {
+		return false, false, errors.New("sqlitex: NUL in DSN file path")
 	}
+	// 原生内存模式不经过 memdb VFS，共享性由 cache 决定。
 	if path == ":memory:" || query.Get("mode") == "memory" {
 		return true, query.Get("cache") != "shared", nil
+	}
+	if query.Get("vfs") == "memdb" {
+		// memdb 共享名称须以分隔符开头且长度大于 1；单个分隔符仍是私有库。
+		return true, len(path) <= 1 || (path[0] != '/' && path[0] != '\\'), nil
 	}
 	return false, false, nil
 }

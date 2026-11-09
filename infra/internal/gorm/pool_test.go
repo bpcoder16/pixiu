@@ -1,13 +1,16 @@
 package gorm
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -239,5 +242,56 @@ func TestOpenKeepsDefaultsAndAllowsExtraConfig(t *testing.T) {
 	}
 	if !configured.Config.SkipDefaultTransaction || !configured.Config.DisableAutomaticPing || configured.Config.Logger != diagnostic {
 		t.Fatalf("扩展配置未保留共享约束: %+v", configured.Config)
+	}
+}
+
+func TestOpenPreservesSessionRowLogger(t *testing.T) {
+	for _, parameterized := range []bool{false, true} {
+		for _, operation := range []string{"Row", "Rows"} {
+			t.Run(fmt.Sprintf("parameterized=%t/%s", parameterized, operation), func(t *testing.T) {
+				pool, err := sql.Open("sqlite3", ":memory:")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = pool.Close() })
+				var output bytes.Buffer
+				writer := log.New(&output, "", 0)
+				db, err := Open(pool, gormsqlite.New(gormsqlite.Config{Conn: pool}), logger.New(writer, logger.Config{
+					LogLevel:             logger.Info,
+					ParameterizedQueries: !parameterized,
+				}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				// 会话与客户端选择相反的过滤规则，确保回调不会覆盖会话 Logger。
+				session := db.Session(&gormlib.Session{
+					Logger: logger.New(writer, logger.Config{
+						LogLevel:             logger.Info,
+						ParameterizedQueries: parameterized,
+					}),
+				}).Raw("SELECT ?", "session-secret")
+				output.Reset()
+				var value string
+				if operation == "Row" {
+					err = session.Row().Scan(&value)
+				} else {
+					rows, rowsErr := session.Rows()
+					if rowsErr != nil {
+						t.Fatal(rowsErr)
+					}
+					defer rows.Close()
+					if !rows.Next() {
+						t.Fatalf("查询没有返回记录: %v", rows.Err())
+					}
+					err = rows.Scan(&value)
+				}
+				if err != nil || value != "session-secret" {
+					t.Fatalf("查询结果错误: value=%q err=%v", value, err)
+				}
+				if !strings.Contains(output.String(), "SELECT ") || strings.Contains(output.String(), "session-secret") == parameterized {
+					t.Fatalf("会话参数过滤规则未生效: %s", output.String())
+				}
+			})
+		}
 	}
 }

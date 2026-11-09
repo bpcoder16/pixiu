@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net"
+	"reflect"
 	"time"
 
 	gormlib "gorm.io/gorm"
@@ -70,8 +71,18 @@ func ConfigureAndPing(ctx context.Context, pool *sql.DB, cfg PoolConfig) error {
 	return nil
 }
 
+// rowLogger 保留 GORM Scan 的 recorder，同时沿用客户端的参数过滤规则。
+type rowLogger struct {
+	logger.Interface
+	filter gormlib.ParamsFilter
+}
+
+func (l rowLogger) ParamsFilter(ctx context.Context, sql string, params ...any) (string, []any) {
+	return l.filter.ParamsFilter(ctx, sql, params...)
+}
+
 // Open 用已验活的连接池初始化 GORM；可选配置不能覆盖共享的 Logger 和禁用自动 Ping 约定。
-// 方言初始化失败时关闭连接池。
+// 方言或日志回调初始化失败时关闭连接池。
 func Open(pool *sql.DB, dialector gormlib.Dialector, diagnostic logger.Interface, configure ...func(*gormlib.Config)) (*gormlib.DB, error) {
 	config := &gormlib.Config{}
 	for _, apply := range configure {
@@ -80,6 +91,23 @@ func Open(pool *sql.DB, dialector gormlib.Dialector, diagnostic logger.Interface
 	config.DisableAutomaticPing = true
 	config.Logger = diagnostic
 	db, err := gormlib.Open(dialector, config)
+	if err == nil {
+		if filter, ok := diagnostic.(gormlib.ParamsFilter); ok {
+			err = db.Callback().Row().Before("gorm:row").Register("pixiu:row_params_filter", func(tx *gormlib.DB) {
+				// recorder 类型未导出；仅适配 Scan，保留普通 Row/Rows 的会话 Logger。
+				if reflect.TypeOf(tx.Logger) != reflect.TypeOf(&logger.Recorder) {
+					return
+				}
+				// Scan 临时替换 Logger，绕过原有 ParamsFilter；复制配置以免影响并发会话。
+				config := *tx.Config
+				config.Logger = rowLogger{
+					Interface: tx.Logger,
+					filter:    filter,
+				}
+				tx.Config = &config
+			})
+		}
+	}
 	if err != nil {
 		_ = pool.Close()
 	}
