@@ -295,3 +295,50 @@ func TestOpenPreservesSessionRowLogger(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenScanKeepsClientFilterAndSessionLogger(t *testing.T) {
+	for _, clientParameterized := range []bool{false, true} {
+		for _, query := range []string{"SELECT ?", "SELECT ? FROM missing_records"} {
+			t.Run(fmt.Sprintf("clientParameterized=%t/%s", clientParameterized, query), func(t *testing.T) {
+				pool, err := sql.Open("sqlite3", ":memory:")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = pool.Close() })
+				var clientOutput, sessionOutput bytes.Buffer
+				db, err := Open(pool, gormsqlite.New(gormsqlite.Config{Conn: pool}), logger.New(log.New(&clientOutput, "", 0), logger.Config{
+					LogLevel:             logger.Info,
+					ParameterizedQueries: clientParameterized,
+				}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Scan 的过滤来自客户端，最终输出来自会话；两者故意使用相反的配置。
+				session := db.Session(&gormlib.Session{
+					Logger: logger.New(log.New(&sessionOutput, "", 0), logger.Config{
+						LogLevel:             logger.Info,
+						ParameterizedQueries: !clientParameterized,
+					}),
+				})
+				var value string
+				err = session.Raw(query, "scan-secret").Scan(&value).Error
+				wantError := strings.Contains(query, "missing_records")
+				if (err != nil) != wantError {
+					t.Fatalf("查询错误与预期不符: %v", err)
+				}
+				if err == nil && value != "scan-secret" {
+					t.Fatalf("日志过滤改变了实际绑定参数: %q", value)
+				}
+				if clientOutput.Len() != 0 || strings.Count(sessionOutput.String(), "SELECT ") != 1 {
+					t.Fatalf("Scan 日志应只交给会话 Logger 一次: client=%q session=%q", clientOutput.String(), sessionOutput.String())
+				}
+				if strings.Contains(sessionOutput.String(), "scan-secret") == clientParameterized {
+					t.Fatalf("Scan 未沿用客户端参数过滤: %s", sessionOutput.String())
+				}
+				if clientParameterized && !strings.Contains(sessionOutput.String(), query) {
+					t.Fatalf("隐藏参数后未保留 SQL 占位符: %s", sessionOutput.String())
+				}
+			})
+		}
+	}
+}

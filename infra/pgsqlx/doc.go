@@ -60,6 +60,9 @@
 // 业务仓库决定是否执行自动迁移，模型只传给主库。事务和要求读己之写的查询使用
 // MasterDB；其他可接受从库延迟的读取可使用 SlaveDB。GORM 的 Info、Warn、Error
 // 诊断消息按对应级别记录；LogSQL 只控制正常查询的 SQL 日志。
+// Raw(...).Scan(...) 的插值由客户端 InterpolateSQL 控制；Session 更换 Logger 后，
+// 日志仍由会话 Logger 接收，但其 ParameterizedQueries 不覆盖 Scan 的插值配置。
+// 需要隐藏绑定参数时，在创建客户端时设置 InterpolateSQL=false；普通 Row/Rows 沿用会话过滤规则。
 // Charset 固定为 UTF8；Location 默认 Asia/Shanghai，只解释无时区 timestamp，不改变 timestamptz。
 // 初始化错误保留网络、TLS 和证书配置的具体原因，服务端错误保留 SQLSTATE；
 // 返回错误不携带完整连接 URI 或含凭据的驱动配置。
