@@ -51,8 +51,15 @@ func validate(p payload) error {
 	return nil
 }
 
-// EnqueueJetStreamTx 序列化并登记事务任务，返回自增 ID；不建立连接、不发布也不提交事务。
-func EnqueueJetStreamTx(store *outbox.Store, tx *gorm.DB, msg JetStreamMessage) (int64, error) {
+// EnqueueJetStreamTx 使用 outbox.DefaultStore 序列化并登记事务任务，返回自增 ID。
+// 未登记默认 Store 时 panic；不依赖 Worker、不建立连接、不发布也不提交事务。
+func EnqueueJetStreamTx(tx *gorm.DB, msg JetStreamMessage) (int64, error) {
+	return EnqueueJetStreamTxWithStore(outbox.DefaultStore(), tx, msg)
+}
+
+// EnqueueJetStreamTxWithStore 使用显式 Store 登记事务任务，不读取默认实例。
+// Store 为 nil 时返回 ErrInvalidArgument；其余登记语义与 EnqueueJetStreamTx 相同。
+func EnqueueJetStreamTxWithStore(store *outbox.Store, tx *gorm.DB, msg JetStreamMessage) (int64, error) {
 	if store == nil {
 		return 0, fmt.Errorf("%w: nil store", outbox.ErrInvalidArgument)
 	}

@@ -1,10 +1,10 @@
 // Package natsoutbox 将 JetStream 发布接入 outbox，发送成功以有效 PubAck 为准。
 // 构造时通过 natsx.Named 借用已登记客户端，自增任务 ID 的十进制字符串作为 Nats-Msg-Id，重复确认也算成功。
 //
-// 创建处理器与执行器（store 已创建，events 已通过 bootstrap 或 natsx.NewNamed/NewDefault 登记）：
+// 创建处理器与默认执行器（已调用 outbox.NewDefaultStore，events 已通过 bootstrap 或 natsx.NewNamed/NewDefault 登记）：
 //
 //	handler := natsoutbox.NewJetStreamHandler("events")
-//	worker, err := outbox.NewWorker(store, map[outbox.HandlerKey]outbox.Handler{
+//	_, err := outbox.NewDefaultWorker(map[outbox.HandlerKey]outbox.Handler{
 //		{
 //			Kind:    natsoutbox.JetStreamKind,
 //			Version: natsoutbox.JetStreamVersion,
@@ -22,7 +22,7 @@
 //			return err
 //		}
 //		var err error
-//		taskID, err = natsoutbox.EnqueueJetStreamTx(store, tx, natsoutbox.JetStreamMessage{
+//		taskID, err = natsoutbox.EnqueueJetStreamTx(tx, natsoutbox.JetStreamMessage{
 //			Client:    "events",
 //			Subject:   "orders.created",
 //			Data:      payload,
@@ -33,14 +33,16 @@
 //	if err != nil {
 //		return err
 //	}
-//	if err := worker.Send(ctx, taskID); err != nil {
+//	if err := outbox.Send(ctx, taskID); err != nil {
 //		logit.Warn(ctx, "OutboxDeferred", logit.Str("err", err.Error()))
 //	}
 //	return nil
 //
 // 示例需导入 outbox、natsoutbox、logit、gorm.io/gorm、time，
 // db、ctx、order、payload 由应用提供。项目通过配置分布式锁的 cronx 周期调用
-// worker.RetryPending(ctx, 100)，失败留到下一轮；ExpiresAt 零值表示不过期。
+// outbox.RetryPending(ctx, 100)，失败留到下一轮；ExpiresAt 零值表示不过期。
+// EnqueueJetStreamTx(tx, msg) 使用默认 Store，未登记时 panic；登记不依赖 Worker 或 NATS 客户端初始化。
+// 显式实例使用 EnqueueJetStreamTxWithStore(store, tx, msg)，不读取默认实例；旧三参数调用须改用此名称。
 // Data/Header 在登记时生成快照；Subject 传原始主题，natsx 自动添加 namespace。
 // Header 名由 NATS SDK 在发送时校验，值按 SDK 规则规范化。
 // 重复登记会生成不同 ID；同一任务重试沿用 ID。不同数据库的 ID 可重复，须隔离到不同 Stream。

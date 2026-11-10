@@ -1,9 +1,9 @@
 // Package outbox 提供事务发件箱：同事务登记，提交后主动发送，失败由项目 cron 补偿。
 // 支持 MySQL/PostgreSQL；Store 借用主库，Worker 同步执行，不启动后台调度。
 //
-// 应用先通过 schemamigrate 显式登记 &outbox.Record{}，再创建共享 Store 和 Worker：
+// 应用先通过 schemamigrate 显式登记 &outbox.Record{}，再注册默认 Store 和 Worker：
 //
-//	store, err := outbox.NewStore(outbox.StoreConfig{
+//	_, err := outbox.NewDefaultStore(outbox.StoreConfig{
 //		Backend:  outbox.MySQL,
 //		MasterDB: mysqlClient.MasterDB,
 //		Location: env.TimeLocation(),
@@ -11,7 +11,7 @@
 //	if err != nil {
 //		return err
 //	}
-//	worker, err := outbox.NewWorker(store, map[outbox.HandlerKey]outbox.Handler{
+//	_, err = outbox.NewDefaultWorker(map[outbox.HandlerKey]outbox.Handler{
 //		{
 //			Kind:    "project.notification",
 //			Version: 1,
@@ -26,7 +26,7 @@
 //			return err
 //		}
 //		var err error
-//		taskID, err = store.EnqueueTx(tx, outbox.Task{
+//		taskID, err = outbox.EnqueueTx(tx, outbox.Task{
 //			Kind:      "project.notification",
 //			Version:   1,
 //			Payload:   payload,
@@ -37,7 +37,7 @@
 //	if err != nil {
 //		return err
 //	}
-//	if err := worker.Send(ctx, taskID); err != nil {
+//	if err := outbox.Send(ctx, taskID); err != nil {
 //		logit.Warn(ctx, "OutboxDeferred", logit.Str("err", err.Error()))
 //	}
 //	return nil
@@ -47,10 +47,17 @@
 // func(context.Context, outbox.Delivery) error，同步发送成功才返回 nil。
 // db.Transaction 必须是最外层事务；提交后的发送失败不能回滚已提交业务。
 //
+// 每个进程只登记一个默认 Store 和 Worker，不提供 named 管理。NewDefaultWorker 自动绑定默认 Store，
+// Handler 表在创建时复制，可包含多个 Kind/Version；完成全部初始化后再运行业务。
+// 重复登记返回错误且不覆盖，初始化失败可重试；默认实例不支持替换、重置或运行期增改 Handler。
+// DefaultStore/DefaultWorker 返回已登记实例，未登记时 panic；包级 EnqueueTx/Get/Send/RetryPending 同样如此。
+// 可通过 outbox.Get(ctx, taskID) 查询状态。仅登记任务的进程可以只初始化默认 Store。
+// NewStore/NewWorker 保留显式实例用法，不隐式设置默认实例；所有实例均不拥有数据库或 MQ 资源。
+//
 // 将补偿函数注册到已配置分布式锁的 cronx，频次由项目配置：
 //
 //	func retryOutbox(ctx context.Context) error {
-//		return worker.RetryPending(ctx, 100)
+//		return outbox.RetryPending(ctx, 100)
 //	}
 //
 // batchSize 是查询页大小，每轮按 ID 游标扫描，每条任务最多尝试一次。

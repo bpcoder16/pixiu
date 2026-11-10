@@ -123,7 +123,7 @@ func TestDatabaseToJetStreamRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			store, err := outbox.NewStore(outbox.StoreConfig{
+			_, err = outbox.NewDefaultStore(outbox.StoreConfig{
 				Backend:  backend,
 				MasterDB: db.WithContext,
 			})
@@ -132,7 +132,7 @@ func TestDatabaseToJetStreamRecovery(t *testing.T) {
 			}
 			handler := NewJetStreamHandler("events")
 			var calls atomic.Int64
-			worker, err := outbox.NewWorker(store, map[outbox.HandlerKey]outbox.Handler{
+			handlers := map[outbox.HandlerKey]outbox.Handler{
 				{Kind: JetStreamKind, Version: JetStreamVersion}: func(ctx context.Context, d outbox.Delivery) error {
 					err := handler(ctx, d)
 					if err == nil && calls.Add(1) == 1 {
@@ -141,10 +141,13 @@ func TestDatabaseToJetStreamRecovery(t *testing.T) {
 					}
 					return err
 				},
-			})
+			}
+			_, err = outbox.NewDefaultWorker(handlers)
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Worker 须保留启动时的 Handler 快照，不受调用方后续修改影响。
+			clear(handlers)
 			message := JetStreamMessage{
 				Client:  "events",
 				Subject: "events.created",
@@ -154,7 +157,7 @@ func TestDatabaseToJetStreamRecovery(t *testing.T) {
 			var id int64
 			err = db.Transaction(func(tx *gorm.DB) error {
 				var err error
-				id, err = EnqueueJetStreamTx(store, tx, message)
+				id, err = EnqueueJetStreamTx(tx, message)
 				if err != nil {
 					return err
 				}
@@ -163,7 +166,7 @@ func TestDatabaseToJetStreamRecovery(t *testing.T) {
 			if !errors.Is(err, rollback) {
 				t.Fatal(err)
 			}
-			if _, err := store.Get(ctx, id); !errors.Is(err, outbox.ErrNotFound) {
+			if _, err := outbox.Get(ctx, id); !errors.Is(err, outbox.ErrNotFound) {
 				t.Fatal(err)
 			}
 			if calls.Load() != 0 {
@@ -171,19 +174,19 @@ func TestDatabaseToJetStreamRecovery(t *testing.T) {
 			}
 			if err := db.Transaction(func(tx *gorm.DB) error {
 				var err error
-				id, err = EnqueueJetStreamTx(store, tx, message)
+				id, err = EnqueueJetStreamTx(tx, message)
 				return err
 			}); err != nil {
 				t.Fatal(err)
 			}
 			message.Data[0] = 'X'
-			if err := worker.Send(ctx, id); err == nil {
+			if err := outbox.Send(ctx, id); err == nil {
 				t.Fatal("应报告模拟失败")
 			}
-			if err := worker.RetryPending(ctx, 10); err != nil {
+			if err := outbox.RetryPending(ctx, 10); err != nil {
 				t.Fatal(err)
 			}
-			record, err := store.Get(ctx, id)
+			record, err := outbox.Get(ctx, id)
 			if err != nil || record.Status != outbox.Succeeded || record.Attempts != 2 {
 				t.Fatalf("补偿状态错误: %+v %v", record, err)
 			}

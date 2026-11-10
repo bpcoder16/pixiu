@@ -227,8 +227,45 @@ func TestEnqueueRejectsInvalidMessagesBeforeDatabase(t *testing.T) {
 		{Client: "events", Subject: "events..created"},
 	} {
 		// 普通空会话可区分消息预检与 Store 的事务校验，不能靠 nil Store 短路通过。
-		if _, err := EnqueueJetStreamTx(store, &gorm.DB{}, msg); !errors.Is(err, outbox.ErrInvalidArgument) || err.Error() == "outbox: invalid argument: unavailable or DryRun database" {
+		if _, err := EnqueueJetStreamTxWithStore(store, &gorm.DB{}, msg); !errors.Is(err, outbox.ErrInvalidArgument) || err.Error() == "outbox: invalid argument: unavailable or DryRun database" {
 			t.Fatalf("非法消息未拒绝: %+v", msg)
 		}
+	}
+}
+
+func TestEnqueueUsesDefaultStore(t *testing.T) {
+	if !isolatedNamedClients(t) {
+		return
+	}
+	msg := JetStreamMessage{
+		Client:  "events",
+		Subject: "events.created",
+	}
+	func() {
+		defer func() {
+			if got := recover(); got != "outbox: default store is not registered" {
+				t.Fatalf("未注册默认 Store 应明确 panic: %v", got)
+			}
+		}()
+		_, _ = EnqueueJetStreamTx(nil, msg)
+	}()
+	if _, err := EnqueueJetStreamTxWithStore(nil, nil, msg); !errors.Is(err, outbox.ErrInvalidArgument) {
+		t.Fatalf("显式入口应拒绝 nil Store: %v", err)
+	}
+	_, err := outbox.NewDefaultStore(outbox.StoreConfig{
+		Backend:  outbox.MySQL,
+		MasterDB: func(context.Context) *gorm.DB { panic("事务登记不得访问主库入口") },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 仅注册 Store 即可登记；已有事务错误应原样传播，不依赖 Worker 或 NATS 注册。
+	want := errors.New("业务事务不可用")
+	tx := &gorm.DB{
+		Config: &gorm.Config{},
+		Error:  want,
+	}
+	if id, err := EnqueueJetStreamTx(tx, msg); id != 0 || !errors.Is(err, want) {
+		t.Fatalf("未使用默认 Store 的事务校验: %d %v", id, err)
 	}
 }
