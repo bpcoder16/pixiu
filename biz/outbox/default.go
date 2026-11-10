@@ -86,6 +86,12 @@ func Send(ctx context.Context, id int64) error {
 	return DefaultWorker().Send(ctx, id)
 }
 
+// SendAsync 使用默认 Worker 在后台发送一次；未登记 Worker 时在调用方 panic。
+// 必须在最外层业务事务提交成功后调用；独立 5 秒超时，失败记录日志并留给 cron 补偿。
+func SendAsync(id int64) {
+	DefaultWorker().SendAsync(id)
+}
+
 // RetryPending 使用默认 Worker 执行一轮补偿；未登记 Worker 时 panic。
 // batchSize 为正的查询页大小，应由配置分布式锁的 cronx 周期调用。
 func RetryPending(ctx context.Context, batchSize int) error {

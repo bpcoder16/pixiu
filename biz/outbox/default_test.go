@@ -54,6 +54,7 @@ func TestDefaultRegistration(t *testing.T) {
 	for _, call := range []func(){
 		func() { outbox.DefaultWorker() },
 		func() { _ = outbox.Send(ctx, 1) },
+		func() { outbox.SendAsync(1) },
 		func() { _ = outbox.RetryPending(ctx, 1) },
 	} {
 		requireDefaultPanic(t, "outbox: default worker is not registered", call)

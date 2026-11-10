@@ -14,7 +14,7 @@
 //		return err
 //	}
 //
-// 业务事务内登记，最外层提交后可主动发送一次：
+// 业务事务内登记，最外层提交后可异步发送一次：
 //
 //	var taskID int64
 //	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -33,14 +33,15 @@
 //	if err != nil {
 //		return err
 //	}
-//	if err := outbox.Send(ctx, taskID); err != nil {
-//		logit.Warn(ctx, "OutboxDeferred", logit.Str("err", err.Error()))
-//	}
+//	outbox.SendAsync(taskID)
 //	return nil
 //
-// 示例需导入 outbox、natsoutbox、logit、gorm.io/gorm、time，
+// 示例需导入 outbox、natsoutbox、gorm.io/gorm、time，
 // db、ctx、order、payload 由应用提供。项目通过配置分布式锁的 cronx 周期调用
 // outbox.RetryPending(ctx, 100)，失败留到下一轮；ExpiresAt 零值表示不过期。
+// SendAsync 不接收请求 context，直接启动 goroutine，使用独立 5 秒超时 context 尝试一次；
+// 日志关联使用任务保存的 logId，错误在内部记录。结果回写可能超过 5 秒，不提供等待或排空；
+// 退出中断的 pending 任务由后续 cron 补偿。需要同步结果时使用 outbox.Send(ctx, taskID)。
 // EnqueueJetStreamTx(tx, msg) 使用默认 Store，未登记时 panic；登记不依赖 Worker 或 NATS 客户端初始化。
 // 显式实例使用 EnqueueJetStreamTxWithStore(store, tx, msg)，不读取默认实例；旧三参数调用须改用此名称。
 // Data/Header 在登记时生成快照；Subject 传原始主题，natsx 自动添加 namespace。

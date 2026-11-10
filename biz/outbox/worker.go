@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
+
+	"github.com/bpcoder16/pixiu/logit"
 )
 
-// Worker 同步执行主动发送与一轮补偿；调度频率、调用期限由应用负责。
+// Worker 执行主动发送与一轮补偿；支持同步 Send 和独立 5 秒超时的 SendAsync。
 // 每条任务使用独立事务行锁；多实例补偿轮次由应用的 cron 分布式锁协调。
 type Worker struct {
 	store    *Store
@@ -41,6 +44,21 @@ func (w *Worker) Send(ctx context.Context, id int64) error {
 	}
 	taskErr, storageErr := w.send(ctx, id, false)
 	return errors.Join(taskErr, storageErr)
+}
+
+// SendAsync 在最外层业务事务提交后启动 goroutine，用独立的 5 秒超时 context 尝试发送一次。
+// 不接收请求 context；Handler 和发送日志通过任务记录中的 logId 关联业务。
+// 错误记录日志，pending 任务由 cron 补偿；不提供等待或排空，退出可能中断本次尝试。
+// Handler 须响应取消；结果回写仍有独立收尾过程，5 秒不是 goroutine 的强制结束期限。
+func (w *Worker) SendAsync(id int64) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := w.Send(ctx, id); err != nil {
+			// Send 的读取或加锁阶段也可能失败，异步调用须保留这些返回错误。
+			logit.Error(ctx, "OutboxAsyncFailed", logit.Int64("task_id", id), logit.Str("err", errorText(err)))
+		}
+	}()
 }
 
 // RetryPending 按 ID 分页补偿本表的待发送任务，每条任务本轮最多尝试一次。
