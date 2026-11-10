@@ -31,10 +31,9 @@ func TestTryDoManyOutcomes(t *testing.T) {
 			keys := []string{" b ", "a", " b "}
 			backend := tryManyLockerFunc(func(_ context.Context, got []string) (Lock, bool, error) {
 				acquires++
-				if !reflect.DeepEqual(got, []string{" b ", "a"}) {
-					t.Fatalf("应复制去重并保留 key 原值: %q", got)
+				if !reflect.DeepEqual(got, []string{" b ", "a", " b "}) {
+					t.Fatalf("应将原始 keys 交给后端处理: %q", got)
 				}
-				got[0] = "changed"
 				if !tc.acquired {
 					return nil, false, tc.acquireErr
 				}
@@ -87,8 +86,6 @@ func TestTryDoManyValidation(t *testing.T) {
 		fn   func(context.Context) error
 	}{
 		{nil, []string{"a"}, work},
-		{context.Background(), nil, work},
-		{context.Background(), []string{"a", " \t"}, work},
 		{context.Background(), []string{"a"}, nil},
 		{canceled, []string{"a"}, work},
 	} {
@@ -102,6 +99,25 @@ func TestTryDoManyValidation(t *testing.T) {
 	for _, e := range []*Executor{nil, {}} {
 		if _, err := e.TryDoMany(context.Background(), []string{"a"}, work); err == nil {
 			t.Fatal("未初始化执行器")
+		}
+	}
+}
+
+func TestManyKeyValidationPreservesBackendError(t *testing.T) {
+	want := errors.New("后端拒绝 keys")
+	for _, keys := range [][]string{nil, {"a", ""}, {"a", " \t"}} {
+		backend := tryManyLockerFunc(func(_ context.Context, got []string) (Lock, bool, error) {
+			if !reflect.DeepEqual(got, keys) {
+				t.Fatalf("keys 被改变: %q", got)
+			}
+			return nil, false, want
+		})
+		executed, err := TryDoMany(context.Background(), backend, keys, func(context.Context) error {
+			t.Fatal("后端拒绝 keys 后不能执行业务")
+			return nil
+		})
+		if executed || !errors.Is(err, want) {
+			t.Fatalf("丢失后端校验错误: %v %v", executed, err)
 		}
 	}
 }

@@ -44,9 +44,6 @@ func (c *Client) PutObject(ctx context.Context, req PutObjectRequest) (PutObject
 	if err := c.check(ctx); err != nil {
 		return PutObjectResult{}, err
 	}
-	if req.Key == "" {
-		return PutObjectResult{}, errors.New("ossx: key is required")
-	}
 	if req.Body == nil {
 		return PutObjectResult{}, errors.New("ossx: body is required")
 	}
@@ -57,12 +54,6 @@ func (c *Client) PutObject(ctx context.Context, req PutObjectRequest) (PutObject
 func (c *Client) PutFile(ctx context.Context, req PutFileRequest) (PutObjectResult, error) {
 	if err := c.check(ctx); err != nil {
 		return PutObjectResult{}, err
-	}
-	if req.Key == "" {
-		return PutObjectResult{}, errors.New("ossx: key is required")
-	}
-	if req.FilePath == "" {
-		return PutObjectResult{}, errors.New("ossx: file path is required")
 	}
 	file, err := os.Open(req.FilePath)
 	if err != nil {
@@ -135,9 +126,6 @@ func (c *Client) HeadObject(ctx context.Context, key string) (result ObjectInfo,
 	if err = c.check(ctx); err != nil {
 		return
 	}
-	if key == "" {
-		return result, errors.New("ossx: key is required")
-	}
 	callCtx, cancel := context.WithTimeout(ctx, c.requestTimeout)
 	defer cancel()
 	start := time.Now()
@@ -182,8 +170,8 @@ func (c *Client) PresignGetObject(ctx context.Context, key string, expires time.
 	if err := c.check(ctx); err != nil {
 		return "", err
 	}
-	if key == "" || expires < time.Second || expires > 7*24*time.Hour {
-		return "", errors.New("ossx: key and expiry between 1s and 7d are required")
+	if expires < time.Second || expires > 7*24*time.Hour {
+		return "", errors.New("ossx: expiry must be between 1s and 7d")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, c.requestTimeout)
 	defer cancel()

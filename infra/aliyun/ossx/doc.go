@@ -8,6 +8,8 @@
 // New 只构造，不联网验活；Endpoint 可选，须为不含凭据、查询或非根路径的 HTTP(S) URL。
 // 不自动重试或跟随重定向，保留 SDK 的 CRC64 校验；PutObject 不关闭调用方的 Reader。
 // 普通 PUT 遵循 OSS 单对象上传限制，不提供分片上传；Key 原样传递，不改变对象 ACL。
+// Key 由 SDK 校验；PutFile 的路径由 os.Open 校验，错误链保留 SDK 参数错误和文件错误。
+// PutObject 的 Body 非 nil 及签名有效期 1 秒至 7 天仍由本包检查。
 // HeadObject 返回大小、MIME 和 ETag，对象缺失用 errors.Is(err, ErrObjectNotFound) 识别；桶错误原样保留。
 // PresignGetObject 本地签发 GET URL，有效期还受所用临时凭据的剩余期限限制。
 // STS 临时凭据由独立的 stsx.AssumeRole 签发；biz/ossservice 可组合上传策略和签发流程，
@@ -16,6 +18,7 @@
 //
 // OptLogRequests(true) 开启脱敏结果日志，默认关闭；不提供正文日志。
 // logit.WithStart(ctx) 启用请求级耗时，登记与结果日志开关无关。
+// 上传、元数据查询进入 SDK 后的参数错误同样登记；本地前置拒绝及签名不登记。
 // 官方 Credential.GetCredential 不接收 ctx，已开始的刷新不能保证立即取消；
 // 自定义 Reader 也须及时响应读取，调用方不能依赖超时强制中断任意阻塞的 Read。
 // 本包禁止 OSS SDK 调试输出；凭据库的进程级 DEBUG 开关须由部署方关闭。

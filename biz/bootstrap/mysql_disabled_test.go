@@ -13,8 +13,7 @@ func TestBootstrapWithoutMySQL(t *testing.T) {
 		bootstrap.MustRegisterMySQL("disabled", true)
 	},
 		"github.com/bpcoder16/pixiu/infra/mysqlx",
-		"github.com/bpcoder16/pixiu/infra/schemamigrate",
 		"github.com/go-sql-driver/mysql",
-		"gorm.io/",
+		"gorm.io/driver/mysql",
 	)
 }

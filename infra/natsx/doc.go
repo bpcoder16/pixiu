@@ -5,8 +5,12 @@
 // Publish、Request、PublishJetStream、PublishJetStreamAsync 在 ctx 启用 logit.WithStart 时登记请求级耗时，
 // 字段为 NATS_<连接名>_<序号>_duration_ms；日志被过滤时仍登记，供 InfoDuration 等汇总。
 // 耗时不包含日志构建或写入，消费回调不计入下游调用。
-// 操作日志记录完整正文及 Header，不截断或脱敏；Request 同时记录收到的响应。
-// 正文按 UTF-8 字符串输出，非 UTF-8 数据使用 Base64，并记录对应的编码。
+// 操作日志默认记录概要：保留操作、主题、耗时、错误、PubAck 和已有消费元数据。
+// 有消息时记录 request_bytes，Request 收到响应时记录 response_bytes，均为正文字节数，不含 Header。
+// 空正文记录 0；无消息或无响应时不生成对应大小字段。
+// Config.LogDetails 显式设为 true 后，在概要基础上追加完整正文、Header 和正文编码，不截断或脱敏。
+// 详情正文按 UTF-8 字符串输出，非 UTF-8 数据使用 Base64；默认概要路径不扫描或编码正文。
+// 开关按实例固定，不改变连接状态、异步错误事件和原始错误文本；旧应用需要完整消息时须显式开启。
 // Stream/Consumer 使用官方配置；JetStream 消费统一通过 RegisterJetStreamConsumers 注册并自动确认。
 // 第一版原样记录错误文本并保留原始错误链，不脱敏其中可能包含的 URL、密码或 Token。
 //
@@ -58,6 +62,9 @@
 //	}
 //	defer natsx.CloseAll()
 //	return client.Publish(context.Background(), "events.created", []byte("hello"))
+//
+// 上例默认只记录概要；需要完整消息时，在 Config 中设置 LogDetails: true。
+// bootstrap 对应连接配置 nats.<name>.yaml 的 logDetails，默认 false，消费注册文件不接受此字段。
 //
 // NewDefault/NewNamed 只在启动阶段串行调用，不能与 CloseAll 并发；失败不占用名称。
 // 注册表先拒绝重复或关闭状态，连接参数统一由 New 校验。

@@ -1,4 +1,4 @@
-package pgsqlx
+package postgresqlx
 
 import (
 	"context"
@@ -70,7 +70,8 @@ type Config struct {
 	LogSQL bool
 	// InterpolateSQL 控制日志 SQL 是否用参数值替换占位符；开启后可能记录业务数据。
 	InterpolateSQL bool
-	// DisableStatementCache 为不支持预备语句缓存的代理选择 pgx exec 模式。
+	// DisableStatementCache 禁用 pgx 自动命名预备语句缓存，改用 cache_describe
+	// 缓存参数和结果类型；类型描述未命中时多一次往返。
 	DisableStatementCache bool
 }
 
@@ -90,16 +91,16 @@ type preparedEndpoint struct {
 // 客户端由调用方通过 Close 显式关闭，查询时再传入操作 context。
 func New(cfg Config) (client *Client, err error) {
 	if strings.TrimSpace(cfg.Name) == "" {
-		return nil, errors.New("pgsqlx: empty database name")
+		return nil, errors.New("postgresqlx: empty database name")
 	}
 	if cfg.InitTimeout < 0 {
-		return nil, errors.New("pgsqlx: negative initialization timeout")
+		return nil, errors.New("postgresqlx: negative initialization timeout")
 	}
 	if cfg.InitTimeout == 0 {
 		cfg.InitTimeout = 10 * time.Second
 	}
 	if cfg.SlowThreshold < 0 {
-		return nil, errors.New("pgsqlx: negative slow threshold")
+		return nil, errors.New("postgresqlx: negative slow threshold")
 	}
 	if cfg.SlowThreshold == 0 {
 		cfg.SlowThreshold = 200 * time.Millisecond
@@ -130,21 +131,21 @@ func New(cfg Config) (client *Client, err error) {
 
 func prepare(endpoint Endpoint, name, sessionTimeZone string, disableStatementCache bool) (preparedEndpoint, error) {
 	if endpoint.Host == "" || endpoint.Database == "" || endpoint.Username == "" {
-		return preparedEndpoint{}, fmt.Errorf("pgsqlx: endpoint %q requires host, database and username", name)
+		return preparedEndpoint{}, fmt.Errorf("postgresqlx: endpoint %q requires host, database and username", name)
 	}
 	if endpoint.Port < 0 || endpoint.Port > 65535 {
-		return preparedEndpoint{}, fmt.Errorf("pgsqlx: endpoint %q has invalid port", name)
+		return preparedEndpoint{}, fmt.Errorf("postgresqlx: endpoint %q has invalid port", name)
 	}
 	port := endpoint.Port
 	if port == 0 {
 		port = 5432
 	}
 	if endpoint.DialTimeout < 0 {
-		return preparedEndpoint{}, fmt.Errorf("pgsqlx: endpoint %q has negative dial timeout", name)
+		return preparedEndpoint{}, fmt.Errorf("postgresqlx: endpoint %q has negative dial timeout", name)
 	}
 	pool, err := normalizePool(endpoint.Pool)
 	if err != nil {
-		return preparedEndpoint{}, fmt.Errorf("pgsqlx: endpoint %q: %w", name, err)
+		return preparedEndpoint{}, fmt.Errorf("postgresqlx: endpoint %q: %w", name, err)
 	}
 	locationName := endpoint.Location
 	if locationName == "" {
@@ -152,11 +153,11 @@ func prepare(endpoint Endpoint, name, sessionTimeZone string, disableStatementCa
 	}
 	location, err := time.LoadLocation(locationName)
 	if err != nil {
-		return preparedEndpoint{}, fmt.Errorf("pgsqlx: endpoint %q has invalid location: %w", name, err)
+		return preparedEndpoint{}, fmt.Errorf("postgresqlx: endpoint %q has invalid location: %w", name, err)
 	}
 
 	if endpoint.Charset != "" && !strings.EqualFold(endpoint.Charset, "UTF8") && !strings.EqualFold(endpoint.Charset, "UTF-8") {
-		return preparedEndpoint{}, fmt.Errorf("pgsqlx: endpoint %q has unsupported charset", name)
+		return preparedEndpoint{}, fmt.Errorf("postgresqlx: endpoint %q has unsupported charset", name)
 	}
 
 	sslMode := endpoint.SSLMode
@@ -187,7 +188,7 @@ func prepare(endpoint Endpoint, name, sessionTimeZone string, disableStatementCa
 		if parseErr, ok := errors.AsType[*pgconn.ParseConfigError](err); ok && parseErr.Unwrap() != nil {
 			return preparedEndpoint{}, initializationError("configure", name, parseErr.Unwrap())
 		}
-		return preparedEndpoint{}, fmt.Errorf("pgsqlx: endpoint %q has invalid connection settings", name)
+		return preparedEndpoint{}, fmt.Errorf("postgresqlx: endpoint %q has invalid connection settings", name)
 	}
 	if endpoint.DialTimeout != 0 {
 		driver.ConnectTimeout = endpoint.DialTimeout
@@ -201,7 +202,9 @@ func prepare(endpoint Endpoint, name, sessionTimeZone string, disableStatementCa
 		driver.RuntimeParams["timezone"] = sessionTimeZone
 	}
 	if disableStatementCache {
-		driver.DefaultQueryExecMode = pgx.QueryExecModeExec
+		// 按数据库参数类型编码，避免 exec 将 time.Time 转为 UTC 后写入无时区字段。
+		driver.DefaultQueryExecMode = pgx.QueryExecModeCacheDescribe
+		driver.StatementCacheCapacity = 0
 	}
 	return preparedEndpoint{
 		name:     name,
@@ -251,24 +254,24 @@ func open(ctx context.Context, cfg Config, prepared preparedEndpoint) (*gorm.DB,
 // 不保留含凭据的驱动配置；context 和 SQLSTATE 维持原有语义，网络与 TLS 错误保留具体原因。
 func initializationError(stage, endpoint string, err error) error {
 	if errors.Is(err, context.Canceled) {
-		return fmt.Errorf("pgsqlx: %s endpoint %q: %w", stage, endpoint, context.Canceled)
+		return fmt.Errorf("postgresqlx: %s endpoint %q: %w", stage, endpoint, context.Canceled)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("pgsqlx: %s endpoint %q: %w", stage, endpoint, context.DeadlineExceeded)
+		return fmt.Errorf("postgresqlx: %s endpoint %q: %w", stage, endpoint, context.DeadlineExceeded)
 	}
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
-		return fmt.Errorf("pgsqlx: %s endpoint %q: SQLSTATE %s", stage, endpoint, pgErr.SQLState())
+		return fmt.Errorf("postgresqlx: %s endpoint %q: SQLSTATE %s", stage, endpoint, pgErr.SQLState())
 	}
 	if connectErr, ok := errors.AsType[*pgconn.ConnectError](err); ok {
 		err = connectErr.Unwrap()
 	}
-	return fmt.Errorf("pgsqlx: %s endpoint %q: %s", stage, endpoint, err)
+	return fmt.Errorf("postgresqlx: %s endpoint %q: %s", stage, endpoint, err)
 }
 
 // MasterDB 返回带 ctx 的主库会话。
 func (c *Client) MasterDB(ctx context.Context) *gorm.DB {
 	if ctx == nil {
-		panic("pgsqlx: nil context")
+		panic("postgresqlx: nil context")
 	}
 	return c.cluster.Master(ctx)
 }
@@ -276,7 +279,7 @@ func (c *Client) MasterDB(ctx context.Context) *gorm.DB {
 // SlaveDB 返回带 ctx 的从库会话；未配置从库时使用主库。
 func (c *Client) SlaveDB(ctx context.Context) *gorm.DB {
 	if ctx == nil {
-		panic("pgsqlx: nil context")
+		panic("postgresqlx: nil context")
 	}
 	return c.cluster.Slave(ctx)
 }

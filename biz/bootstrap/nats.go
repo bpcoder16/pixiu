@@ -37,9 +37,10 @@ func initNATS(resources *lifecycle.Stack) error {
 	return natsInstances.initialize(resources)
 }
 
-// 实例身份来自声明；文件开放连接参数、日志路由和 namespace，不解码完整官方选项或业务消费配置。
+// 实例身份来自声明；文件开放连接参数、日志配置和 namespace，不解码完整官方选项或业务消费配置。
 type natsFileConfig struct {
 	LoggerName     string            `mapstructure:"loggerName"`
+	LogDetails     bool              `mapstructure:"logDetails"`
 	Namespace      string            `mapstructure:"namespace"`
 	URLs           []string          `mapstructure:"urls"`
 	Username       string            `mapstructure:"username"`
@@ -71,6 +72,7 @@ func (cfg *natsFileConfig) clientConfig(name string) (natsx.Config, error) {
 	return natsx.Config{
 		Name:           name,
 		LoggerName:     cfg.LoggerName,
+		LogDetails:     cfg.LogDetails,
 		Namespace:      cfg.Namespace,
 		URLs:           cfg.URLs,
 		Username:       cfg.Username,

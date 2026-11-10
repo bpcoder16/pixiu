@@ -1,4 +1,4 @@
-// Package bootstrap 提供日志、MySQL、Redis、Elasticsearch、OSS、STS、阿里云 ES 和 NATS 多实例的通用初始化入口，
+// Package bootstrap 提供日志、MySQL、PostgreSQL、Redis、Elasticsearch、OSS、STS、阿里云 ES 和 NATS 多实例的通用初始化入口，
 // 以及应用运行管理器、Gin Engine、HTTP、realtime 和 Cron 服务的构造方法，供项目自己的 bootstrap 组装。
 //
 // # 可选构建标签
@@ -9,7 +9,8 @@
 //   - pixiu_bootstrap_no_aliyun_oss：阿里云 OSS。
 //   - pixiu_bootstrap_no_aliyun_sts：阿里云 STS。
 //   - pixiu_bootstrap_no_aliyun_es：阿里云 ES 管理端，与 Elasticsearch 数据面独立。
-//   - pixiu_bootstrap_no_mysql：MySQL 及 bootstrap 的迁移、种子初始化入口。
+//   - pixiu_bootstrap_no_mysql：MySQL 及对应的迁移、种子初始化入口。
+//   - pixiu_bootstrap_no_postgresql：PostgreSQL 及对应的迁移、种子初始化入口。
 //   - pixiu_bootstrap_no_redis：Redis、RedisLock 装配及 Cron 的 Redis 分布式锁。
 //   - pixiu_bootstrap_no_nats：NATS 客户端装配、消费服务及注册配置解析。
 //
@@ -23,15 +24,20 @@
 //	# 不使用三个阿里云组件。
 //	go build -tags=pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es -o app .
 //	# 全部禁用；构建、运行和测试使用一致的标签。
-//	BOOTSTRAP_TAGS='pixiu_bootstrap_no_es,pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es,pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats'
+//	BOOTSTRAP_TAGS='pixiu_bootstrap_no_es,pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es,pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_postgresql,pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats'
 //	go build -tags="$BOOTSTRAP_TAGS" -o app .
 //	go run -tags="$BOOTSTRAP_TAGS" .
 //	go test -tags="$BOOTSTRAP_TAGS" ./...
 //
 // 禁用后的基础 MustRegisterXxx(name, isDefault) 仍存在，但显式调用立即 panic 并指出标签。
 // 基础初始化不读取该模块配置、不创建客户端、不登记关闭；app.yaml 不新增 enabled 开关。
-// 禁用 MySQL 时，SeedOptions、RunMySQLMigration、RunMySQLInitialization 不参与构建；
+// 禁用 MySQL 时，RunMySQLInitialization 不参与构建；
+// 禁用 PostgreSQL 时，RunPostgreSQLInitialization 不参与构建。
+// 只有同时禁用两者时才排除共享的 SeedOptions 和迁移核心依赖；
 // 禁用 Redis 时没有 MustRegisterRedisLock；禁用 NATS 时没有 NewNATSConsumerService。
+// 任一数据库可用时保留 MustRegisterOutbox；同时禁用两种数据库时排除全部 Outbox 装配入口。
+// MustRegisterJetStreamOutbox 另要求 NATS 未禁用；选择被禁用的数据库后端在声明时 panic。
+// 数据库标签同时裁剪 outbox 对应驱动的错误适配，outbox.NewStore 拒绝被禁用的后端。
 // 仍调用这些专用 API 的应用会编译失败，须移除相关调用或用对应构建约束隔离业务文件。
 // 日志、时区、HTTP/Gin、WebSocket 和普通 Cron 保留；禁用 Redis 后配置非空 Cron lock（含 {}）会明确报错，
 // 不降级为无锁执行；省略 lock 或设为 null 不受影响。
@@ -72,9 +78,9 @@
 // 示例使用标准库 context、errors、time，以及 pixiu 的 biz/appconfig、biz/bootstrap、biz/lockx/redislock、
 // lifecycle、logit。初始化 panic 原样传播，已创建资源由应用的 defer 关闭。
 // 通用入口接收 *appconfig.AppConfig；HTTP 与 Cron 共用 env/log 配置及初始化流程。
-// 先应用 env 时区，再依次初始化日志、OSS、STS、阿里云 ES、MySQL、Redis、Elasticsearch 和 NATS；
+// 先应用 env 时区，再依次初始化日志、OSS、STS、阿里云 ES、MySQL、PostgreSQL、Redis、Elasticsearch 和 NATS；
 // 共享客户端仅初始化已声明的实例。HTTP、Cron 和 NATS 消费者完成排空或超时取消后，
-// 资源栈依次关闭 NATS、Elasticsearch、Redis、MySQL、阿里云 ES、STS、OSS、日志。
+// 资源栈依次关闭 NATS、Elasticsearch、Redis、PostgreSQL、MySQL、阿里云 ES、STS、OSS、日志。
 // 该顺序按组件类别描述，不保证同一组件内多个命名实例的关闭顺序。
 //
 // MustRegisterRedisLock(name, isDefault, redisName, cfg) 只保存代码声明，不读取锁配置文件。
@@ -83,6 +89,43 @@
 // Redis 客户端须禁用命令自动重试（maxRetries: -1）；依赖缺失、配置或登记失败会中止启动。
 // 执行器不新增连接池或关闭动作，业务排空后仍由 Redis 原有资源登记回收。
 // 锁实例名不参与 key 构造，默认执行器与同名 Named 实例共享；未声明锁时跳过该装配阶段。
+//
+// 默认 Store 和 Worker 可由启动声明统一装配，实例本身不使用名称；数据库与 NATS 名称选择已有依赖。
+// 以下片段替换应用装配示例中的相应声明，config 和 resources 由应用提前准备：
+//
+//	bootstrap.MustRegisterMySQL("orders", true)
+//	bootstrap.MustRegisterNATS("events", true)
+//	bootstrap.MustRegisterJetStreamOutbox(outbox.MySQL, "orders", "events")
+//	bootstrap.MustBaseInit(config, &resources)
+//
+// 示例另需导入 biz/outbox。快捷入口支持多个 NATS 名称，声明时复制名称清单。
+// 两种 MustBaseInit 入口均在数据库和 NATS 就绪后、WebSocket 工厂执行前创建默认 Store 与 Worker。
+// Store 借用所选数据库的 MasterDB，展示时区使用 env.TimeLocation()；依赖无需设置为默认实例。
+// Handler 在此阶段创建，不在声明阶段访问客户端。Outbox 未声明时跳过，不读额外配置文件。
+//
+// 需要多个 Kind/Version 或混合 Handler 时，使用通用入口替换上述快捷声明（两者只能选一个）：
+//
+//	bootstrap.MustRegisterOutbox(outbox.MySQL, "orders", func() map[outbox.HandlerKey]outbox.Handler {
+//		return map[outbox.HandlerKey]outbox.Handler{
+//			{
+//				Kind:    natsoutbox.JetStreamKind,
+//				Version: natsoutbox.JetStreamVersion,
+//			}: natsoutbox.NewJetStreamHandler("events"),
+//			{
+//				Kind:    "project.notification",
+//				Version: 1,
+//			}: sendNotification,
+//		}
+//	})
+//
+// 通用示例另需导入 biz/outbox/natsoutbox；sendNotification 由应用提供，签名为 outbox.Handler。
+// 工厂同步返回 Handler 表，随后由 Worker 复制；工厂只构造 Handler，不迁移表或执行任务，panic 原样传播。
+// 重复声明、nil 工厂、非法名称/后端和初始化开始后声明均 panic；依赖缺失或 Handler 无效中止启动。
+// 初始化失败不支持同进程重试，已成功创建的默认实例不重置；底层资源仍由应用关闭栈回收。
+// 表迁移在 MustBaseInit 后通过现有清单登记 &outbox.Record{}，迁移完成后再启动业务和 cron。
+// 业务事务内调用 natsoutbox.EnqueueJetStreamTx(tx, msg)，最外层事务提交后调用 outbox.Send/SendAsync。
+// cron Handler 调用 outbox.RetryPending(ctx, batchSize)，补偿频率和分布式锁由项目现有 cron 配置决定。
+// 装配不启动后台调度、不增加资源所有权，也不改变 SendAsync 无等待/排空的语义。
 //
 // 新项目应先完成 MustBaseInit，再通过 logit.Default、logit.With 或 logit.Named 创建和保存模块 Logger，
 // 如上例所示；不要在先于 bootstrap 执行的包变量初始化或 Go 的 init() 中缓存这些 Logger。
@@ -253,7 +296,7 @@
 // 配置加载只发布环境，设置默认时区由本包负责；必须在并发使用时间或日志前执行。
 // 此设置只在启动阶段应用一次，运行期不切换，关闭或后续初始化失败时不恢复。
 // time.Now 和日志轮转使用配置时区；无时区字符串仍需使用 time.ParseInLocation。
-// MySQL 的 location、sessionTimeZone 沿用自身配置与默认值，不自动继承应用时区。
+// MySQL 和 PostgreSQL 的 location、sessionTimeZone 沿用自身配置与默认值，不自动继承应用时区。
 //
 // MySQL 声明只包含实例名和默认标记；名称为非空 ASCII 字母、数字、下划线、连字符组合。
 // 重复名称、第二个默认声明或初始化开始后追加声明均 panic；允许没有默认实例。
@@ -271,8 +314,21 @@
 // 首个实例创建前只登记一次 mysqlx.CloseAll，不再逐个登记 Client.Close；
 // 部分创建失败的连接由 mysqlx 清理，此前已完成的实例由应用栈统一关闭。
 //
+// PostgreSQL 使用 MustRegisterPostgreSQL(name, isDefault) 声明，读取 postgresql.<name>.yaml。
+// 模板见 conf.example/postgresql.example.yaml，兼容性验证以 PostgreSQL 18 为基准。
+// 声明、默认实例和 CloseAll 管理方式与 MySQL 一致，两个组件独立判重；未声明则跳过。
+// 主从只配置 host、port，其他字段在顶层共享；省略 logSQL、interpolateSQL 时默认 true。
+// TLS 使用 sslMode、sslRootCert、sslCert、sslKey；证书路径原样传递，配置解释见 postgresqlx 包文档。
+// disableStatementCache 沿用 postgresqlx 的类型描述缓存模式，不新增读写超时配置。
+// 在 MustBaseInit 前声明实例，初始化后使用 postgresqlx.Default()/Named(name)；例如：
+//
+//	bootstrap.MustRegisterPostgreSQL("orders", true)
+//	bootstrap.MustBaseInit(config, &resources)
+//	client := postgresqlx.Default()
+//	_ = client
+//
 // Redis 使用 MustRegisterRedis(name, isDefault) 声明，与 MySQL 独立判重，允许同名。
-// MySQL 初始化后，读取配置目录下的 redis.<name>.yaml，先严格解析全部文件并完成文件层校验，
+// MySQL 和 PostgreSQL 初始化后，读取配置目录下的 redis.<name>.yaml，先严格解析全部文件并完成文件层校验，
 // 再按声明顺序由 redisx 校验客户端配置、创建并 Ping 验活；未声明时不初始化或关闭 Redis 模块。
 // 模板见 conf.example/redis.example.yaml；首版使用单节点 TCP，文件不接受 name、isDefault。
 // host、port、username、password、db、驱动超时、maxRetries、pool 和日志开关由文件提供。
@@ -285,9 +341,9 @@
 // 创建首个实例前只登记一次 redisx.CloseAll，单个失败实例由 redisx 立即清理；
 // 此前成功创建的共享实例和日志交给应用资源栈关闭，不重复登记单个客户端 Close。
 // 关闭前先停止并等待外部生产者及业务管理的订阅；NATS 托管消费由其 CloseAll 排空，
-// 再依次关闭 Elasticsearch、Redis、MySQL、阿里云 ES、STS、OSS 与日志。资源栈共享总期限，超时后入口立即退出。
+// 再依次关闭 Elasticsearch、Redis、PostgreSQL、MySQL、阿里云 ES、STS、OSS 与日志。资源栈共享总期限，超时后入口立即退出。
 //
-// Elasticsearch 使用 MustRegisterElasticsearch(name, isDefault) 声明，与 MySQL、Redis 独立判重。
+// Elasticsearch 使用 MustRegisterElasticsearch(name, isDefault) 声明，与 MySQL、PostgreSQL、Redis 独立判重。
 // 默认构建支持全部三个版本；pixiu_bootstrap_no_es 排除该装配，具体命令见可选构建标签。
 // 阿里云 ES 管理端使用独立的装配入口和 pixiu_bootstrap_no_aliyun_es 标签。
 // Redis 初始化后读取 elasticsearch.<name>.yaml，文件前缀统一小写；未声明时跳过。
@@ -456,18 +512,22 @@
 // 接入后台任务后，应用必须先停止入口并等待任务退出，再关闭下游资源；
 // 取消 context 不能代替等待。注册及 MustBaseInit 仅供启动期串行调用；
 // 参数校验通过即封闭注册，重复初始化或失败后重试会 panic。
-// 项目可在 MustBaseInit 后、业务启动前调用 RunMySQLMigration(name, tables)，
+// 项目可在 MustBaseInit 后、业务启动前调用 RunMySQLInitialization(name, tables, SeedOptions{})，
 // tables 使用 infra/schemamigrate.Table；严格读取 migrate.<name>.yaml，文件必需。
 // enabled 默认 false；开启后逐表执行 GORM AutoMigrate，内部创建 Context，timeout 默认 5m。
 // 只迁移显式登记的表，忽略模型关联及其外键；关联表和多对多中间表须单独登记。
-// 关闭或空清单不取数据库；迁移核心从 mysqlx.Named(name) 获取主库，失败返回错误与部分报告。
+// 关闭或表与种子清单均为空时不取数据库；迁移核心从 mysqlx.Named(name) 获取主库，失败返回错误与部分报告。
 // 迁移不会自动挂到 MustBaseInit 或连接构造中；没有迁移锁，发布时避免多实例同时执行。
+// PostgreSQL 对应 RunPostgreSQLInitialization(name, tables, SeedOptions{})，从 postgresqlx.Named(name) 获取主库。
+// 两类入口共用 migrate.<name>.yaml、SeedOptions 和超时规则；同名实例共享配置文件，
+// 需要分别控制时使用不同实例名。PostgreSQL 支持 Table.Comment，Charset/Collation 仍仅支持 MySQL。
 // 模板见 conf.example/migrate.example.yaml，详细契约见 infra/schemamigrate/doc.go。
 // 需要 SQL 种子时调用 RunMySQLInitialization(name, tables, SeedOptions{Files: files, Seeds: seeds, Timeout: 2*time.Minute})。
 // Files 是项目的 fs.FS，Seeds 是 []schemamigrate.Seed；表清单和 SQL 文件继续由项目维护。
 // enabled 同时控制两阶段，迁移成功后才执行 seeds；表清单为空仍允许校准已有表的种子。
 // 种子整批使用独立 Timeout，从种子阶段开始计时；零值默认 2m，负值非法，配置 timeout 仅约束结构迁移。
 // 记录数与有效 SQL 行数相同时保留内容，不同时事务删除 Where 范围再导入；空 Where 作用于整表。
+// PostgreSQL 种子显式插入自增 ID 不会推进对应序列；混用固定 ID 与自动生成 ID 时，项目须自行校准序列。
 // 返回报告仅包含结构迁移结果；任一阶段失败均应停止业务启动，详见 schemamigrate 包文档中的重建边界。
 //
 // 需要显式设置运行期总关闭预算时，使用 StartWithConfig（另需导入标准库 time）：

@@ -1,0 +1,41 @@
+# PostgreSQL 18 参考配置；复制为 postgresql.<name>.yaml。
+# name 和 isDefault 仅由 MustRegisterPostgreSQL(name, isDefault) 指定。
+# 时间使用带单位字符串；除日志开关外，默认值及校验沿用 postgresqlx。
+initTimeout: "10s"
+
+# 会话时区与无时区 timestamp 的读取时区独立，不继承应用时区。
+sessionTimeZone: "UTC"
+slowThreshold: "200ms"
+# 两个日志开关省略时均默认 true；插值可能记录业务数据。
+logSQL: true
+interpolateSQL: true
+# 禁用自动命名预备语句缓存，保留参数和结果类型描述缓存。
+# 类型描述未命中时多一次往返；代理须支持扩展查询协议。
+disableStatementCache: false
+
+# 主从共用连接参数；每个端点仍有独立连接池。
+database: "example"
+username: "example"
+password: ""
+charset: "UTF8"
+# 仅解释 timestamp without time zone 的年月日时分秒，不改变 timestamptz 的时刻。
+location: "UTC"
+# 按部署要求配置 TLS；空值使用 prefer，证书路径原样传给 pgx。
+sslMode: "verify-full"
+sslRootCert: ""
+sslCert: ""
+sslKey: ""
+dialTimeout: "3s"
+
+pool:
+  maxOpenConns: 100
+  maxIdleConns: 10
+  connMaxLifetime: "3m"
+  connMaxIdleTime: "1m"
+
+master:
+  host: "127.0.0.1"
+  port: 5432
+
+# 每项只填 host、port；未配置从库时 SlaveDB 回退主库，多个从库轮询选择。
+slaves: []

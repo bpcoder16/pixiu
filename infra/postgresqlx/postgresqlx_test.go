@@ -1,4 +1,4 @@
-package pgsqlx
+package postgresqlx
 
 import (
 	"bytes"
@@ -110,7 +110,7 @@ func TestPrepareConnectionAndPool(t *testing.T) {
 		cfg.Database != "orders/test" || cfg.User != "a@b" || cfg.Password != "p@ss:word" ||
 		cfg.ConnectTimeout != 2*time.Second || cfg.RuntimeParams["timezone"] != "Asia/Shanghai" ||
 		cfg.RuntimeParams["client_encoding"] != "UTF8" || prepared.location.String() != "Asia/Shanghai" ||
-		cfg.DefaultQueryExecMode != pgx.QueryExecModeExec || cfg.TLSConfig != nil {
+		cfg.DefaultQueryExecMode != pgx.QueryExecModeCacheDescribe || cfg.StatementCacheCapacity != 0 || cfg.TLSConfig != nil {
 		t.Fatalf("连接配置映射错误: host=%q port=%d db=%q user=%q mode=%v", cfg.Host, cfg.Port, cfg.Database, cfg.User, cfg.DefaultQueryExecMode)
 	}
 	if prepared.pool.MaxOpenConns != 3 || prepared.pool.MaxIdleConns != 3 ||
@@ -369,12 +369,12 @@ func TestGORMDiagnosticCallerAndLogMode(t *testing.T) {
 		record := records[i]
 		details := record[logit.DownstreamDetailsKey].(map[string]any)
 		caller, ok := record["caller"].(string)
-		if details["msg"] != want || !ok || !strings.HasPrefix(caller, "infra/pgsqlx/log.go:") || seen[caller] {
+		if details["msg"] != want || !ok || !strings.HasPrefix(caller, "infra/postgresqlx/log.go:") || seen[caller] {
 			t.Fatalf("GORM LogMode 或诊断 caller 错误: %v", records)
 		}
 		seen[caller] = true
 	}
-	if caller, ok := records[3]["caller"].(string); !ok || !strings.HasPrefix(caller, "infra/pgsqlx/log.go:") || seen[caller] {
+	if caller, ok := records[3]["caller"].(string); !ok || !strings.HasPrefix(caller, "infra/postgresqlx/log.go:") || seen[caller] {
 		t.Fatalf("查询日志 caller 未指向 Trace 入口: %v", records[3])
 	}
 }

@@ -10,8 +10,11 @@ import (
 
 func tableOptions(db *gorm.DB, table Table) (string, error) {
 	if db.Dialector.Name() != "mysql" {
-		if table.Comment != "" || table.Charset != "" || table.Collation != "" {
-			return "", fmt.Errorf("table comments, charset and collation currently require MySQL")
+		if table.Charset != "" || table.Collation != "" {
+			return "", fmt.Errorf("charset and collation require MySQL")
+		}
+		if table.Comment != "" && db.Dialector.Name() != "postgres" {
+			return "", fmt.Errorf("table comments require MySQL or PostgreSQL")
 		}
 		return "", nil
 	}

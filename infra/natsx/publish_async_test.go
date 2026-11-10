@@ -80,6 +80,14 @@ func TestPublishJetStreamAsyncOwnershipTraceAndDedup(t *testing.T) {
 		details, _ := record[logit.DownstreamDetailsKey].(map[string]any)
 		if details["operation"] == "jetStreamPublishAsync" {
 			submissions++
+			assertMessageLogMode(t, details, false)
+			wantBytes := 0
+			if submissions == 1 {
+				wantBytes = len("original")
+			}
+			if details["request_bytes"] != float64(wantBytes) || details["response_bytes"] != nil {
+				t.Fatalf("异步提交消息大小错误: %v", details)
+			}
 			if details["ack"] != nil {
 				t.Fatal("提交日志不应声称取得 ACK")
 			}

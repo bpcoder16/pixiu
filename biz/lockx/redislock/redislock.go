@@ -106,9 +106,6 @@ func (l *Locker) Lock(ctx context.Context, key string) (lockx.Lock, error) {
 	if ctx == nil {
 		return nil, errors.New("redislock: nil context")
 	}
-	if strings.TrimSpace(key) == "" {
-		return nil, errors.New("redislock: empty key")
-	}
 	waitCtx, cancel := context.WithTimeout(ctx, l.waitTimeout)
 	defer cancel()
 	// 等待下限和随机偏移范围只依赖固定配置，每次获取计算一次即可。

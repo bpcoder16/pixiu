@@ -102,6 +102,12 @@ func TestManyInvalidInputSendsNoCommands(t *testing.T) {
 		if held, acquired, err := locker.TryLockMany(tc.ctx, tc.keys); held != nil || acquired || err == nil {
 			t.Fatalf("无效请求被放行: %v %v %v", held, acquired, err)
 		}
+		if executed, err := lockx.TryDoMany(tc.ctx, locker, tc.keys, func(context.Context) error {
+			t.Fatal("无效 keys 不能执行业务")
+			return nil
+		}); executed || err == nil {
+			t.Fatalf("执行器放行无效请求: %v %v", executed, err)
+		}
 	}
 	for _, locker := range []*Locker{nil, {}} {
 		if _, _, err := locker.TryLockMany(context.Background(), []string{"a"}); err == nil {

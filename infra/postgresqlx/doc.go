@@ -1,15 +1,15 @@
-// Package pgsqlx 提供基于 GORM 的 PostgreSQL 连接池、显式主从选择和统一查询日志。
+// Package postgresqlx 提供基于 GORM 的 PostgreSQL 连接池、显式主从选择和统一查询日志。
 //
 // 创建入口只接收 Config，客户端由应用通过 Close 或 CloseAll 显式关闭。
 // InitTimeout 为全部主从端点共用的初始化超时，默认 10 秒；实际操作仍由请求 context 控制。
 // 应用启动时创建客户端，查询时传入请求 context；以下示例需导入 context、
-// github.com/bpcoder16/pixiu/infra/pgsqlx 和 gorm.io/gorm：
+// github.com/bpcoder16/pixiu/infra/postgresqlx 和 gorm.io/gorm：
 //
-//	client, err := pgsqlx.New(pgsqlx.Config{
+//	client, err := postgresqlx.New(postgresqlx.Config{
 //	    Name: "orders",
 //	    SessionTimeZone: "UTC",
 //	    LogSQL: true,
-//	    Master: pgsqlx.Endpoint{
+//	    Master: postgresqlx.Endpoint{
 //	        Host: "db.example.com",
 //	        Database: "orders",
 //	        Username: dbUser,
@@ -45,14 +45,14 @@
 //	if err := stack.Register(func() error { return logit.Close(logger) }); err != nil {
 //	    return err
 //	}
-//	if err := stack.Register(pgsqlx.CloseAll); err != nil {
+//	if err := stack.Register(postgresqlx.CloseAll); err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	_, err := pgsqlx.NewNamed(cfg)
+//	_, err := postgresqlx.NewNamed(cfg)
 //	if err != nil {
 //	    return errors.Join(err, stack.Close())
 //	}
-//	client := pgsqlx.Named(cfg.Name)
+//	client := postgresqlx.Named(cfg.Name)
 //	_ = client
 //	// 停止使用命名客户端的任务后，统一关闭连接池，最后关闭日志。
 //	return stack.Close()
@@ -60,7 +60,14 @@
 // 业务仓库决定是否执行自动迁移，模型只传给主库。事务和要求读己之写的查询使用
 // MasterDB；其他可接受从库延迟的读取可使用 SlaveDB。GORM 的 Info、Warn、Error
 // 诊断消息按对应级别记录；LogSQL 只控制正常查询的 SQL 日志。
+// Raw(...).Scan(...) 的插值由客户端 InterpolateSQL 控制；Session 更换 Logger 后，
+// 日志仍由会话 Logger 接收，但其 ParameterizedQueries 不覆盖 Scan 的插值配置。
+// 需要隐藏绑定参数时，在创建客户端时设置 InterpolateSQL=false；普通 Row/Rows 沿用会话过滤规则。
 // Charset 固定为 UTF8；Location 默认 Asia/Shanghai，只解释无时区 timestamp，不改变 timestamptz。
+// DisableStatementCache 禁用 pgx 自动命名预备语句缓存，改用 cache_describe 按数据库参数类型编码，
+// 保留无时区 timestamp 的年月日时分秒及 timestamptz 的时刻；此开关不禁止显式 Prepare 或 GORM PrepareStmt。
+// 类型描述未命中时多一次往返，后续复用描述；表结构或 search_path 变化可能使描述失效并导致查询报错，
+// 模块不自动重试。代理须支持扩展查询协议的 Parse/Describe。
 // 初始化错误保留网络、TLS 和证书配置的具体原因，服务端错误保留 SQLSTATE；
 // 返回错误不携带完整连接 URI 或含凭据的驱动配置。
 // ctx 已调用 logit.WithStart 时，每次 GORM Trace 以 PostgreSQL_<Name> 为前缀自动编号记录下游耗时，
@@ -68,14 +75,14 @@
 //
 // 单个逻辑下游可显式初始化默认客户端，省去每次按名称查询。cfg 已由应用构造：
 //
-//	if _, err := pgsqlx.NewDefault(cfg); err != nil {
+//	if _, err := postgresqlx.NewDefault(cfg); err != nil {
 //	    return err
 //	}
-//	return pgsqlx.Default().MasterDB(ctx).Create(&order).Error
+//	return postgresqlx.Default().MasterDB(ctx).Create(&order).Error
 //
 // 启动阶段由调用方串行调用 NewNamed 和 NewDefault，不并发初始化。
 // Name 仍必填；Default() 与 Named(cfg.Name) 返回同一实例，New 和 NewNamed
 // 不自动设置默认实例。重复默认初始化报错；失败可重试。未初始化或 CloseAll
 // 开始后调用 Default 会 panic。应用停止查询后调用 CloseAll，默认与命名实例
 // 统一关闭一次，日志最后关闭；默认实例不要单独登记 Close。
-package pgsqlx
+package postgresqlx
