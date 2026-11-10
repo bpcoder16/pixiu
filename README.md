@@ -180,6 +180,8 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | [`biz/appconfig`](biz/appconfig/doc.go) | 直接定义 env/log，严格解析应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/appconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，默认及命名执行器，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
+| [`biz/outbox`](biz/outbox/doc.go) | MySQL/PostgreSQL 自增任务 ID、同事务入表、行锁并发发送、外部 cron 补偿与过期失败 | 数据库提交后的可靠发送意图 |
+| [`biz/outbox/natsoutbox`](biz/outbox/natsoutbox/doc.go) | 复用 natsx JetStream，固定消息 ID 并等待 PubAck | 事务消息发布与失败补偿 |
 
 ## 分层架构
 
