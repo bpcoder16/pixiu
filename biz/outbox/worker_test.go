@@ -69,6 +69,117 @@ func TestSendAndCronRounds(t *testing.T) {
 	})
 }
 
+func TestRetryPendingContinuesAfterAttemptTimeout(t *testing.T) {
+	eachDatabase(t, func(t *testing.T, s *Store, db *gorm.DB) {
+		first := enqueue(t, s, db)
+		second := enqueue(t, s, db)
+		calls := map[int64]int{}
+		w := testWorker(t, s, func(ctx context.Context, d Delivery) error {
+			calls[d.ID]++
+			if d.ID == first {
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) > 5*time.Second {
+					t.Error("单条补偿必须有独立的 5 秒期限")
+					return errors.New("缺少单条期限")
+				}
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			return nil
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := w.RetryPending(ctx, 1); !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+			t.Fatalf("单条超时应保留错误但不取消整轮: %v，整轮: %v", err, ctx.Err())
+		}
+		if calls[first] != 1 || calls[second] != 1 {
+			t.Fatalf("超时不能阻挡后续页，也不能在本轮重复尝试: %v", calls)
+		}
+		row, err := s.Get(ctx, first)
+		if err != nil || row.Status != Pending || row.Attempts != 1 || row.LastError != context.DeadlineExceeded.Error() {
+			t.Fatalf("单条超时应提交失败记录: %+v %v", row, err)
+		}
+		row, err = s.Get(ctx, second)
+		if err != nil || row.Status != Succeeded {
+			t.Fatalf("后续健康任务应成功: %+v %v", row, err)
+		}
+	})
+}
+
+func TestRetryPendingStartsFreshAfterRoundCancellation(t *testing.T) {
+	eachDatabase(t, func(t *testing.T, s *Store, db *gorm.DB) {
+		first := enqueue(t, s, db)
+		second := enqueue(t, s, db)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		calls := map[int64]int{}
+		sendErr := errors.New("持续发送失败")
+		w := testWorker(t, s, func(ctx context.Context, d Delivery) error {
+			calls[d.ID]++
+			if d.ID == first {
+				if d.Attempt == 1 {
+					cancel()
+					return ctx.Err()
+				}
+				return sendErr
+			}
+			return nil
+		})
+		if err := w.RetryPending(ctx, 1); !errors.Is(err, context.Canceled) {
+			t.Fatalf("本轮取消应返回取消原因: %v", err)
+		}
+		// 下一轮重新取扫描范围，同时重试早期失败任务并纳入新增任务。
+		third := enqueue(t, s, db)
+		if err := w.RetryPending(context.Background(), 1); !errors.Is(err, sendErr) {
+			t.Fatalf("下一轮应从头重试 pending 任务: %v", err)
+		}
+		if calls[first] != 2 || calls[second] != 1 || calls[third] != 1 {
+			t.Fatalf("下一轮不能沿用旧扫描位置或上界: %v", calls)
+		}
+	})
+}
+
+func TestRetryPendingConcurrentCallsKeepRowLock(t *testing.T) {
+	eachDatabase(t, func(t *testing.T, s *Store, db *gorm.DB) {
+		first := enqueue(t, s, db)
+		second := enqueue(t, s, db)
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var once sync.Once
+		defer once.Do(func() { close(release) })
+		w := testWorker(t, s, func(_ context.Context, d Delivery) error {
+			if d.ID == first {
+				close(entered)
+				<-release
+			}
+			return nil
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- w.RetryPending(ctx, 1) }()
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("未开始补偿")
+		}
+		// 模拟分布式锁失租后的重叠调用：仍由数据库跳过持锁行，不增加本地互斥。
+		if err := w.RetryPending(ctx, 1); err != nil {
+			t.Fatalf("重叠调用应跳过持锁行并继续处理: %v", err)
+		}
+		if row, err := s.Get(ctx, second); err != nil || row.Status != Succeeded || row.Attempts != 1 {
+			t.Fatalf("后续任务应完成一次发送: %+v %v", row, err)
+		}
+		once.Do(func() { close(release) })
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if err := w.RetryPending(ctx, 1); err != nil {
+			t.Fatalf("并发调用后仍应能够继续扫描: %v", err)
+		}
+	})
+}
+
 func TestExpiryAndNoExpiry(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, s *Store, db *gorm.DB) {
 		ctx := context.Background()
@@ -465,6 +576,12 @@ func TestRetryCommitsEachTaskIndependently(t *testing.T) {
 		}
 		if row, err := s.Get(ctx, second); err != nil || row.Status != Pending || row.Attempts != 0 {
 			t.Fatalf("失败事务必须整体回滚: %+v %v", row, err)
+		}
+		if err := w.RetryPending(ctx, 10); err != nil {
+			t.Fatalf("下次应继续处理回写失败的任务: %v", err)
+		}
+		if row, err := s.Get(ctx, second); err != nil || row.Status != Succeeded || row.Attempts != 1 {
+			t.Fatalf("回写失败的任务下轮仍应处理: %+v %v", row, err)
 		}
 	})
 }

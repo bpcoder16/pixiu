@@ -67,7 +67,10 @@
 //		return outbox.RetryPending(ctx, 100)
 //	}
 //
-// batchSize 是查询页大小，每轮按 ID 游标扫描，每条任务最多尝试一次。
+// batchSize 是查询页大小，按 ID 游标扫描到固定上界，每条任务在这次扫描中最多尝试一次。
+// 每条补偿尝试有 5 秒期限，仍受本轮 context 的更早取消控制；结果回写使用独立收尾期限。
+// 每轮从头扫描 pending，不保留跨轮进度；前排失败任务耗尽整轮预算时仍可能阻碍后续补偿。
+// 补偿轮次由 cronx 分布式锁互斥，本地不加锁；失租重叠时数据库行锁仍保护单条任务。
 // 发送失败保留 pending 和 LastError；成功为 succeeded；发送前已过期则为 failed。
 // ExpiresAt 零值表示不过期；已开始的发送按结果收尾，不会撤回。
 // Send 与 RetryPending 均使用 FOR UPDATE NOWAIT；不同任务可并发发送。

@@ -61,8 +61,10 @@ func (w *Worker) SendAsync(id int64) {
 	}()
 }
 
-// RetryPending 按 ID 分页补偿本表的待发送任务，每条任务本轮最多尝试一次。
-// batchSize 为查询页大小；跳过已锁任务，失败继续下一条，扫描/回写错误或取消则结束本轮。
+// RetryPending 按 ID 分页补偿，每条尝试使用 5 秒期限，并受调用方取消控制。
+// batchSize 为查询页大小；每轮从头扫描 pending，扫描位置和上界仅用于本次调用。
+// 已锁任务跳过，发送失败继续；扫描/回写错误或本轮取消结束调用。
+// 单条超时不保证跨轮公平性，前排失败任务仍可能耗尽整轮预算。
 // 应挂载到配置分布式锁的 cronx，避免多实例补偿轮次重叠。
 func (w *Worker) RetryPending(ctx context.Context, batchSize int) error {
 	if ctx == nil || batchSize <= 0 {
@@ -97,7 +99,9 @@ func (w *Worker) RetryPending(ctx context.Context, batchSize int) error {
 			if err := ctx.Err(); err != nil {
 				return errors.Join(firstErr, err)
 			}
-			taskErr, storageErr := w.send(ctx, id, true)
+			attemptCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			taskErr, storageErr := w.send(attemptCtx, id, true)
+			cancel()
 			if storageErr != nil {
 				return errors.Join(firstErr, taskErr, storageErr)
 			}

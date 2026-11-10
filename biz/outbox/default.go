@@ -94,6 +94,7 @@ func SendAsync(id int64) {
 
 // RetryPending 使用默认 Worker 执行一轮补偿；未登记 Worker 时 panic。
 // batchSize 为正的查询页大小，应由配置分布式锁的 cronx 周期调用。
+// 每条尝试有 5 秒执行期限，结果回写另计；每轮从头扫描 pending。
 func RetryPending(ctx context.Context, batchSize int) error {
 	return DefaultWorker().RetryPending(ctx, batchSize)
 }

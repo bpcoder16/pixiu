@@ -504,14 +504,20 @@ func TestEnqueueRejectsInvalidTransactionAndTask(t *testing.T) {
 			if _, err := s.EnqueueTx(tx.Session(&gorm.Session{DryRun: true}), task()); !errors.Is(err, ErrInvalidArgument) {
 				t.Errorf("DryRun 必须拒绝: %v", err)
 			}
-			wrongConfig := s.cfg
-			wrongConfig.Backend = MySQL
-			if s.cfg.Backend == MySQL {
-				wrongConfig.Backend = PostgreSQL
-			}
-			wrong, _ := NewStore(wrongConfig)
-			if _, err := wrong.EnqueueTx(tx, task()); !errors.Is(err, ErrBackendMismatch) {
-				t.Errorf("方言不匹配必须拒绝: %v", err)
+			// 被禁用的后端无法构造 Store，其拒绝行为由构建可用性测试覆盖。
+			if mysqlBackendEnabled && postgresqlBackendEnabled {
+				wrongConfig := s.cfg
+				wrongConfig.Backend = MySQL
+				if s.cfg.Backend == MySQL {
+					wrongConfig.Backend = PostgreSQL
+				}
+				wrong, err := NewStore(wrongConfig)
+				if err != nil {
+					return err
+				}
+				if _, err := wrong.EnqueueTx(tx, task()); !errors.Is(err, ErrBackendMismatch) {
+					t.Errorf("方言不匹配必须拒绝: %v", err)
+				}
 			}
 			_, err := s.EnqueueTx(tx, task())
 			return err
