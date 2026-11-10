@@ -33,3 +33,9 @@ test-bootstrap-tags:
 			-run '^(TestBootstrapWithout|TestCronWithoutRedis|TestCronStandaloneDoesNotNeedHTTPAndShutdownBeforeRun)'; \
 	done
 	$(GO) test $(BOOTSTRAP_TEST_FLAGS) -tags=pixiu_bootstrap_no_mysql ./biz/bootstrap -run '^TestPostgreSQL'
+	$(GO) test $(BOOTSTRAP_TEST_FLAGS) -tags=pixiu_bootstrap_no_nats ./biz/bootstrap -run '^TestOutbox'
+	$(GO) test $(BOOTSTRAP_TEST_FLAGS) -tags=pixiu_bootstrap_no_postgresql ./biz/bootstrap -run '^TestOutbox'
+	@set -e; \
+	for outbox_tags in pixiu_bootstrap_no_mysql pixiu_bootstrap_no_postgresql pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_postgresql; do \
+		$(GO) test $(BOOTSTRAP_TEST_FLAGS) -tags="$$outbox_tags" ./biz/outbox/...; \
+	done

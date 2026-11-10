@@ -1,5 +1,7 @@
 // Package outbox 提供事务发件箱：同事务登记，提交后主动发送，失败由项目 cron 补偿。
 // 支持 MySQL/PostgreSQL；Store 借用主库，Worker 支持同步和异步发送，不启动后台调度。
+// 构建标签 pixiu_bootstrap_no_mysql / pixiu_bootstrap_no_postgresql 同时排除对应后端的驱动错误适配，
+// NewStore/NewDefaultStore 拒绝被禁用的后端；默认构建保留两种后端。
 //
 // 应用先通过 schemamigrate 显式登记 &outbox.Record{}，再注册默认 Store 和 Worker：
 //

@@ -81,6 +81,12 @@ func TestDatabaseToJetStreamRecovery(t *testing.T) {
 		outbox.PostgreSQL: "PIXIU_OUTBOX_POSTGRESQL_DSN",
 	} {
 		t.Run(string(backend), func(t *testing.T) {
+			if _, err := outbox.NewStore(outbox.StoreConfig{
+				Backend:  backend,
+				MasterDB: func(context.Context) *gorm.DB { panic("探测构建能力不应查询数据库") },
+			}); err != nil {
+				t.Skipf("构建标签已禁用 %s 后端", backend)
+			}
 			dsn := os.Getenv(key)
 			if dsn == "" {
 				t.Skip("未设置 " + key + "；端到端数据库测试未运行")

@@ -35,6 +35,9 @@
 // 禁用 PostgreSQL 时，RunPostgreSQLInitialization 不参与构建。
 // 只有同时禁用两者时才排除共享的 SeedOptions 和迁移核心依赖；
 // 禁用 Redis 时没有 MustRegisterRedisLock；禁用 NATS 时没有 NewNATSConsumerService。
+// 任一数据库可用时保留 MustRegisterOutbox；同时禁用两种数据库时排除全部 Outbox 装配入口。
+// MustRegisterJetStreamOutbox 另要求 NATS 未禁用；选择被禁用的数据库后端在声明时 panic。
+// 数据库标签同时裁剪 outbox 对应驱动的错误适配，outbox.NewStore 拒绝被禁用的后端。
 // 仍调用这些专用 API 的应用会编译失败，须移除相关调用或用对应构建约束隔离业务文件。
 // 日志、时区、HTTP/Gin、WebSocket 和普通 Cron 保留；禁用 Redis 后配置非空 Cron lock（含 {}）会明确报错，
 // 不降级为无锁执行；省略 lock 或设为 null 不受影响。
@@ -86,6 +89,43 @@
 // Redis 客户端须禁用命令自动重试（maxRetries: -1）；依赖缺失、配置或登记失败会中止启动。
 // 执行器不新增连接池或关闭动作，业务排空后仍由 Redis 原有资源登记回收。
 // 锁实例名不参与 key 构造，默认执行器与同名 Named 实例共享；未声明锁时跳过该装配阶段。
+//
+// 默认 Store 和 Worker 可由启动声明统一装配，实例本身不使用名称；数据库与 NATS 名称选择已有依赖。
+// 以下片段替换应用装配示例中的相应声明，config 和 resources 由应用提前准备：
+//
+//	bootstrap.MustRegisterMySQL("orders", true)
+//	bootstrap.MustRegisterNATS("events", true)
+//	bootstrap.MustRegisterJetStreamOutbox(outbox.MySQL, "orders", "events")
+//	bootstrap.MustBaseInit(config, &resources)
+//
+// 示例另需导入 biz/outbox。快捷入口支持多个 NATS 名称，声明时复制名称清单。
+// 两种 MustBaseInit 入口均在数据库和 NATS 就绪后、WebSocket 工厂执行前创建默认 Store 与 Worker。
+// Store 借用所选数据库的 MasterDB，展示时区使用 env.TimeLocation()；依赖无需设置为默认实例。
+// Handler 在此阶段创建，不在声明阶段访问客户端。Outbox 未声明时跳过，不读额外配置文件。
+//
+// 需要多个 Kind/Version 或混合 Handler 时，使用通用入口替换上述快捷声明（两者只能选一个）：
+//
+//	bootstrap.MustRegisterOutbox(outbox.MySQL, "orders", func() map[outbox.HandlerKey]outbox.Handler {
+//		return map[outbox.HandlerKey]outbox.Handler{
+//			{
+//				Kind:    natsoutbox.JetStreamKind,
+//				Version: natsoutbox.JetStreamVersion,
+//			}: natsoutbox.NewJetStreamHandler("events"),
+//			{
+//				Kind:    "project.notification",
+//				Version: 1,
+//			}: sendNotification,
+//		}
+//	})
+//
+// 通用示例另需导入 biz/outbox/natsoutbox；sendNotification 由应用提供，签名为 outbox.Handler。
+// 工厂同步返回 Handler 表，随后由 Worker 复制；工厂只构造 Handler，不迁移表或执行任务，panic 原样传播。
+// 重复声明、nil 工厂、非法名称/后端和初始化开始后声明均 panic；依赖缺失或 Handler 无效中止启动。
+// 初始化失败不支持同进程重试，已成功创建的默认实例不重置；底层资源仍由应用关闭栈回收。
+// 表迁移在 MustBaseInit 后通过现有清单登记 &outbox.Record{}，迁移完成后再启动业务和 cron。
+// 业务事务内调用 natsoutbox.EnqueueJetStreamTx(tx, msg)，最外层事务提交后调用 outbox.Send/SendAsync。
+// cron Handler 调用 outbox.RetryPending(ctx, batchSize)，补偿频率和分布式锁由项目现有 cron 配置决定。
+// 装配不启动后台调度、不增加资源所有权，也不改变 SendAsync 无等待/排空的语义。
 //
 // 新项目应先完成 MustBaseInit，再通过 logit.Default、logit.With 或 logit.Named 创建和保存模块 Logger，
 // 如上例所示；不要在先于 bootstrap 执行的包变量初始化或 Go 的 init() 中缓存这些 Logger。

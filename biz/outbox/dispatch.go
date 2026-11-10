@@ -10,8 +10,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/bpcoder16/pixiu/logit"
-	mysqldriver "github.com/go-sql-driver/mysql"
-	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -57,10 +55,8 @@ func (w *Worker) send(ctx context.Context, id int64, retry bool) (taskErr, stora
 			}
 			return nil, ErrNotFound
 		}
-		var my *mysqldriver.MySQLError
-		var pg *pgconn.PgError
 		// MySQL ER_LOCK_NOWAIT / PostgreSQL lock_not_available 表示当前行正在发送。
-		if errors.As(err, &my) && my.Number == 3572 || errors.As(err, &pg) && pg.Code == "55P03" {
+		if isMySQLLockConflict(err) || isPostgreSQLLockConflict(err) {
 			if retry {
 				return nil, nil
 			}

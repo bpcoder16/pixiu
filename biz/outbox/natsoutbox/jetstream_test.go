@@ -215,7 +215,7 @@ func TestJetStreamAcknowledgementAndStableID(t *testing.T) {
 
 func TestEnqueueRejectsInvalidMessagesBeforeDatabase(t *testing.T) {
 	store, err := outbox.NewStore(outbox.StoreConfig{
-		Backend:  outbox.MySQL,
+		Backend:  enqueueTestBackend(t),
 		MasterDB: func(context.Context) *gorm.DB { panic("不得访问主库") },
 	})
 	if err != nil {
@@ -253,7 +253,7 @@ func TestEnqueueUsesDefaultStore(t *testing.T) {
 		t.Fatalf("显式入口应拒绝 nil Store: %v", err)
 	}
 	_, err := outbox.NewDefaultStore(outbox.StoreConfig{
-		Backend:  outbox.MySQL,
+		Backend:  enqueueTestBackend(t),
 		MasterDB: func(context.Context) *gorm.DB { panic("事务登记不得访问主库入口") },
 	})
 	if err != nil {
@@ -268,4 +268,19 @@ func TestEnqueueUsesDefaultStore(t *testing.T) {
 	if id, err := EnqueueJetStreamTx(tx, msg); id != 0 || !errors.Is(err, want) {
 		t.Fatalf("未使用默认 Store 的事务校验: %d %v", id, err)
 	}
+}
+
+func enqueueTestBackend(t *testing.T) outbox.Backend {
+	t.Helper()
+	for _, backend := range []outbox.Backend{outbox.MySQL, outbox.PostgreSQL} {
+		_, err := outbox.NewStore(outbox.StoreConfig{
+			Backend:  backend,
+			MasterDB: func(context.Context) *gorm.DB { panic("探测构建能力不应查询数据库") },
+		})
+		if err == nil {
+			return backend
+		}
+	}
+	t.Skip("构建标签已禁用全部数据库后端")
+	return ""
 }

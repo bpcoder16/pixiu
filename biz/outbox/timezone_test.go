@@ -30,6 +30,7 @@ func TestStoreLocationConfiguration(t *testing.T) {
 			{name: "夏令时", location: newYork},
 		} {
 			t.Run(string(backend)+"/"+tc.name, func(t *testing.T) {
+				requireBackend(t, backend)
 				store, err := NewStore(StoreConfig{
 					Backend: backend,
 					MasterDB: func(context.Context) *gorm.DB {

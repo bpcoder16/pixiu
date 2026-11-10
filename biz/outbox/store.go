@@ -18,8 +18,9 @@ type Store struct {
 }
 
 func NewStore(cfg StoreConfig) (*Store, error) {
-	if cfg.Backend != MySQL && cfg.Backend != PostgreSQL || cfg.MasterDB == nil {
-		return nil, fmt.Errorf("%w: backend and master provider required", ErrInvalidArgument)
+	supported := cfg.Backend == MySQL && mysqlBackendEnabled || cfg.Backend == PostgreSQL && postgresqlBackendEnabled
+	if !supported || cfg.MasterDB == nil {
+		return nil, fmt.Errorf("%w: enabled backend and master provider required", ErrInvalidArgument)
 	}
 	if cfg.Location == nil {
 		cfg.Location = time.UTC

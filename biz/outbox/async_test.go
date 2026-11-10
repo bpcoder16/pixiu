@@ -32,7 +32,7 @@ func TestDefaultSendAsyncTimeoutAndErrors(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var contexts []context.Context
 		_, err := outbox.NewDefaultStore(outbox.StoreConfig{
-			Backend: outbox.MySQL,
+			Backend: defaultTestBackend(t),
 			MasterDB: func(ctx context.Context) *gorm.DB {
 				contexts = append(contexts, ctx)
 				// 停在数据库入口，验证调用立即返回及超时错误的异步日志。

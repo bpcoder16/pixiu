@@ -24,6 +24,7 @@ import (
 // 只在随机命名的隔离数据库中迁移和写入，不修改 DSN 原有数据库。
 func liveStore(t *testing.T, backend Backend, mysqlLocation ...*time.Location) (*Store, *gorm.DB) {
 	t.Helper()
+	requireBackend(t, backend)
 	key := "PIXIU_OUTBOX_MYSQL_DSN"
 	if backend == PostgreSQL {
 		key = "PIXIU_OUTBOX_POSTGRESQL_DSN"
@@ -113,6 +114,13 @@ func liveStore(t *testing.T, backend Backend, mysqlLocation ...*time.Location) (
 		t.Fatal(err)
 	}
 	return store, db
+}
+
+func requireBackend(t *testing.T, backend Backend) {
+	t.Helper()
+	if backend == MySQL && !mysqlBackendEnabled || backend == PostgreSQL && !postgresqlBackendEnabled {
+		t.Skipf("构建标签已禁用 %s 后端", backend)
+	}
 }
 
 func eachDatabase(t *testing.T, test func(*testing.T, *Store, *gorm.DB)) {
@@ -206,9 +214,14 @@ func TestDatabaseAtomicityAndSnapshot(t *testing.T) {
 }
 
 func TestConfigurationRejectsInvalidInputs(t *testing.T) {
+	backend := MySQL
+	if !mysqlBackendEnabled {
+		backend = PostgreSQL
+	}
+	requireBackend(t, backend)
 	provider := func(context.Context) *gorm.DB { panic("构造器不应取数据库") }
 	s, err := NewStore(StoreConfig{
-		Backend:  MySQL,
+		Backend:  backend,
 		MasterDB: provider,
 	})
 	if err != nil {
@@ -229,6 +242,7 @@ func TestConfigurationRejectsInvalidInputs(t *testing.T) {
 }
 
 func TestMasterUsesCurrentContext(t *testing.T) {
+	requireBackend(t, MySQL)
 	// 只构造合法 GORM 会话，不查询数据库；覆盖缓存基础会话的 Context 重绑定。
 	db, err := gorm.Open(mysql.New(mysql.Config{SkipInitializeWithVersion: true}), &gorm.Config{
 		DisableAutomaticPing: true,

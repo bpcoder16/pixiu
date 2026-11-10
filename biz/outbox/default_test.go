@@ -39,6 +39,22 @@ func requireDefaultPanic(t *testing.T, want string, call func()) {
 	call()
 }
 
+// 默认门面测试与具体方言无关，选择本次构建中可用的后端。
+func defaultTestBackend(t *testing.T) outbox.Backend {
+	t.Helper()
+	for _, backend := range []outbox.Backend{outbox.MySQL, outbox.PostgreSQL} {
+		_, err := outbox.NewStore(outbox.StoreConfig{
+			Backend:  backend,
+			MasterDB: func(context.Context) *gorm.DB { panic("探测构建能力不应查询数据库") },
+		})
+		if err == nil {
+			return backend
+		}
+	}
+	t.Skip("构建标签已禁用全部数据库后端")
+	return ""
+}
+
 func TestDefaultRegistration(t *testing.T) {
 	if !isolatedDefaults(t) {
 		return
@@ -61,7 +77,7 @@ func TestDefaultRegistration(t *testing.T) {
 	}
 	provider := func(context.Context) *gorm.DB { panic("注册不应访问数据库") }
 	cfg := outbox.StoreConfig{
-		Backend:  outbox.MySQL,
+		Backend:  defaultTestBackend(t),
 		MasterDB: provider,
 	}
 	handlers := map[outbox.HandlerKey]outbox.Handler{
@@ -126,7 +142,7 @@ func TestDefaultConcurrentRegistrationAndUse(t *testing.T) {
 	}
 	type requestKey struct{}
 	cfg := outbox.StoreConfig{
-		Backend: outbox.MySQL,
+		Backend: defaultTestBackend(t),
 		MasterDB: func(ctx context.Context) *gorm.DB {
 			// 用已有错误的合法会话验证 Store 绑定与请求隔离，无需外部数据库。
 			return &gorm.DB{
