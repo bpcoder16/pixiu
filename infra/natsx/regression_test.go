@@ -619,6 +619,10 @@ func TestRequestErrorLogsOriginalError(t *testing.T) {
 	for _, record := range readLogs(t, buf) {
 		details, ok := record[logit.DownstreamDetailsKey].(map[string]any)
 		if ok && details["operation"] == "coreRequest" && details["err"] == err.Error() {
+			assertMessageLogMode(t, details, false)
+			if details["request_bytes"] != float64(0) || details["response_bytes"] != nil {
+				t.Fatalf("无响应请求的消息大小错误: %v", details)
+			}
 			return
 		}
 	}

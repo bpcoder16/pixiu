@@ -4,6 +4,10 @@
 # 省略、null、空值或未注册名称时回退默认 Logger；发布和 Request 始终跟随调用方 ctx。
 loggerName: "nats"
 
+# 默认仅记录操作概要和正文字节数；true 时追加完整正文、Header 和正文编码。
+# 详情不截断或脱敏；此开关不改变原始错误文本、连接状态和异步错误事件日志。
+logDetails: false
+
 # 可选环境前缀，省略、null 或空字符串时不启用；仅允许英文字母、数字、_、-。
 # 初始化后固定；发布、Request 和注册均填写原始主题或名称，由客户端统一添加前缀。
 # 例如 test1 将 orders.created 映射为 test1.orders.created，将 ORDERS 映射为 test1_ORDERS。

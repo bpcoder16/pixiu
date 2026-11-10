@@ -292,6 +292,8 @@ NewHTTPService 构造不监听，Start 接管服务与信号；Stop 统一封闭
 
 实例名与默认标记只在代码中声明，实例文件不接受 `name` / `isDefault`。Elasticsearch 文件的 `version` 必须与部署主版本一致，支持 7 / 8 / 9；`caCertFile` 相对路径基于配置目录。只需某个组件时，保留对应声明与配置文件即可；未声明的实例不会加载。
 
+NATS 操作日志默认记录概要和消息正文字节数；完整正文、Header 和编码字段需将 `natsx.Config.LogDetails` 显式设为 `true`，或在 `nats.<name>.yaml` 中配置 `logDetails: true`。该开关按实例固定，不影响追踪、耗时、原始错误文本和连接状态日志；已有依赖完整消息日志的应用需显式开启。
+
 <details>
 <summary>展开完整示例（需要实际下游服务）</summary>
 

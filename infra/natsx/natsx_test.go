@@ -315,8 +315,17 @@ func TestNewConnectionOptions(t *testing.T) {
 }
 
 func TestCorePublishRequestTraceAndFullLogs(t *testing.T) {
+	t.Run("summary", func(t *testing.T) { testCorePublishRequestLogs(t, false) })
+	t.Run("details", func(t *testing.T) { testCorePublishRequestLogs(t, true) })
+}
+
+func testCorePublishRequestLogs(t *testing.T, logDetails bool) {
 	buf := captureLogs(t)
-	c, err := New(Config{Name: "orders", URLs: []string{startServer(t)}})
+	c, err := New(Config{
+		Name:       "orders",
+		URLs:       []string{startServer(t)},
+		LogDetails: logDetails,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,20 +422,20 @@ func TestCorePublishRequestTraceAndFullLogs(t *testing.T) {
 		if record["msg"] != "NATS" || record[logit.DownstreamTypeKey] != "NATS" || record[logit.DownstreamIDKey] != "orders" {
 			t.Fatalf("统一下游标识错误: %v", record)
 		}
-		if _, ok := details["bytes"]; ok {
-			t.Fatalf("不应只记录正文长度: %v", details)
-		}
-		if _, ok := details["reply_bytes"]; ok {
-			t.Fatalf("不应记录响应长度字段: %v", details)
-		}
+		assertMessageLogMode(t, details, logDetails)
 		switch details["operation"] {
 		case "corePublish", "coreCallback":
-			if details["request_body"] != "private-payload" {
+			if details["subject"] != "orders.created" || details["request_bytes"] == float64(0) {
 				continue
 			}
-			headers, ok := details["request_headers"].(map[string]any)
-			if !ok || details["request_body_encoding"] != "utf-8" || headers["X-Source"] == nil || headers[TraceHeader] == nil || headers["x-log-id"] == nil || headers["Nats-Log-Id"] == nil {
-				t.Fatalf("缺少完整消息 Header: %v", details)
+			if details["request_bytes"] != float64(len("private-payload")) {
+				t.Fatalf("消息大小错误: %v", details)
+			}
+			if logDetails {
+				headers, ok := details["request_headers"].(map[string]any)
+				if !ok || details["request_body"] != "private-payload" || details["request_body_encoding"] != "utf-8" || headers["X-Source"] == nil || headers[TraceHeader] == nil || headers["x-log-id"] == nil || headers["Nats-Log-Id"] == nil {
+					t.Fatalf("缺少完整消息正文或 Header: %v", details)
+				}
 			}
 			if details["operation"] == "corePublish" {
 				foundPublish = true
@@ -434,6 +443,13 @@ func TestCorePublishRequestTraceAndFullLogs(t *testing.T) {
 				foundCallback = true
 			}
 		case "coreRequest":
+			if details["request_bytes"] != float64(len("private-request")) || details["response_bytes"] != float64(len("private-reply")) {
+				t.Fatalf("请求响应大小错误: %v", details)
+			}
+			foundRequest = true
+			if !logDetails {
+				continue
+			}
 			if details["request_body"] != "private-request" || details["response_body"] != "private-reply" || details["response_body_encoding"] != "utf-8" {
 				t.Fatalf("缺少完整请求响应正文: %v", details)
 			}
@@ -445,7 +461,6 @@ func TestCorePublishRequestTraceAndFullLogs(t *testing.T) {
 			if !ok || len(values) != 2 || values[0] != "first" || values[1] != "second" {
 				t.Fatalf("响应 Header 值被截断: %v", headers)
 			}
-			foundRequest = true
 		}
 	}
 	if !foundPublish || !foundRequest || !foundCallback {
@@ -524,10 +539,16 @@ func TestRequestOptionalHeaders(t *testing.T) {
 }
 
 func TestPublishFailureLogsCompleteBinaryMessage(t *testing.T) {
+	t.Run("summary", func(t *testing.T) { testPublishFailureLogs(t, false) })
+	t.Run("details", func(t *testing.T) { testPublishFailureLogs(t, true) })
+}
+
+func testPublishFailureLogs(t *testing.T, logDetails bool) {
 	buf := captureLogs(t)
 	c, err := New(Config{
-		Name: "binary-log",
-		URLs: []string{startServer(t)},
+		Name:       "binary-log",
+		URLs:       []string{startServer(t)},
+		LogDetails: logDetails,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -547,6 +568,13 @@ func TestPublishFailureLogsCompleteBinaryMessage(t *testing.T) {
 		details, ok := record[logit.DownstreamDetailsKey].(map[string]any)
 		if !ok || details["operation"] != "corePublish" {
 			continue
+		}
+		assertMessageLogMode(t, details, logDetails)
+		if details["request_bytes"] != float64(len(data)) || details["err"] != err.Error() || record["level"] != "ERROR" {
+			t.Fatalf("发布失败概要错误: %v", record)
+		}
+		if !logDetails {
+			return
 		}
 		body, ok := details["request_body"].(string)
 		if !ok || details["request_body_encoding"] != "base64" || body != base64.StdEncoding.EncodeToString(data) || details["err"] != err.Error() || record["level"] != "ERROR" {
@@ -609,8 +637,18 @@ func TestMessageContextScopesAndTraceHeader(t *testing.T) {
 }
 
 func TestJetStreamPublishConsumeAndCloseWaits(t *testing.T) {
+	t.Run("summary", func(t *testing.T) { testJetStreamPublishConsumeLogs(t, false) })
+	t.Run("details", func(t *testing.T) { testJetStreamPublishConsumeLogs(t, true) })
+}
+
+func testJetStreamPublishConsumeLogs(t *testing.T, logDetails bool) {
 	buf := captureLogs(t)
-	c, err := New(Config{Name: "jobs", URLs: []string{startServer(t)}, CloseTimeout: 3 * time.Second})
+	c, err := New(Config{
+		Name:         "jobs",
+		URLs:         []string{startServer(t)},
+		CloseTimeout: 3 * time.Second,
+		LogDetails:   logDetails,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,12 +722,18 @@ func TestJetStreamPublishConsumeAndCloseWaits(t *testing.T) {
 	var foundPublish, foundDuplicate, foundCallback bool
 	for _, record := range readLogs(t, buf) {
 		details, ok := record[logit.DownstreamDetailsKey].(map[string]any)
-		if !ok || details["request_body"] != "private-job" {
+		if !ok {
 			continue
 		}
-		headers, ok := details["request_headers"].(map[string]any)
-		if !ok || headers[jetstream.MsgIDHeader] == nil || headers[TraceHeader] == nil {
-			t.Fatalf("JetStream 消息 Header 不完整: %v", details)
+		assertMessageLogMode(t, details, logDetails)
+		if details["request_bytes"] != float64(len("private-job")) {
+			t.Fatalf("JetStream 消息大小错误: %v", details)
+		}
+		if logDetails {
+			headers, ok := details["request_headers"].(map[string]any)
+			if !ok || details["request_body"] != "private-job" || headers[jetstream.MsgIDHeader] == nil || headers[TraceHeader] == nil {
+				t.Fatalf("JetStream 消息正文或 Header 不完整: %v", details)
+			}
 		}
 		switch details["operation"] {
 		case "jetStreamPublish":

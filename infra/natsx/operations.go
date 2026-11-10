@@ -213,8 +213,8 @@ func (c *Client) logResult(ctx context.Context, action, subject string, msg, rep
 		"operation": action,
 		"subject":   subject,
 	}
-	appendMessageDetails(details, "request", msg)
-	appendMessageDetails(details, "response", reply)
+	c.appendMessageDetails(details, "request", msg)
+	c.appendMessageDetails(details, "response", reply)
 	if err != nil {
 		details["err"] = err.Error()
 	}
@@ -225,8 +225,13 @@ func (c *Client) logResult(ctx context.Context, action, subject string, msg, rep
 	logit.Output(ctx, level, 1, downstreamType, fields...)
 }
 
-func appendMessageDetails(details map[string]any, prefix string, msg *nats.Msg) {
+func (c *Client) appendMessageDetails(details map[string]any, prefix string, msg *nats.Msg) {
 	if msg == nil {
+		return
+	}
+	details[prefix+"_bytes"] = len(msg.Data)
+	// 概要路径不扫描或编码正文，详情成本仅由显式开启的实例承担。
+	if !c.logDetails {
 		return
 	}
 	headers := msg.Header

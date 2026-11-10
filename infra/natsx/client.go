@@ -28,6 +28,9 @@ type Config struct {
 	// LoggerName 指定连接状态、异步错误和消费入口的命名 Logger；空值或未注册时使用默认 Logger。
 	// 消费 Handler 及其下游继承消息 ctx；主动发布和 Request 的日志始终跟随调用方 ctx。
 	LoggerName string
+	// LogDetails 开启操作日志中的完整正文、Header 和正文编码；默认仅记录概要及正文字节数。
+	// 详情不截断或脱敏，实例创建后固定；不影响连接状态、异步错误事件及原始错误文本。
+	LogDetails bool
 	// Namespace 是当前实例的业务资源前缀；空值不启用，非空仅接受 ASCII 字母、数字、_、-。
 	// 初始化后固定，封装的发送及注册入口接收原始主题和名称，自动添加前缀。
 	Namespace string
@@ -69,6 +72,7 @@ type Client struct {
 	subjectPrefix string
 	// durationPrefix 是出站调用登记请求级耗时的前缀，初始化后固定。
 	durationPrefix string
+	logDetails     bool
 	// nc 是底层 NATS 连接，供 Core 操作与 JetStream 共用。
 	nc *nats.Conn
 	// js 是基于 nc 创建的默认 JetStream 上下文。
@@ -160,6 +164,7 @@ func New(cfg Config, options ...nats.Option) (*Client, error) {
 	c := &Client{
 		name:             cfg.Name,
 		durationPrefix:   downstreamType + "_" + cfg.Name,
+		logDetails:       cfg.LogDetails,
 		closeTimeout:     cfg.CloseTimeout,
 		closedEvent:      make(chan struct{}),
 		consumersDone:    make(chan struct{}),

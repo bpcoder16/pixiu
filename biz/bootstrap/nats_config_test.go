@@ -95,6 +95,36 @@ func TestNATSConfigLoggerName(t *testing.T) {
 	}
 }
 
+func TestNATSConfigLogDetails(t *testing.T) {
+	for _, value := range []string{"", "null", "false", "true", "42", "'true'", "{}", "[]"} {
+		t.Run(value, func(t *testing.T) {
+			content := "urls: [localhost:4222]\n"
+			if value != "" {
+				content += "logDetails: " + value + "\n"
+			}
+			path := filepath.Join(t.TempDir(), "nats.test.yaml")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			file, err := configx.Parse[natsFileConfig](path)
+			switch value {
+			case "42", "'true'", "{}", "[]":
+				if err == nil || !strings.Contains(strings.ToLower(err.Error()), "logdetails") {
+					t.Fatalf("logDetails 应严格拒绝错误类型: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := file.clientConfig("events")
+			if err != nil || cfg.LogDetails != (value == "true") {
+				t.Fatalf("消息详情开关未传入客户端: cfg=%+v, err=%v", cfg, err)
+			}
+		})
+	}
+}
+
 func TestNATSConsumerNameValidation(t *testing.T) {
 	for _, name := range []string{"", "实例", "bad.name", "../name", `a\b`, "a b"} {
 		// 名称错误必须先于环境和客户端查询返回。
