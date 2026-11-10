@@ -84,6 +84,8 @@
 // Location 省略时为 UTC，两种数据库均保留绝对时刻，读取按配置时区表示。
 // MySQL 时间列为 TIMESTAMP(6)，驱动须开启 parseTime，且驱动 Location 与会话 time_zone 一致；
 // 推荐连接使用 UTC，展示时区可独立传入 env.TimeLocation()。PostgreSQL 使用 TIMESTAMPTZ(6)。
+// 迁移显式声明创建/更新时间的默认值和期限/完成时间的 NULL，兼容关闭 explicit_defaults_for_timestamp 的严格模式。
+// 更新时间仍由 Store 显式写入，时间列不设置 ON UPDATE；无需调整数据库实例参数。
 // Record 的时间字段使用 Timestamp，通过 record.CreatedAt.Time 获取原生 time.Time。
 // MySQL 非空 ExpiresAt 的 UTC 整秒范围为 1 至 2147483647，越界返回 ErrInvalidArgument。
 // 已有 MySQL DATETIME 表须先按原存储时区迁移为 TIMESTAMP，不能在未知时区下直接 AutoMigrate。

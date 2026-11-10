@@ -21,7 +21,12 @@ func (*Timestamp) GormDataType() string { return "time" }
 func (*Timestamp) GormDBDataType(db *gorm.DB, field *schema.Field) string {
 	switch db.Dialector.Name() {
 	case "mysql":
-		return fmt.Sprintf("timestamp(%d)", field.Precision)
+		columnType := fmt.Sprintf("timestamp(%d)", field.Precision)
+		if !field.NotNull {
+			// 旧式 TIMESTAMP 默认 NOT NULL，必须显式声明 NULL 才能保留空值语义。
+			columnType += " NULL"
+		}
+		return columnType
 	case "postgres":
 		return fmt.Sprintf("timestamptz(%d)", field.Precision)
 	default:
