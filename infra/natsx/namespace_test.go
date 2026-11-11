@@ -14,7 +14,7 @@ import (
 )
 
 func TestNamespaceValidationBeforeDial(t *testing.T) {
-	for _, namespace := range []string{"qa.team", "qa*", "qa>", "qa/name", "qa\\name", " qa", "qa ", "测试", "\n"} {
+	for _, namespace := range []string{"test01-v1", "-", "qa.team", "qa*", "qa>", "qa/name", "qa\\name", "qa@team", " qa", "qa ", "测试", "é", "\xff", "\n"} {
 		t.Run(namespace, func(t *testing.T) {
 			dialer := &authCountingDialer{}
 			client, err := New(Config{
@@ -74,19 +74,45 @@ func TestNamespacePublishRequestAndRegistration(t *testing.T) {
 	core := []CoreConsumer{
 		DefaultCoreConsumer("broadcast", "updates.*", coreHandler),
 		DefaultCoreQueueConsumer("queue", "jobs", "workers", 2, coreHandler),
-		DefaultCoreConsumer("literal", "Test_1-a.orders", coreHandler),
+		DefaultCoreConsumer("literal", "test01_v1.orders", coreHandler),
 	}
 	// 跨客户端复用同一组声明，验证转换不改写调用方结构体和切片。
-	for _, namespace := range []string{"", "Test_1-a", "test2"} {
-		t.Run("namespace="+namespace, func(t *testing.T) {
-			var namePrefix, subjectPrefix string
-			if namespace != "" {
-				namePrefix = namespace + "_"
-				subjectPrefix = namespace + "."
+	for _, tc := range []struct {
+		namespace  string
+		normalized string
+	}{
+		{},
+		{
+			namespace:  "test01_v1",
+			normalized: "TEST01_V1",
+		},
+		{
+			namespace:  "TeSt2",
+			normalized: "TEST2",
+		},
+		{
+			namespace:  "TEST3",
+			normalized: "TEST3",
+		},
+		{
+			namespace:  "123_456",
+			normalized: "123_456",
+		},
+		{
+			namespace:  "_",
+			normalized: "_",
+		},
+	} {
+		t.Run("namespace="+tc.namespace, func(t *testing.T) {
+			var streamPrefix, namePrefix, subjectPrefix string
+			if tc.normalized != "" {
+				streamPrefix = tc.normalized + "_"
+				namePrefix = tc.namespace + "_"
+				subjectPrefix = tc.namespace + "."
 			}
 			client, err := New(Config{
 				Name:      "namespace",
-				Namespace: namespace,
+				Namespace: tc.namespace,
 				URLs:      []string{url},
 			})
 			if err != nil {
@@ -114,7 +140,7 @@ func TestNamespacePublishRequestAndRegistration(t *testing.T) {
 			// 纯生产者没有调用任何注册入口，也必须使用初始化时的 namespace。
 			publisher, err := New(Config{
 				Name:      "publisher",
-				Namespace: namespace,
+				Namespace: tc.namespace,
 				URLs:      []string{url},
 			})
 			if err != nil {
@@ -122,7 +148,7 @@ func TestNamespacePublishRequestAndRegistration(t *testing.T) {
 			}
 			defer publisher.Close()
 			ack, err := publisher.PublishJetStream(ctx, "events.created", nil, "sync")
-			if err != nil || ack.Stream != namePrefix+"EVENTS" || ack.Duplicate {
+			if err != nil || ack.Stream != streamPrefix+"EVENTS" || ack.Duplicate {
 				t.Fatalf("同步发布未匹配命名空间 Stream: ack=%v, err=%v", ack, err)
 			}
 			future, err := publisher.PublishJetStreamAsync(ctx, "events.single", nil, "async")
@@ -131,7 +157,7 @@ func TestNamespacePublishRequestAndRegistration(t *testing.T) {
 			}
 			select {
 			case ack := <-future.Ok():
-				if ack.Stream != namePrefix+"EVENTS" || ack.Duplicate {
+				if ack.Stream != streamPrefix+"EVENTS" || ack.Duplicate {
 					t.Fatalf("异步发布未匹配命名空间 Stream: %+v", ack)
 				}
 			case err := <-future.Err():
@@ -142,7 +168,7 @@ func TestNamespacePublishRequestAndRegistration(t *testing.T) {
 			if future.Msg().Subject != subjectPrefix+"events.single" || future.Msg().Header.Get(jetstream.MsgIDHeader) != "async" {
 				t.Fatalf("实际主题或 messageID 错误: %+v", future.Msg())
 			}
-			for _, subject := range []string{"updates.changed", "Test_1-a.orders"} {
+			for _, subject := range []string{"updates.changed", "test01_v1.orders"} {
 				if err := publisher.Publish(ctx, subject, nil); err != nil {
 					t.Fatal(err)
 				}
@@ -163,32 +189,32 @@ func TestNamespacePublishRequestAndRegistration(t *testing.T) {
 			want := map[delivery]int{
 				{
 					subject:  subjectPrefix + "events.created",
-					stream:   namePrefix + "EVENTS",
+					stream:   streamPrefix + "EVENTS",
 					consumer: namePrefix + "worker",
 				}: 1,
 				{
 					subject:  subjectPrefix + "events.created",
-					stream:   namePrefix + "EVENTS",
+					stream:   streamPrefix + "EVENTS",
 					consumer: namePrefix + "all",
 				}: 1,
 				{
 					subject:  subjectPrefix + "events.single",
-					stream:   namePrefix + "EVENTS",
+					stream:   streamPrefix + "EVENTS",
 					consumer: namePrefix + "single",
 				}: 1,
 				{
 					subject:  subjectPrefix + "events.single",
-					stream:   namePrefix + "EVENTS",
+					stream:   streamPrefix + "EVENTS",
 					consumer: namePrefix + "all",
 				}: 1,
-				{subject: subjectPrefix + "updates.changed"}: 1,
-				{subject: subjectPrefix + "jobs"}:            1,
-				{subject: subjectPrefix + "Test_1-a.orders"}: 1,
+				{subject: subjectPrefix + "updates.changed"}:  1,
+				{subject: subjectPrefix + "jobs"}:             1,
+				{subject: subjectPrefix + "test01_v1.orders"}: 1,
 			}
 			if !reflect.DeepEqual(counts, want) {
 				t.Fatalf("主题或资源前缀错误: got=%v, want=%v", counts, want)
 			}
-			stream, err := client.JetStream().Stream(ctx, namePrefix+"EVENTS")
+			stream, err := client.JetStream().Stream(ctx, streamPrefix+"EVENTS")
 			if err != nil || !reflect.DeepEqual(stream.CachedInfo().Config.Subjects, []string{subjectPrefix + "events.>"}) {
 				t.Fatalf("原生 JetStream 入口应使用实际资源名称: %v", err)
 			}
@@ -229,7 +255,7 @@ func TestNamespacePublishRequestAndRegistration(t *testing.T) {
 	var found bool
 	for _, record := range readLogs(t, buf) {
 		details, _ := record[logit.DownstreamDetailsKey].(map[string]any)
-		if details["subject"] == "Test_1-a.events.created" {
+		if details["subject"] == "test01_v1.events.created" {
 			found = true
 		}
 	}
@@ -298,13 +324,13 @@ func TestNamespaceLegacyStreamAndDurable(t *testing.T) {
 		t.Cleanup(func() { _ = c.Close() })
 		return c
 	}
-	// 按旧版本实际使用的物理名称预置资源，避免新代码的命名逻辑同时充当测试依据。
+	// 预置大写 Stream 前缀和原始大小写的主题、Durable，验证只转换 Stream 名称。
 	legacy := connect(t, "")
-	stream, err := legacy.JetStream().CreateStream(ctx, DefaultStreamConfig("qa_blue_orders", 1, "qa.events"))
+	stream, err := legacy.JetStream().CreateStream(ctx, DefaultStreamConfig("QA_BLUE_orders", 1, "qa.events"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	durable, err := stream.CreateConsumer(ctx, DefaultJetStreamConsumer("qa_blue_orders", "qa_reader", nil).Config)
+	durable, err := stream.CreateConsumer(ctx, DefaultJetStreamConsumer("QA_BLUE_orders", "qa_reader", nil).Config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +362,7 @@ func TestNamespaceLegacyStreamAndDurable(t *testing.T) {
 			return nil
 		})
 		err := foreign.RegisterJetStreamConsumers(ctx, spec)
-		if err == nil || !strings.Contains(err.Error(), "qa_blue_orders") || !strings.Contains(err.Error(), "qa.events") || !strings.Contains(err.Error(), `namespace "qa_blue"`) {
+		if err == nil || !strings.Contains(err.Error(), "QA_BLUE_orders") || !strings.Contains(err.Error(), "qa.events") || !strings.Contains(err.Error(), `namespace "qa_blue"`) {
 			t.Fatalf("应报告 namespace、冲突 Stream 和主题: %v", err)
 		}
 		if _, err := stream.Consumer(ctx, "qa_blue_reader"); !errors.Is(err, jetstream.ErrConsumerNotFound) {
@@ -349,11 +375,11 @@ func TestNamespaceLegacyStreamAndDurable(t *testing.T) {
 
 	t.Run("接续旧进度", func(t *testing.T) {
 		c := connect(t, "qa")
-		if err := c.RegisterStreams(ctx, DefaultStreamConfig("blue_orders", 1, "events")); err != nil {
+		if err := c.RegisterStreams(ctx, DefaultStreamConfig("BLUE_orders", 1, "events")); err != nil {
 			t.Fatal(err)
 		}
 		received := make(chan string, 2)
-		spec := DefaultJetStreamConsumer("blue_orders", "reader", func(_ context.Context, msg jetstream.Msg) error {
+		spec := DefaultJetStreamConsumer("BLUE_orders", "reader", func(_ context.Context, msg jetstream.Msg) error {
 			received <- string(msg.Data())
 			return nil
 		})
@@ -388,11 +414,44 @@ func TestNamespaceLegacyStreamAndDurable(t *testing.T) {
 	})
 }
 
+func TestNamespaceStreamRenamePreservesLegacy(t *testing.T) {
+	c := registrationClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	legacy, err := c.JetStream().CreateStream(ctx, DefaultStreamConfig("qa_EVENTS", 1, "qa.events"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.JetStream().Publish(ctx, "qa.events", []byte("pending")); err != nil {
+		t.Fatal(err)
+	}
+	client, err := New(Config{
+		Name:      "rename",
+		Namespace: "qa",
+		URLs:      []string{c.Conn().ConnectedUrl()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	// 主题保留原大小写，旧 Stream 仍占用主题时只能显式迁移，不能自动删除旧资源。
+	if err := client.RegisterStreams(ctx, DefaultStreamConfig("EVENTS", 1, "events")); err == nil || !strings.Contains(err.Error(), "QA_EVENTS") {
+		t.Fatalf("同主题的新 Stream 应报告冲突: %v", err)
+	}
+	if _, err := c.JetStream().Stream(ctx, "QA_EVENTS"); !errors.Is(err, jetstream.ErrStreamNotFound) {
+		t.Fatalf("冲突后不应创建新 Stream: %v", err)
+	}
+	msg, err := legacy.GetMsg(ctx, 1)
+	if err != nil || msg.Subject != "qa.events" || string(msg.Data) != "pending" {
+		t.Fatalf("旧 Stream 及积压消息应保留: msg=%+v, err=%v", msg, err)
+	}
+}
+
 func TestNamespaceMixedStreamRequiresFilter(t *testing.T) {
 	c := registrationClient(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cfg := DefaultStreamConfig("qa_mixed", 1, "qa.events", "other.events")
+	cfg := DefaultStreamConfig("QA_mixed", 1, "qa.events", "other.events")
 	stream, err := c.JetStream().CreateStream(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)

@@ -401,8 +401,10 @@
 // 转换阶段检查 URL 解析及内嵌凭据，通用参数由 natsx 在构造时校验；
 // 入口须在初始化前登记资源栈 defer，后续实例校验失败时也回收已创建的客户端。
 // urls 必填，地址非空且无首尾空白，不接受 URL 内嵌凭据；认证使用 username/password。
-// namespace 在此连接文件配置，省略、null 或空字符串时不添加前缀；仅允许 ASCII 字母、数字、_、-。
-// natsx 在连接前校验并固定 namespace；纯发布客户端也生效，不依赖注册配置或 Handler。
+// namespace 在此连接文件配置，省略、null 或空字符串时不添加前缀；仅允许 ASCII 字母、数字、_。
+// natsx 在连接前校验并固定 namespace；含 - 等其他字符直接报错，不自动替换。
+// 仅 Stream 名称及引用中的 namespace 转大写，subject、Durable、Core name/queue 的前缀保留配置大小写。
+// 纯发布客户端也生效，不依赖注册配置或 Handler；原始资源名和主题的其余部分保持原样。
 // 超时零值使用 natsx 默认值，负值无效；connectTimeout 默认 5s，是单次拨号期限。
 // drainTimeout 默认 10s，仅用于底层连接 Drain；closeTimeout 默认 20s，限制完整关闭流程。
 // jetStream.publishAsyncTimeout 默认 5s，只限制默认上下文的异步 PubAck 等待。
@@ -436,7 +438,7 @@
 // 旧顶层 jetStreamConsumers 和消费者的 stream 字段须移除，否则严格解析报错。
 // 消费者的可选参数注释同样位于 consumers 项内，按需取消注释即可使用。
 // 注册文件不接受 namespace；该值统一来自 nats.<name>.yaml 的客户端配置。
-// 例如 namespace: test1 时，Stream 名称及引用 ORDERS 变为 test1_ORDERS，Durable worker 变为 test1_worker；
+// 例如 namespace: test1 时，Stream 名称及引用 ORDERS 变为 TEST1_ORDERS，Durable worker 变为 test1_worker；
 // Core name、非空 queue 同样添加 test1_；subjects、filterSubjects、Core subject 添加 test1.。
 // 通配主题 orders.> 变为 test1.orders.>；空 queue 保持广播，空过滤列表仍消费整个 Stream。
 // 配置填写原始名称，Handler 引用不加前缀；消费者继承的 Stream 名称由注册入口添加一次前缀。
@@ -444,6 +446,7 @@
 // 回调、日志和原生返回值保留前缀；Request 回复用 Msg.Respond，不改写回复 inbox。
 // Conn()/JetStream() 原生入口不添加前缀；旧注册文件中的 namespace 须移至连接文件，否则严格解析报错。
 // 修改 namespace 后使用新的资源名称，旧 Stream/Durable 不自动迁移或删除。
+// 升级时须修改含连字符的 namespace；旧 Stream 若仍占用相同主题，新 Stream 会因主题重叠而创建失败，须显式迁移。
 // 包级具名函数可直接传入构造器，自动名称保留大小写；方法值、闭包、泛型函数必须显式命名。
 // streamDefaults.replicas 可省略或为 null，沿用当前实例初始化时 nats.<name>.yaml 中 urls 的条目数。
 // streamDefaults 整体省略、null 或空对象同样回退；显式 replicas 解码后必须为正整数，0 或负数报错。

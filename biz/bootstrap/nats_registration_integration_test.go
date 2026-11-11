@@ -340,13 +340,14 @@ func testNATSFromConfigNamespaceIsolation(t *testing.T) {
 			}
 		}
 		for i, namespace := range []string{"test1", "test2"} {
+			normalized := strings.ToUpper(namespace)
 			client := clients[2*i]
 			for _, event := range []string{"created", "ignored"} {
 				ack, err := client.PublishJetStream(ctx, "events."+event, []byte(namespace), event)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if ack.Stream != namespace+"_EVENTS" || ack.Duplicate {
+				if ack.Stream != normalized+"_EVENTS" || ack.Duplicate {
 					t.Fatalf("相同消息 ID 应分别写入两个环境的 Stream: %+v", ack)
 				}
 			}
@@ -357,7 +358,7 @@ func testNATSFromConfigNamespaceIsolation(t *testing.T) {
 			if err != nil || string(reply.Data) != namespace {
 				t.Fatalf("Request 应由对应环境的队列消费者响应: %v, %v", reply, err)
 			}
-			stream, err := client.JetStream().Stream(ctx, namespace+"_EVENTS")
+			stream, err := client.JetStream().Stream(ctx, normalized+"_EVENTS")
 			if err != nil {
 				t.Fatal(err)
 			}

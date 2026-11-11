@@ -8,9 +8,11 @@ loggerName: "nats"
 # 详情不截断或脱敏；此开关不改变原始错误文本、连接状态和异步错误事件日志。
 logDetails: false
 
-# 可选环境前缀，省略、null 或空字符串时不启用；仅允许英文字母、数字、_、-。
+# 可选环境前缀，省略、null 或空字符串时不启用；仅允许英文字母、数字、_。
+# 含 - 等其他字符直接报错；仅 Stream 名称及引用中的 namespace 转大写，其他名称和主题保留大小写。
 # 初始化后固定；发布、Request 和注册均填写原始主题或名称，由客户端统一添加前缀。
-# 例如 test1 将 orders.created 映射为 test1.orders.created，将 ORDERS 映射为 test1_ORDERS。
+# 例如 test01_v1 将 orders.created 映射为 test01_v1.orders.created，将 ORDERS 映射为 TEST01_V1_ORDERS。
+# 旧 Stream 不自动迁移；若仍占用相同主题，新 Stream 会因主题重叠而创建失败，须显式迁移。
 namespace: ""
 
 # 列表中的地址属于同一个逻辑实例，不为每个地址创建独立客户端。

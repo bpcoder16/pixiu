@@ -163,7 +163,7 @@ func (c *Client) RegisterStreams(ctx context.Context, configs ...jetstream.Strea
 		seen[cfg.Name] = struct{}{}
 	}
 	for _, cfg := range configs {
-		cfg.Name = namespaceValue(c.namePrefix, cfg.Name)
+		cfg.Name = namespaceValue(c.streamPrefix, cfg.Name)
 		cfg.Subjects = namespaceSubjects(c.subjectPrefix, cfg.Subjects)
 		if _, err := c.js.CreateStream(ctx, cfg); err != nil {
 			return fmt.Errorf("natsx: register stream %q: %w", cfg.Name, err)
@@ -238,7 +238,7 @@ func (c *Client) RegisterJetStreamConsumers(ctx context.Context, consumers ...Je
 			return fmt.Errorf("natsx: duplicate consumer %q/%q", key[0], key[1])
 		}
 		seen[key] = struct{}{}
-		spec.Stream = namespaceValue(c.namePrefix, spec.Stream)
+		spec.Stream = namespaceValue(c.streamPrefix, spec.Stream)
 		spec.Config.Durable = namespaceValue(c.namePrefix, spec.Config.Durable)
 		spec.Config.Name = namespaceValue(c.namePrefix, spec.Config.Name)
 		spec.Config.FilterSubject = namespaceValue(c.subjectPrefix, spec.Config.FilterSubject)

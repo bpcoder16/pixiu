@@ -31,8 +31,8 @@ type Config struct {
 	// LogDetails 开启操作日志中的完整正文、Header 和正文编码；默认仅记录概要及正文字节数。
 	// 详情不截断或脱敏，实例创建后固定；不影响连接状态、异步错误事件及原始错误文本。
 	LogDetails bool
-	// Namespace 是当前实例的业务资源前缀；空值不启用，非空仅接受 ASCII 字母、数字、_、-。
-	// 初始化后固定，封装的发送及注册入口接收原始主题和名称，自动添加前缀。
+	// Namespace 是当前实例的业务资源前缀；空值不启用，非空仅接受 ASCII 字母、数字、_。
+	// 仅 Stream 名称及引用使用大写 namespace，其他名称和 subject 保留大小写；初始化后固定。
 	Namespace string
 	// URLs 是服务器地址列表；至少提供一个地址，且每项非空、无首尾空白，不自动裁剪。
 	URLs []string
@@ -67,7 +67,8 @@ type JetStreamConfig struct {
 type Client struct {
 	// name 是连接名称，用于状态与操作日志标识。
 	name string
-	// 前缀在初始化时生成；只转换业务入口，不影响 SDK 的回复、确认和管理协议。
+	// 前缀在初始化时生成；仅 Stream 前缀转大写，不影响 SDK 的回复、确认和管理协议。
+	streamPrefix  string
 	namePrefix    string
 	subjectPrefix string
 	// durationPrefix 是出站调用登记请求级耗时的前缀，初始化后固定。
@@ -124,9 +125,9 @@ func New(cfg Config, options ...nats.Option) (*Client, error) {
 		return nil, errors.New("natsx: empty connection name")
 	}
 	if strings.IndexFunc(cfg.Namespace, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-')
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_')
 	}) >= 0 {
-		return nil, fmt.Errorf("natsx: namespace %q must contain only ASCII letters, digits, underscores or hyphens", cfg.Namespace)
+		return nil, fmt.Errorf("natsx: namespace %q must contain only ASCII letters, digits or underscores", cfg.Namespace)
 	}
 	if len(cfg.URLs) == 0 {
 		return nil, errors.New("natsx: no server URLs")
@@ -171,6 +172,7 @@ func New(cfg Config, options ...nats.Option) (*Client, error) {
 		consumerCanceled: make(chan struct{}),
 	}
 	if cfg.Namespace != "" {
+		c.streamPrefix = strings.ToUpper(cfg.Namespace) + "_"
 		c.namePrefix = cfg.Namespace + "_"
 		c.subjectPrefix = cfg.Namespace + "."
 	}

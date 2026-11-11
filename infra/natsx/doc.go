@@ -14,11 +14,12 @@
 // Stream/Consumer 使用官方配置；JetStream 消费统一通过 RegisterJetStreamConsumers 注册并自动确认。
 // 第一版原样记录错误文本并保留原始错误链，不脱敏其中可能包含的 URL、密码或 Token。
 //
-// Config.Namespace 可选，空值保持原样；非空仅允许 ASCII 字母、数字、_、-，在拨号前校验并固定。
+// Config.Namespace 可选，空值保持原样；非空仅允许 ASCII 字母、数字、_，在拨号前校验并固定。
 // 四个发布/Request 入口和三个 Register 入口都接受原始名称与主题；Default 工厂不添加前缀。
-// 例如 namespace 为 test1 时，主题 orders.created 变为 test1.orders.created，Stream ORDERS 变为 test1_ORDERS。
-// 注册的 Stream Name、Consumer Stream/Durable/非空 Name、Core Name/非空 Queue 添加 namespace_；
-// Stream Subjects、Consumer FilterSubject/FilterSubjects、Core Subject 添加 namespace.，保留通配符。
+// 例如 namespace 为 test01_v1 时，主题 orders.created 变为 test01_v1.orders.created，Stream ORDERS 变为 TEST01_V1_ORDERS。
+// 仅 Stream 名称及引用中的 namespace 转大写，逻辑名称保留原样；含 - 的 namespace 直接报错，不自动替换。
+// 注册的 Stream Name 和 Consumer Stream 添加大写 NAMESPACE_；Durable/非空 Name、Core Name/非空 Queue 添加原始 namespace_。
+// Stream Subjects、Consumer FilterSubject/FilterSubjects、Core Subject 添加原始 namespace.，保留大小写和通配符。
 // 空 queue 保持广播，空过滤条件保持整个 Stream；原始参数先校验，转换不修改调用方配置或主题切片。
 // 其他 SDK 高级字段（如 Mirror、Sources、RePublish、SubjectTransform）原样传递，须自行填写实际值。
 // 不猜测或去重已有前缀；客户端实例名、Handler 名称、messageID 不变。
@@ -26,6 +27,7 @@
 // Request 回复使用 Msg.Respond/RespondMsg；回复 inbox、JetStream ACK 和管理协议主题保持原样。
 // 原生 Conn()/JetStream() 不添加 namespace，直接操作时须使用完整名称和主题。
 // 每个 Client 独立配置；修改 namespace 不迁移或删除旧 Stream/Durable。
+// namespace 不能仅靠大小写区分环境；升级时旧 Stream 若仍占用相同主题，新 Stream 会因主题重叠而创建失败，须显式迁移。
 //
 // Handler 注册表可独立于客户端使用，供应用按名称选择强类型处理函数：
 //

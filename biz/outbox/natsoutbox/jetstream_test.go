@@ -119,7 +119,7 @@ func TestJetStreamAcknowledgementAndStableID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	stream, err := client.JetStream().CreateStream(ctx, jetstream.StreamConfig{
-		Name:     "test1_EVENTS",
+		Name:     "TEST1_EVENTS",
 		Subjects: []string{"test1.events.created"},
 		Storage:  jetstream.FileStorage,
 	})
@@ -127,7 +127,7 @@ func TestJetStreamAcknowledgementAndStableID(t *testing.T) {
 		t.Fatal(err)
 	}
 	auditStream, err := auditClient.JetStream().CreateStream(ctx, jetstream.StreamConfig{
-		Name:     "test2_EVENTS",
+		Name:     "TEST2_EVENTS",
 		Subjects: []string{"test2.events.created"},
 		Storage:  jetstream.FileStorage,
 	})

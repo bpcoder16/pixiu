@@ -122,6 +122,11 @@ func TestNATSClientValidationRunsDuringInitialization(t *testing.T) {
 			content: "urls: [localhost:4222]\nnamespace: bad.namespace\n",
 			want:    "natsx: namespace",
 		},
+		{
+			name:    "namespace-hyphen",
+			content: "urls: [localhost:4222]\nnamespace: test01-v1\n",
+			want:    "natsx: namespace",
+		},
 		{name: "empty", content: "urls: []\n", want: "natsx: no server URLs"},
 		{name: "empty-address", content: "urls: ['']\n", want: "natsx: empty server URL"},
 		{name: "password", content: "urls: [localhost:4222]\npassword: secret\n", want: "natsx: password requires username"},

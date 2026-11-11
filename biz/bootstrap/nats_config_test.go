@@ -29,8 +29,8 @@ func TestNATSConfigNamespace(t *testing.T) {
 		},
 		{
 			name:        "configured",
-			declaration: "namespace: Test_1-a\n",
-			want:        "Test_1-a",
+			declaration: "namespace: Test_1_a\n",
+			want:        "Test_1_a",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
