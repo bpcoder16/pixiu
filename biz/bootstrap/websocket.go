@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/biz/realtime"
 	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/configx"
@@ -29,7 +30,12 @@ type webSocketConfig struct {
 // 成功后本服务独占生命周期，调用方不得再单独运行或登记内部 Server；失败时回收本轮已接管的对象。
 // 只处理配置的升级路径与固定 /ready/ws，两者仅允许 GET；其他路径返回 404，不提供普通 HTTP 路由扩展。
 // HTTP 与 realtime 并发启动，以 /ready/ws 的 204 表示可接纳连接；所有实例共享外层管理器的停机预算。
+// 禁用 WebSocket 服务时直接返回 ErrServiceDisabled。
 func NewWebSocketService(name string) (apprun.Service, error) {
+	serviceName := appconfig.ServiceWebSocket + ":" + name
+	if serviceDisabled(serviceName) {
+		return apprun.Service{}, ErrServiceDisabled
+	}
 	if err := validateInstanceName("WebSocket", name); err != nil {
 		return apprun.Service{}, err
 	}
@@ -45,7 +51,6 @@ func NewWebSocketService(name string) (apprun.Service, error) {
 		strings.ContainsAny(cfg.Path, "{}?#% \t\r\n") || cfg.Path == "/ready/ws" {
 		return apprun.Service{}, fmt.Errorf("bootstrap: %s requires a literal absolute path other than /ready/ws", configFile)
 	}
-	serviceName := "websocket:" + name
 	server, err := registeredWebSocket(name)
 	if err != nil {
 		return apprun.Service{}, err

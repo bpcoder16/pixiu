@@ -10,10 +10,30 @@ import (
 	"testing"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
+	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/infra/natsx"
 	"github.com/bpcoder16/pixiu/lifecycle"
 )
+
+func TestStartSkipsDisabledNATSConsumers(t *testing.T) {
+	isolatedLog(t, func() {
+		cfg := loadLogConfig(t, "release", "disabledServices: [nats-consumer]\n")
+		var resources lifecycle.Stack
+		defer resources.Close()
+		bootstrap.MustBaseInitWithoutLogit(cfg, &resources)
+		// 不提供共享客户端或消费配置，两个消费者都应在查找客户端之前被跳过。
+		var factories []bootstrap.ServiceFactory
+		for _, name := range []string{"orders", "events"} {
+			factories = append(factories, func() (apprun.Service, error) {
+				return bootstrap.NewNATSConsumerService(name, nil, nil)
+			})
+		}
+		if err := bootstrap.Start(factories...); !errors.Is(err, apprun.ErrNoServices) {
+			t.Fatalf("全部消费者禁用时应返回空服务错误，得到 %v", err)
+		}
+	})
+}
 
 func writeNATSConfig(t *testing.T, name, content string) {
 	t.Helper()

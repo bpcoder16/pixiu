@@ -1,5 +1,4 @@
-// Package appconfig 直接定义应用共用的 env/log 配置，组合 configx 和 env 加载配置并初始化环境。
-// 包含 env.appName、env.runMode、env.timeLocation 三个必填字段、可选 localIP 和 log 配置。
+// Package appconfig 定义应用共用的环境、日志和常驻服务启动配置，组合 configx 和 env 加载配置并初始化环境。
 //
 // 将本包 conf.example/app.yaml 复制到应用的 conf/app.yaml 并修改后，
 // 在应用启动时调用（需导入 github.com/bpcoder16/pixiu/biz/appconfig
@@ -15,7 +14,9 @@
 //	_ = env.RootDirPath()
 //
 // 文件读取复用 infra/configx.Parse，支持 YAML、TOML、JSON，未知字段和弱类型转换报错。
-// AppConfig 直接定义 Env 和 Log，保持文件顶层结构；调用通用 bootstrap 时直接传入 cfg。
+// 顶层 disabledServices 接受服务类型或“类型:实例名”。例如 [cron, "nats-consumer:orders"] 跳过 Cron 和 orders 消费者。
+// 类型对应 ServiceHTTP、ServiceCron、ServiceNATSConsumer 和 ServiceWebSocket。省略或空列表时按代码声明启动。
+// 将 cfg 传给 bootstrap.MustBaseInit 或 MustBaseInitWithoutLogit 后生效。
 // AppConfig.Env 复用 env.Config，并交给 env.Init 校验及发布环境。
 // 应用名称不能为空或全为空白；运行模式必须为 debug、test、release；时区须能通过
 // time.LoadLocation 解析。加载器不内嵌时区数据库，时区数据使用标准库查找机制。

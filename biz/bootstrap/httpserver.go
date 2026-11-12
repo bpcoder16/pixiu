@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 
+	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/env"
@@ -16,13 +17,17 @@ import (
 // 调用前须初始化 env；监听在 Run 时才启动。
 // 调用方负责注册；注册失败时通过 Stop、Wait 与 Cancel 清理。
 // HTTP 排空期限由管理器统一提供，组件不设置独立关闭期限。
+// 禁用 HTTP 服务时直接返回 ErrServiceDisabled。
 func NewHTTPService(handler http.Handler) (apprun.Service, error) {
+	if serviceDisabled(appconfig.ServiceHTTP) {
+		return apprun.Service{}, ErrServiceDisabled
+	}
 	configFile := filepath.Join(env.ConfigDirPath(), "http.yaml")
 	config, err := configx.Parse[httpserver.Config](configFile)
 	if err != nil {
 		return apprun.Service{}, fmt.Errorf("bootstrap: load HTTP config: %w", err)
 	}
-	return newHTTPService("http", *config, handler)
+	return newHTTPService(appconfig.ServiceHTTP, *config, handler)
 }
 
 // 共用监听适配，配置来源与服务名由外层装配决定。

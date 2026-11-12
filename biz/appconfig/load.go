@@ -23,6 +23,9 @@ func MustLoadAppConfig(filePath string) *AppConfig {
 	if err != nil {
 		panic(fmt.Errorf("appconfig: load app config %q: %w", absolutePath, err))
 	}
+	if err := cfg.ValidateDisabledServices(); err != nil {
+		panic(fmt.Errorf("appconfig: load app config %q: %w", absolutePath, err))
+	}
 	cfg.Env.ConfigDirPath = filepath.Dir(absolutePath)
 	if initErr := env.Init(cfg.Env); initErr != nil {
 		panic(fmt.Errorf("appconfig: initialize environment from %q: %w", absolutePath, initErr))

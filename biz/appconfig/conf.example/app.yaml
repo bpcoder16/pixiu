@@ -12,6 +12,16 @@ env:
   # 可选 IPv4 / IPv6；空字符串在初始化时先查询本机 IPv4，失败后查询 IPv6，再失败则保持为空。
   localIP: ""
 
+# 可选类型：http（含 Gin HTTP）、cron、nats-consumer、websocket。省略或填 [] 时按代码声明启动。
+# 填类型会禁用该类型的所有服务；填 "类型:实例名" 只禁用名称完全相同的实例。
+# 示例一：禁用全部 HTTP 服务和全部 NATS 消费者。
+# disabledServices: [http, nats-consumer]
+# 示例二：只禁用 demo 消费者和 app WebSocket，其他实例照常启动。
+# disabledServices: ["nats-consumer:demo", "websocket:app"]
+# HTTP 和 Cron 内置入口使用单服务名 http、cron。工厂返回命名服务时也可精确匹配，例如 ["http:aaa"]。
+# NATS 共享客户端和 WebSocket 命名实例仍按代码声明初始化。
+disabledServices: []
+
 log:
   # 是否劫持 stdout/stderr；省略时默认 true，仅支持 Linux/macOS。
   # 原始输出分别追加到 dir/<appName>/std/stdout.log 和 dir/<appName>/std/stderr.log。

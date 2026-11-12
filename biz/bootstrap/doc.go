@@ -152,6 +152,12 @@
 //
 // 此示例另用标准库 net/http 和 pixiu 的 infra/apprun；handler 由应用提供，http.yaml 从 env.ConfigDirPath() 读取。
 // ServiceFactory 的签名为 func() (apprun.Service, error)，Start 按传入顺序同步构造并登记，全部成功后运行。
+// 在 app.yaml 设置 disabledServices: [cron, "nats-consumer:orders"] 可跳过 Cron 与 orders 消费者。
+// 可选类型为 http（含 Gin HTTP）、cron、nats-consumer、websocket；类型匹配全部实例，类型:实例名精确匹配。
+// HTTP 和 Cron 的内置入口使用单服务名 http、cron。Start 也按工厂返回的最终服务名匹配，例如 http:aaa。
+// 两种基础初始化入口均保存禁用列表。共享 NATS 客户端和 WebSocket 命名实例仍按声明初始化。
+// 内置构造入口匹配时在读取专属配置前返回 ErrServiceDisabled。若名称由工厂在构造后指定，
+// Start 和 StartWithConfig 会在登记前回收匹配的服务并跳过运行。全部跳过时返回 apprun.ErrNoServices。
 // 后续构造或登记失败时逆序回收此前成功构造的服务，包括本轮登记失败的服务，并保留原错误与回收错误。
 // 启动前回收时，Stop/Wait/Cancel 的 panic 转为 apprun.PanicError，保留堆栈并继续回收其他服务。
 // Wait 返回错误、panic 或共享 context 到期均调用该服务的 Cancel 兜底。

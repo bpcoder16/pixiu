@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/cronx"
@@ -19,13 +20,17 @@ import (
 // 注释或删除某个 job 后重启即可停用；全部注释时允许零任务运行。
 // 构造不执行业务；启用锁时借用已初始化的命名 Redis，运行与关闭由服务管理器接管。
 // 只转换关闭早于 Run 的 ErrClosed，保留实际运行和排空错误。
+// 禁用 Cron 服务时直接返回 ErrServiceDisabled。
 func NewCronService(handlers ...cronx.NamedHandler) (apprun.Service, error) {
+	if serviceDisabled(appconfig.ServiceCron) {
+		return apprun.Service{}, ErrServiceDisabled
+	}
 	s, err := newCronScheduler(handlers...)
 	if err != nil {
 		return apprun.Service{}, err
 	}
 	return apprun.Service{
-		Name: "cron",
+		Name: appconfig.ServiceCron,
 		Run: func() error {
 			err := s.Run()
 			if errors.Is(err, cronx.ErrClosed) {

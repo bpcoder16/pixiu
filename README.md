@@ -177,7 +177,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | [`biz/realtime`](biz/realtime/doc.go) | WebSocket 身份、独立业务状态、scene/action 路由、ProtoJSON/PB 编解码、响应与主动事件 | 通过 bootstrap.NewWebSocketService 使用具名独立端口，或挂载到已有 HTTP 并显式管理生命周期 |
 | [`biz/ossservice`](biz/ossservice/doc.go) | multipart 上传、指定对象的 STS 凭据签发、URL 内容 MD5 | 上传需要 OSS，签发另需 STS；MD5FromURL 为独立包函数，无需客户端 |
 | [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
-| [`biz/appconfig`](biz/appconfig/doc.go) | 直接定义 env/log，严格解析应用配置、返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/appconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
+| [`biz/appconfig`](biz/appconfig/doc.go) | 严格解析环境、日志与常驻服务禁用列表，返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/appconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，默认及命名执行器，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
 | [`biz/outbox`](biz/outbox/doc.go) | MySQL/PostgreSQL 自增任务 ID、同事务入表、行锁并发发送、外部 cron 补偿与过期失败 | 数据库提交后的可靠发送意图 |

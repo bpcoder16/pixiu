@@ -216,6 +216,13 @@ func testNewNATSConsumerService(t *testing.T) {
 					wantCloseErr = natsx.ErrCloseTimeout
 				}
 				client := registrationClientsWithCloseError(t, true, wantCloseErr, "service")[0]
+				if mode == "normal" {
+					// 在独立进程中仅设置服务选择规则，避免在 NATS 后台线程运行时重新设置时区。
+					disabledServices = []string{"nats-consumer:service-archive"}
+					if _, err := NewNATSConsumerService("service-archive", nil, nil); !errors.Is(err, ErrServiceDisabled) {
+						t.Fatalf("禁用实例应在查找客户端和读取配置前跳过: %v", err)
+					}
+				}
 				entered, release := make(chan struct{}), make(chan struct{})
 				finished := make(chan error, 1)
 				handler := func(ctx context.Context, _ *nats.Msg) error {
@@ -242,8 +249,11 @@ func testNewNATSConsumerService(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if service.Name != "nats:service" || client.Conn().NumSubscriptions() != 0 || client.Conn().IsClosed() {
-					t.Fatal("构造应返回命名服务，不启动订阅或关闭共享连接")
+				if service.Name != "nats-consumer:service" {
+					t.Fatalf("消费者服务名 = %q，预期 nats-consumer:service", service.Name)
+				}
+				if client.Conn().NumSubscriptions() != 0 || client.Conn().IsClosed() {
+					t.Fatal("构造不应启动订阅或关闭共享连接")
 				}
 				if mode == "factory_failure" {
 					constructionErr := errors.New("later factory failed")

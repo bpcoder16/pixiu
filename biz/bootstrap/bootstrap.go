@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/bpcoder16/pixiu/biz/appconfig"
@@ -11,6 +12,9 @@ import (
 
 // 启动声明和初始化由调用方串行执行；开始后不支持重新初始化。
 var baseInitStarted bool
+
+// 基础初始化时复制配置，后续构造服务时只读。
+var disabledServices []string
 
 // MustBaseInit 执行通用初始化；参数缺失时 panic。
 // 参数校验通过后封闭注册；先应用 env 时区，再依次初始化日志、OSS、STS、阿里云 ES、MySQL、PostgreSQL、Redis、Elasticsearch 和 NATS。
@@ -42,6 +46,7 @@ func mustBaseInit(config *appconfig.AppConfig, resources *lifecycle.Stack, initi
 		panic(fmt.Errorf("bootstrap: initialization has started"))
 	}
 	baseInitStarted = true
+	disabledServices = slices.Clone(config.DisabledServices)
 	// 轮转文件创建后即启动后台清理，因此必须在初始化日志前设置默认时区。
 	time.Local = env.TimeLocation()
 	if initializeLog {
@@ -91,5 +96,5 @@ func validateParams(config *appconfig.AppConfig, resources *lifecycle.Stack) err
 	if resources == nil {
 		return fmt.Errorf("bootstrap: nil resource stack")
 	}
-	return nil
+	return config.ValidateDisabledServices()
 }

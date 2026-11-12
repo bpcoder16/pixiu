@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/env"
@@ -18,7 +19,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// NewNATSConsumerService 读取 nats-register.<instanceName>.yaml 并绑定 Handler，构造名为 nats:<instanceName> 的服务。
+// NewNATSConsumerService 读取 nats-register.<instanceName>.yaml 并绑定 Handler，构造名为 nats-consumer:<instanceName> 的服务。
 // 要求 env、Handler 及底层客户端已就绪；一个 Client 只创建一个消费组件，实际注册在 Run 中执行。
 // 构造不启动订阅，错误原样返回；服务接入统一停收、排空和取消协议，共享客户端仍由资源栈关闭。
 // 客户端通过 natsx.Named 查询，实例未登记或 CloseAll 开始后查询会 panic。
@@ -42,13 +43,18 @@ import (
 // 临时断连沿用 SDK 重连，丢失心跳继续拉取。
 // 注册 context 可由 Stop 取消，不设置整体注册期限；资源请求与 Core Flush 沿用 SDK 默认行为。
 // Client 关闭检查沿用 natsx；长期 Handler 使用独立消息 context，不提供热更新或整批重试。
+// disabledServices 命中 nats-consumer 或 nats-consumer:<instanceName> 时直接返回 ErrServiceDisabled。
 func NewNATSConsumerService(instanceName string, jetStreamHandlers *natsx.JetStreamHandlerRegistry, coreHandlers *natsx.CoreHandlerRegistry) (apprun.Service, error) {
+	serviceName := appconfig.ServiceNATSConsumer + ":" + instanceName
+	if serviceDisabled(serviceName) {
+		return apprun.Service{}, ErrServiceDisabled
+	}
 	c, err := newNATSConsumer(instanceName, jetStreamHandlers, coreHandlers)
 	if err != nil {
 		return apprun.Service{}, err
 	}
 	return apprun.Service{
-		Name:   "nats:" + c.name,
+		Name:   serviceName,
 		Run:    c.Run,
 		Stop:   c.Stop,
 		Wait:   c.Wait,
