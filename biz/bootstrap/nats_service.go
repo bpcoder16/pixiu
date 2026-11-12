@@ -64,7 +64,6 @@ func NewNATSConsumerService(instanceName string, jetStreamHandlers *natsx.JetStr
 
 // natsConsumer 管理一个共享客户端的消费者；连接始终由资源栈关闭。
 type natsConsumer struct {
-	name               string
 	client             *natsx.Client
 	batch              *natsRegistrations
 	location           string
@@ -96,7 +95,6 @@ func newNATSConsumer(instanceName string, jetStreamHandlers *natsx.JetStreamHand
 	}
 	registerCtx, cancelRegistration := context.WithCancel(context.Background())
 	return &natsConsumer{
-		name:               instanceName,
 		client:             client,
 		batch:              batch,
 		location:           location,

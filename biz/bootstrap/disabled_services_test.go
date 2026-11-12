@@ -160,3 +160,28 @@ func TestStartRunsHTTPWithCronDisabled(t *testing.T) {
 		}
 	})
 }
+
+func TestStartHandlesJoinedDisabledErrors(t *testing.T) {
+	disabled := bootstrap.ErrServiceDisabled
+	nextErr := errors.New("next factory called")
+	mixed := fmt.Errorf("setup: %w", errors.Join(disabled, errors.Join(disabled, errors.New("factory cleanup failed"))))
+	for _, tc := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"禁用且回收成功", errors.Join(disabled, nil), nextErr},
+		{"嵌套合并且全部禁用", fmt.Errorf("setup: %w", errors.Join(disabled, errors.Join(disabled, disabled))), nextErr},
+		{"嵌套合并含回收失败", mixed, mixed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := bootstrap.Start(
+				func() (apprun.Service, error) { return apprun.Service{}, tc.err },
+				func() (apprun.Service, error) { return apprun.Service{}, nextErr },
+			)
+			if got != tc.want {
+				t.Fatalf("Start() = %v，期望 %v", got, tc.want)
+			}
+		})
+	}
+}

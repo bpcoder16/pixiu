@@ -156,7 +156,8 @@
 // 可选类型为 http（含 Gin HTTP）、cron、nats-consumer、websocket；类型匹配全部实例，类型:实例名精确匹配。
 // HTTP 和 Cron 的内置入口使用单服务名 http、cron。Start 也按工厂返回的最终服务名匹配，例如 http:aaa。
 // 两种基础初始化入口均保存禁用列表。共享 NATS 客户端和 WebSocket 命名实例仍按声明初始化。
-// 内置构造入口匹配时在读取专属配置前返回 ErrServiceDisabled。若名称由工厂在构造后指定，
+// 内置构造入口匹配时在读取专属配置前返回 ErrServiceDisabled。工厂包装或合并错误时，
+// 只有所有原因都匹配 ErrServiceDisabled 才会继续启动后续服务。若名称由工厂在构造后指定，
 // Start 和 StartWithConfig 会在登记前回收匹配的服务并跳过运行。全部跳过时返回 apprun.ErrNoServices。
 // 后续构造或登记失败时逆序回收此前成功构造的服务，包括本轮登记失败的服务，并保留原错误与回收错误。
 // 启动前回收时，Stop/Wait/Cancel 的 panic 转为 apprun.PanicError，保留堆栈并继续回收其他服务。

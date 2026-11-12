@@ -26,14 +26,27 @@ func serviceDisabled(name string) bool {
 	return slices.Contains(disabledServices, name) || (named && slices.Contains(disabledServices, kind))
 }
 
-// 工厂可为禁用错误补充上下文。合并错误可能包含构造或回收失败，应原样上报。
+// 合并错误中只要有一个实际失败，就保留整个工厂错误供调用方排查。
+// errors.Is 只要匹配到一个 ErrServiceDisabled 就返回 true，直接用它判断会漏掉同一合并错误中的其他失败。
 func onlyServiceDisabled(err error) bool {
-	var joined interface{ Unwrap() []error }
-	return errors.Is(err, ErrServiceDisabled) && !errors.As(err, &joined)
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() []error }:
+		causes := wrapped.Unwrap()
+		for _, cause := range causes {
+			if !onlyServiceDisabled(cause) {
+				return false
+			}
+		}
+		return len(causes) > 0
+	case interface{ Unwrap() error }:
+		return onlyServiceDisabled(wrapped.Unwrap())
+	default:
+		return errors.Is(err, ErrServiceDisabled)
+	}
 }
 
 // Start 按顺序构造、登记服务，全部成功后接管 SIGINT/SIGTERM 并阻塞至运行和关闭结束。
-// 工厂仅返回 ErrServiceDisabled（可逐层包装）时跳过；没有可运行的服务时返回 apprun.ErrNoServices。
+// 工厂错误经包装或合并后，所有原因均为 ErrServiceDisabled 时跳过；没有可运行的服务时返回 apprun.ErrNoServices。
 // 工厂成功返回后按最终服务名再次匹配 disabledServices，命中时回收该服务并跳过登记。
 // 构造或登记失败时停止后续构造，逆序回收已构造服务并合并错误；nil 构造函数返回错误。
 // 回收回调的 panic 转为 apprun.PanicError，保留堆栈并继续回收其他服务。
