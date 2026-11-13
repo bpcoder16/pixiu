@@ -75,6 +75,29 @@ func TestDeleteObjectServiceError(t *testing.T) {
 	}
 }
 
+func TestDeleteObjectInvalidResponseHeader(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-oss-request-id", "delete-id")
+		w.Header().Set("x-oss-delete-marker", "invalid")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer s.Close()
+	buf := captureLogs(t)
+	c := newTestClient(t, testConfig(s.URL), OptLogRequests(true))
+	err := c.DeleteObject(t.Context(), "old.json")
+	if sdkErr, ok := errors.AsType[*oss.ClientError](err); !ok || sdkErr.Code != "UnmarshalOutputFail" {
+		t.Fatalf("应保留 SDK 响应解析错误: %v", err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
+		t.Fatal(err)
+	}
+	details := record[logit.DownstreamDetailsKey].(map[string]any)
+	if record["level"] != "ERROR" || details["error_code"] != "client_error" || details["status"] != float64(http.StatusNoContent) || details["request_id"] != "delete-id" {
+		t.Fatalf("删除响应解析失败时应记录实际状态和请求标识: %v", record)
+	}
+}
+
 func TestHeadAndPresign(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

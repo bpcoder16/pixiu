@@ -89,14 +89,7 @@ func (c *Client) put(ctx context.Context, operation string, req PutObjectRequest
 	if req.ContentType != "" {
 		sdkReq.ContentType = new(req.ContentType)
 	}
-	response, err := c.sdk.PutObject(callCtx, sdkReq, func(opts *oss.Options) {
-		// CRC 校验失败时 SDK 不返回结果，须在校验前保存日志所需的响应信息。
-		opts.ResponseHandlers = append(opts.ResponseHandlers, func(response *http.Response) error {
-			status = response.StatusCode
-			requestID = response.Header.Get("x-oss-request-id")
-			return nil
-		})
-	})
+	response, err := c.sdk.PutObject(callCtx, sdkReq, captureResponse(&status, &requestID))
 	if response != nil {
 		result = PutObjectResult{
 			RequestID: requestID,
@@ -130,13 +123,7 @@ func (c *Client) HeadObject(ctx context.Context, key string) (result ObjectInfo,
 	response, err := c.sdk.HeadObject(callCtx, &oss.HeadObjectRequest{
 		Bucket: new(c.bucket),
 		Key:    new(key),
-	}, func(opts *oss.Options) {
-		opts.ResponseHandlers = append(opts.ResponseHandlers, func(r *http.Response) error {
-			status = r.StatusCode
-			requestID = r.Header.Get("x-oss-request-id")
-			return nil
-		})
-	})
+	}, captureResponse(&status, &requestID))
 	if err != nil {
 		if serviceErr, ok := errors.AsType[*oss.ServiceError](err); ok {
 			status = serviceErr.StatusCode
@@ -163,16 +150,12 @@ func (c *Client) DeleteObject(ctx context.Context, key string) error {
 	callCtx, cancel := context.WithTimeout(ctx, c.requestTimeout)
 	defer cancel()
 	start := time.Now()
-	response, err := c.sdk.DeleteObject(callCtx, &oss.DeleteObjectRequest{
-		Bucket: new(c.bucket),
-		Key:    new(key),
-	})
 	status := 0
 	requestID := ""
-	if response != nil {
-		status = response.StatusCode
-		requestID = response.Headers.Get("x-oss-request-id")
-	}
+	_, err := c.sdk.DeleteObject(callCtx, &oss.DeleteObjectRequest{
+		Bucket: new(c.bucket),
+		Key:    new(key),
+	}, captureResponse(&status, &requestID))
 	err = operationError(callCtx, "DeleteObject", err)
 	c.finish(ctx, "DeleteObject", key, requestID, status, err, time.Since(start))
 	return err
@@ -197,6 +180,17 @@ func (c *Client) PresignGetObject(ctx context.Context, key string, expires time.
 		return "", fmt.Errorf("ossx: PresignGetObject: %w", err)
 	}
 	return result.URL, nil
+}
+
+// SDK 校验或解析响应失败时可能返回空结果，先保存本次请求的状态和标识供结果日志使用。
+func captureResponse(status *int, requestID *string) func(*oss.Options) {
+	return func(opts *oss.Options) {
+		opts.ResponseHandlers = append(opts.ResponseHandlers, func(r *http.Response) error {
+			*status = r.StatusCode
+			*requestID = r.Header.Get("x-oss-request-id")
+			return nil
+		})
+	}
 }
 
 func operationError(ctx context.Context, operation string, err error) error {
