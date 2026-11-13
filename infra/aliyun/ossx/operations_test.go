@@ -277,15 +277,30 @@ func TestErrorResponseBodyTimeoutPreservesErrorChain(t *testing.T) {
 	cfg := testConfig(s.URL)
 	cfg.RequestTimeout = 200 * time.Millisecond
 	c := newTestClient(t, cfg)
-	_, err := c.PutObject(context.Background(), PutObjectRequest{
-		Key:  "test.txt",
-		Body: strings.NewReader("data"),
-	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("错误响应正文超时应保留 context 原因: %v", err)
-	}
-	var sdkErr *oss.ServiceError
-	if !errors.As(err, &sdkErr) || sdkErr.StatusCode != http.StatusForbidden || sdkErr.RequestID != "timeout-id" {
-		t.Fatalf("补充超时原因后仍须保留 SDK 错误及响应信息: %v", err)
+	for _, tc := range []struct {
+		name   string
+		invoke func(context.Context) error
+	}{
+		{"PutObject", func(ctx context.Context) error {
+			_, err := c.PutObject(ctx, PutObjectRequest{
+				Key:  "test.txt",
+				Body: strings.NewReader("data"),
+			})
+			return err
+		}},
+		{"DeleteObject", func(ctx context.Context) error {
+			return c.DeleteObject(ctx, "test.txt")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.invoke(t.Context())
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("错误响应正文超时应保留 context 原因: %v", err)
+			}
+			var sdkErr *oss.ServiceError
+			if !errors.As(err, &sdkErr) || sdkErr.StatusCode != http.StatusForbidden || sdkErr.RequestID != "timeout-id" {
+				t.Fatalf("补充超时原因后仍须保留 SDK 错误及响应信息: %v", err)
+			}
+		})
 	}
 }

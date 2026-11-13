@@ -47,11 +47,17 @@ func TestLocallyRejectedOperationsHaveNoDuration(t *testing.T) {
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
+	if err := c.DeleteObject(cancelled, "key"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("删除应保留取消原因: %v", err)
+	}
 	_, _ = c.PutObject(cancelled, PutObjectRequest{
 		Key:  "key",
 		Body: strings.NewReader("data"),
 	})
 	_ = c.Close()
+	if err := c.DeleteObject(ctx, "key"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("关闭后删除应返回 ErrClosed: %v", err)
+	}
 	_, _ = c.PutObject(ctx, PutObjectRequest{
 		Key:  "key",
 		Body: strings.NewReader("data"),
@@ -90,6 +96,9 @@ func TestSDKKeyValidation(t *testing.T) {
 		{"HeadObject", func(ctx context.Context) error {
 			_, err := c.HeadObject(ctx, "")
 			return err
+		}},
+		{"DeleteObject", func(ctx context.Context) error {
+			return c.DeleteObject(ctx, "")
 		}},
 		{"PresignGetObject", func(ctx context.Context) error {
 			_, err := c.PresignGetObject(ctx, "", time.Minute)

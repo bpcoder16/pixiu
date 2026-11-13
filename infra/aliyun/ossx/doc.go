@@ -1,4 +1,4 @@
-// Package ossx 封装官方 SDK 的对象上传、元数据查询和下载签名。
+// Package ossx 封装官方 SDK 的对象上传、删除、元数据查询和下载签名。
 // 导入路径为 github.com/bpcoder16/pixiu/infra/aliyun/ossx。
 // 配置、凭据、连接池和命名注册表独立于 stsx、esx，可分别使用不同账号。
 // Name、Region、Bucket 必填；每个实例固定一个 Bucket，多 Bucket 创建多个实例。
@@ -11,6 +11,7 @@
 // Key 由 SDK 校验；PutFile 的路径由 os.Open 校验，错误链保留 SDK 参数错误和文件错误。
 // PutObject 的 Body 非 nil 及签名有效期 1 秒至 7 天仍由本包检查。
 // HeadObject 返回大小、MIME 和 ETag，对象缺失用 errors.Is(err, ErrObjectNotFound) 识别；桶错误原样保留。
+// DeleteObject 按 Key 删除单个对象，对象已不存在时也返回成功。开启版本控制时，OSS 创建删除标记。
 // PresignGetObject 本地签发 GET URL，有效期还受所用临时凭据的剩余期限限制。
 // STS 临时凭据由独立的 stsx.AssumeRole 签发；biz/ossservice 可组合上传策略和签发流程，
 // 文件校验、Key 生成、记录保存和响应格式由应用负责。
@@ -18,7 +19,7 @@
 //
 // OptLogRequests(true) 开启脱敏结果日志，默认关闭；不提供正文日志。
 // logit.WithStart(ctx) 启用请求级耗时，登记与结果日志开关无关。
-// 上传、元数据查询进入 SDK 后的参数错误同样登记；本地前置拒绝及签名不登记。
+// 上传、删除、元数据查询进入 SDK 后的参数错误同样登记；本地前置拒绝及签名不登记。
 // 官方 Credential.GetCredential 不接收 ctx，已开始的刷新不能保证立即取消；
 // 自定义 Reader 也须及时响应读取，调用方不能依赖超时强制中断任意阻塞的 Read。
 // 本包禁止 OSS SDK 调试输出；凭据库的进程级 DEBUG 开关须由部署方关闭。
@@ -45,6 +46,12 @@
 //		return err
 //	}
 //	_ = result.RequestID
+//
+// 清理旧版本词库文件时，可按其 Key 调用删除方法：
+//
+//	if err := client.DeleteObject(ctx, "releases/v0/synonyms.txt"); err != nil {
+//		return err
+//	}
 //
 // Bucket 在构造时校验，上传请求仅指定 Key 和数据；旧请求中的 Bucket 须移到 Config。
 // biz/bootstrap 可通过 MustRegisterAliyunOSS(name, isDefault) 声明实例，
@@ -141,6 +148,7 @@
 // 在 RAM 控制台的权限管理 → 权限策略中创建自定义策略，选择脚本编辑并粘贴替换后的 JSON；
 // 创建后还须在身份管理 → 用户中给实际使用 AccessKey 的 RAM 用户添加该策略，仅创建策略不会生效。
 // PutObject、PutFile 需要 oss:PutObject；HeadObject 和 PresignGetObject 需要 oss:GetObject。
+// DeleteObject 需要目标对象的 oss:DeleteObject 权限。
 // stsx.AssumeRole 需要 sts:AssumeRole；业务应通过 Policy 将上传凭据限制到指定对象的 oss:PutObject。
 // 固定 AK/SK 直接上传时，可移除整条 STS 规则，仅将 OSS 规则授予该 AK 所属 RAM 用户。
 //

@@ -79,7 +79,7 @@ func (c *Client) put(ctx context.Context, operation string, req PutObjectRequest
 				err = errors.Join(err, fmt.Errorf("ossx: close file: %w", closeErr))
 			}
 		}
-		c.finish(ctx, operation, req, requestID, status, err, time.Since(start))
+		c.finish(ctx, operation, req.Key, requestID, status, err, time.Since(start))
 	}()
 	sdkReq := &oss.PutObjectRequest{
 		Bucket: new(c.bucket),
@@ -104,14 +104,7 @@ func (c *Client) put(ctx context.Context, operation string, req PutObjectRequest
 			VersionID: oss.ToString(response.VersionId),
 		}
 	}
-	if err != nil {
-		// SDK 解析错误响应正文时可能只保留取消原因的文本，补充原因但不丢弃 SDK 错误链。
-		if ctxErr := callCtx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
-			err = errors.Join(err, ctxErr)
-		}
-		return result, fmt.Errorf("ossx: %s: %w", operation, err)
-	}
-	return result, nil
+	return result, operationError(callCtx, operation, err)
 }
 
 // ObjectInfo 是 HEAD 返回的对象元数据，不下载文件正文。
@@ -132,7 +125,7 @@ func (c *Client) HeadObject(ctx context.Context, key string) (result ObjectInfo,
 	status := 0
 	requestID := ""
 	defer func() {
-		c.finish(ctx, "HeadObject", PutObjectRequest{Key: key}, requestID, status, err, time.Since(start))
+		c.finish(ctx, "HeadObject", key, requestID, status, err, time.Since(start))
 	}()
 	response, err := c.sdk.HeadObject(callCtx, &oss.HeadObjectRequest{
 		Bucket: new(c.bucket),
@@ -152,16 +145,37 @@ func (c *Client) HeadObject(ctx context.Context, key string) (result ObjectInfo,
 				err = errors.Join(ErrObjectNotFound, err)
 			}
 		}
-		if callCtx.Err() != nil {
-			err = errors.Join(err, callCtx.Err())
-		}
-		return result, fmt.Errorf("ossx: HeadObject: %w", err)
+		return result, operationError(callCtx, "HeadObject", err)
 	}
 	return ObjectInfo{
 		response.ContentLength,
 		oss.ToString(response.ContentType),
 		oss.ToString(response.ETag),
 	}, nil
+}
+
+// DeleteObject 删除实例 Bucket 中指定 Key 的对象。对象已不存在时，OSS 仍返回成功。
+// 开启版本控制时，OSS 为该 Key 创建删除标记，保留历史版本。
+func (c *Client) DeleteObject(ctx context.Context, key string) error {
+	if err := c.check(ctx); err != nil {
+		return err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, c.requestTimeout)
+	defer cancel()
+	start := time.Now()
+	response, err := c.sdk.DeleteObject(callCtx, &oss.DeleteObjectRequest{
+		Bucket: new(c.bucket),
+		Key:    new(key),
+	})
+	status := 0
+	requestID := ""
+	if response != nil {
+		status = response.StatusCode
+		requestID = response.Headers.Get("x-oss-request-id")
+	}
+	err = operationError(callCtx, "DeleteObject", err)
+	c.finish(ctx, "DeleteObject", key, requestID, status, err, time.Since(start))
+	return err
 }
 
 // PresignGetObject 本地签发 GET URL；调用方不得将签名 URL 写入日志。
@@ -185,7 +199,18 @@ func (c *Client) PresignGetObject(ctx context.Context, key string, expires time.
 	return result.URL, nil
 }
 
-func (c *Client) finish(ctx context.Context, operation string, req PutObjectRequest, requestID string, status int, err error, duration time.Duration) {
+func operationError(ctx context.Context, operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	// SDK 解析错误响应正文时可能只保留取消原因的文本，补充原因但不丢弃 SDK 错误链。
+	if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
+		err = errors.Join(err, ctxErr)
+	}
+	return fmt.Errorf("ossx: %s: %w", operation, err)
+}
+
+func (c *Client) finish(ctx context.Context, operation, key, requestID string, status int, err error, duration time.Duration) {
 	logit.AddDownstreamDurationAuto(ctx, downstreamType+"_"+c.name, duration)
 	if !c.logRequests {
 		return
@@ -211,7 +236,7 @@ func (c *Client) finish(ctx context.Context, operation string, req PutObjectRequ
 	details := map[string]any{
 		"operation":  operation,
 		"bucket":     c.bucket,
-		"key":        req.Key,
+		"key":        key,
 		"status":     status,
 		"request_id": requestID,
 		"error_code": code,
