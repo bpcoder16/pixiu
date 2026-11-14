@@ -360,7 +360,8 @@ func TestRowLocksAcrossStoresAndConcurrentTasks(t *testing.T) {
 		locked := enqueue(t, s, db)
 		direct := enqueue(t, s, db)
 		retried := enqueue(t, s, db)
-		// 观察实际 SQL，保证主动发送与补偿均使用 NOWAIT 获取行锁。
+		// 在清理窗口外只观察发送 SQL，保证主动发送与补偿均使用 NOWAIT 获取行锁。
+		storeHour(s, 12)
 		const callback = "outbox_test:check_nowait"
 		if err := db.Callback().Query().After("gorm:query").Register(callback, func(tx *gorm.DB) {
 			if _, locking := tx.Statement.Clauses["FOR"]; locking && !strings.HasSuffix(tx.Statement.SQL.String(), " FOR UPDATE NOWAIT") {

@@ -61,7 +61,8 @@ func (w *Worker) SendAsync(id int64) {
 	}()
 }
 
-// RetryPending 按 ID 分页补偿，每条尝试使用 5 秒期限，并受调用方取消控制。
+// RetryPending 按 ID 分页补偿，再于 Store 当地 02:00 至 04:00 分批清理已结束超过 30 天的任务。
+// 每批清理前按 Store 时区检查当前时间；每条补偿尝试使用 5 秒期限，并受调用方取消控制。
 // batchSize 为查询页大小；每轮从头扫描 pending，扫描位置和上界仅用于本次调用。
 // 已锁任务跳过，发送失败继续；扫描/回写错误或本轮取消结束调用。
 // 单条超时不保证跨轮公平性，前排失败任务仍可能耗尽整轮预算。
@@ -82,18 +83,15 @@ func (w *Worker) RetryPending(ctx context.Context, batchSize int) error {
 	if err := db.Where("status = ?", Pending).Order("id DESC").Limit(1).Pluck("id", &upper).Error; err != nil {
 		return err
 	}
-	if len(upper) == 0 {
-		return nil
-	}
 	var last int64
 	var firstErr error
-	for {
+	for len(upper) > 0 && last < upper[0] {
 		var ids []int64
 		if err := db.Where("status = ? AND id > ? AND id <= ?", Pending, last, upper[0]).Order("id").Limit(batchSize).Pluck("id", &ids).Error; err != nil {
 			return errors.Join(firstErr, err)
 		}
 		if len(ids) == 0 {
-			return firstErr
+			break
 		}
 		for _, id := range ids {
 			if err := ctx.Err(); err != nil {
@@ -112,4 +110,14 @@ func (w *Worker) RetryPending(ctx context.Context, batchSize int) error {
 			last = id
 		}
 	}
+	// 空队列也要清理历史记录。单条发送错误已持久化，仍可清理其他已结束的任务。
+	if ctx.Err() == nil {
+		if err := cleanFinished(ctx, db, w.store.cfg.Location, min(batchSize, 500)); err != nil {
+			logit.Error(ctx, "OutboxCleanupFailed", logit.Str("err", errorText(err)))
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(firstErr, err)
+	}
+	return firstErr
 }

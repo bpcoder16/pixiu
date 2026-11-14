@@ -72,8 +72,12 @@
 // 每轮从头扫描 pending，不保留跨轮进度；前排失败任务耗尽整轮预算时仍可能阻碍后续补偿。
 // 补偿轮次由 cronx 分布式锁互斥，本地不加锁；失租重叠时数据库行锁仍保护单条任务。
 // 发送失败保留 pending 和 LastError；成功为 succeeded；发送前已过期则为 failed。
+// 补偿后按当前时间判断 Store 当地 [02:00, 04:00) 窗口，窗口内清理历史，即使没有 pending 也执行。
+// succeeded 和 failed 按 finished_at 保留 30 天，截止时间为进入清理阶段的时刻减去 30×24 小时。
+// 单批最多 min(batchSize, 500) 条，每批前检查当前时间，在窗口内持续清理；锁定的行留待后续轮次。
+// 扫描或回写错误中止本轮；清理错误记 OutboxCleanupFailed。被清理的 ID 再 Get/Send 返回 ErrNotFound。
 // ExpiresAt 零值表示不过期；已开始的发送按结果收尾，不会撤回。
-// Send 与 RetryPending 均使用 FOR UPDATE NOWAIT；不同任务可并发发送。
+// 主动发送与补偿发送均使用 FOR UPDATE NOWAIT；不同任务可并发发送。
 // 同一任务被锁时，Send 返回 ErrBusy，RetryPending 跳过；cronx 分布式锁协调补偿轮次。
 // 每条任务的事务从加锁持续到 Handler 返回并回写；Handler 应响应 context，发送期间占用数据库连接。
 // 持锁读取后按应用服务器时间判断过期，次数和发送结果只更新一次。结果 UPDATE 使用独立的 3 秒 context；

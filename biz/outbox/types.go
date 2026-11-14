@@ -38,7 +38,7 @@ var (
 type StoreConfig struct {
 	Backend  Backend
 	MasterDB func(context.Context) *gorm.DB
-	// Location 为 nil 时使用 UTC，控制查询结果与 Delivery 的时间表示。
+	// Location 为 nil 时使用 UTC，决定补偿清理的当地时段及查询结果与 Delivery 的时间表示。
 	// MySQL 驱动解析时区须与数据库会话时区一致，本配置不修改连接。
 	Location *time.Location
 }
