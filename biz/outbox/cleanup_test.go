@@ -1,11 +1,16 @@
 package outbox
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/bpcoder16/pixiu/logit"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -198,6 +203,136 @@ func TestRetryPendingCleanupCommitsBeforeCancellation(t *testing.T) {
 		}
 		if _, err := s.Get(ctx, second); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("下轮应能继续清理: %v", err)
+		}
+	})
+}
+
+func TestRetryPendingConcurrentCleanupAllowsSending(t *testing.T) {
+	eachDatabase(t, func(t *testing.T, s *Store, db *gorm.DB) {
+		storeHour(s, 3)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		old := time.Now().Add(-31 * 24 * time.Hour)
+		var ids []int64
+		for range 5 {
+			ids = append(ids, finishedTask(t, s, db, Succeeded, old))
+		}
+		w := testWorker(t, s, func(context.Context, Delivery) error { return nil })
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		var batches atomic.Int32
+		const callback = "outbox_test:hold_first_cleanup_batch"
+		if err := db.Callback().Delete().After("gorm:delete").Register(callback, func(tx *gorm.DB) {
+			if tx.Error == nil && batches.Add(1) == 1 {
+				// 第一批已删除但尚未提交，验证其他清理和发送能独立推进。
+				close(entered)
+				select {
+				case <-release:
+				case <-tx.Statement.Context.Done():
+					tx.AddError(tx.Statement.Context.Err())
+				}
+			}
+		}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = db.Callback().Delete().Remove(callback) })
+		var firstErr error
+		done := make(chan struct{})
+		go func() {
+			firstErr = w.RetryPending(ctx, 2)
+			close(done)
+		}()
+		defer func() {
+			releaseOnce.Do(func() { close(release) })
+			<-done
+		}()
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("清理未进入首批事务")
+		}
+		fresh := enqueue(t, s, db)
+		if err := w.Send(ctx, fresh); err != nil {
+			t.Fatalf("清理持锁期间应能登记并发送新任务: %v", err)
+		}
+		if err := w.RetryPending(ctx, 2); err != nil {
+			t.Fatalf("重叠清理应跳过未提交批次并继续: %v", err)
+		}
+		for _, id := range ids[2:] {
+			if _, err := s.Get(ctx, id); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("其他批次应可完成删除: id=%d err=%v", id, err)
+			}
+		}
+		releaseOnce.Do(func() { close(release) })
+		<-done
+		if firstErr != nil {
+			t.Fatal(firstErr)
+		}
+		for _, id := range ids {
+			if _, err := s.Get(ctx, id); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("并发清理结束后应清完历史: id=%d err=%v", id, err)
+			}
+		}
+		if row, err := s.Get(ctx, fresh); err != nil || row.Status != Succeeded {
+			t.Fatalf("新完成的任务应保留: %+v %v", row, err)
+		}
+	})
+}
+
+func TestRetryPendingCleanupFailureRollsBackAndLogs(t *testing.T) {
+	eachDatabase(t, func(t *testing.T, s *Store, db *gorm.DB) {
+		storeHour(s, 3)
+		ctx := context.Background()
+		old := time.Now().Add(-31 * 24 * time.Hour)
+		first := finishedTask(t, s, db, Failed, old)
+		second := finishedTask(t, s, db, Failed, old)
+		pending := enqueue(t, s, db)
+		sendErr := errors.New("发送仍然失败")
+		w := testWorker(t, s, func(context.Context, Delivery) error { return sendErr })
+		var output bytes.Buffer
+		logger := logit.MustNew(
+			logit.OptEncoder(logit.DefaultJSONEncoder),
+			logit.OptWriter(logit.NewWriter(&output)),
+		)
+		previous := logit.Default()
+		logit.SetDefault(logger)
+		t.Cleanup(func() {
+			logit.SetDefault(previous)
+			_ = logit.Close(logger)
+		})
+		const callback = "outbox_test:fail_second_cleanup_batch"
+		batches := 0
+		if err := db.Callback().Delete().After("gorm:delete").Register(callback, func(tx *gorm.DB) {
+			batches++
+			if batches == 2 {
+				// 删除 SQL 已执行后的错误必须回滚本批，首批提交结果应继续保留。
+				tx.AddError(errors.New("清理删除回写失败"))
+			}
+		}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = db.Callback().Delete().Remove(callback) })
+		if err := w.RetryPending(ctx, 1); !errors.Is(err, sendErr) {
+			t.Fatalf("清理失败应保留原补偿错误: %v", err)
+		}
+		if !strings.Contains(output.String(), "OutboxCleanupFailed") ||
+			!strings.Contains(output.String(), "清理删除回写失败") {
+			t.Fatalf("清理失败必须有日志: %s", output.String())
+		}
+		if _, err := s.Get(ctx, first); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("首批应已提交: %v", err)
+		}
+		for _, id := range []int64{second, pending} {
+			if _, err := s.Get(ctx, id); err != nil {
+				t.Fatalf("失败批次和 pending 应保留: id=%d err=%v", id, err)
+			}
+		}
+		if err := w.RetryPending(ctx, 1); !errors.Is(err, sendErr) {
+			t.Fatal(err)
+		}
+		if _, err := s.Get(ctx, second); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("下轮应重新清理已回滚的批次: %v", err)
 		}
 	})
 }
