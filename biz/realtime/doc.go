@@ -111,7 +111,7 @@
 //
 // # 按端投递事件
 //
-// 持有 Server 的调用方可按用户、设备或整个端投递，只影响本实例上的连接。
+// 持有 Server 的调用方可按用户、设备、namespace/topic 或整个端投递，只影响本实例上的连接。
 // 例如业务消费者从外部事件取出 userID 后调用：
 //
 //	result, err := server.PushToUser(ctx, userID, realtime.PushMessage{
@@ -128,10 +128,46 @@
 // 其他连接继续发送。调用方可据此观察过载，不应整批重试已部分入队的事件。
 // 调用期间不得并发修改消息及其正文。Stop 封闭新投递，Wait 包含已接纳的投递及连接实际排空。
 //
+// # namespace/topic 订阅
+//
+// Server.SubscribeTopics(session, namespace, topics...) 增量订阅并去重；UnsubscribeTopics 幂等退订。
+// ReplaceTopics 原子替换指定 namespace，空列表清空该 namespace，其他 namespace 不变：
+//
+//	if err := server.ReplaceTopics(session, "auction", "sale-1", "sale-2"); err != nil {
+//		return err
+//	}
+//	result, err := server.PushToTopic(ctx, "auction", "sale-1", realtime.PushMessage{
+//		Type: "auction.changed",
+//		Data: wrapperspb.String("updated"),
+//	})
+//
+// namespace/topic 均为 1–128 字节的 ASCII 字母、数字、点、下划线或短横线，大小写敏感，
+// 不支持通配符，不自动裁剪空白。非法参数返回 ErrInvalidMessage，批量操作不部分生效。
+// Config.MaxTopicsPerSession 限制每连接跨全部 namespace 的不同订阅总数，零值默认 500，
+// 负值无效。重复项不占额外配额；超过上限返回 ErrTopicLimitExceeded，原订阅保持不变。
+// 同一 namespace/topic 在本 Server 内共享一份名称及订阅对象，连接只保存对象引用。
+// 最后一个订阅者退出后回收 topic，空 namespace 一并回收；没有永久字符串池或后台清扫任务。
+//
+// 订阅绑定单次连接，三种 Server 订阅变更方法均仅接纳初始化成功且仍在线的连接，
+// 不支持在 OnOpen 中预订阅；初始化未完成、Stop 或断线后返回 websocketx.ErrClosed。
+// 客户端握手成功即可发送订阅请求，消息排队等待 OnOpen 成功及就绪登记后才进入 Handler，
+// 因此 Handler 内可直接订阅，无需客户端额外等待 ready 通知。三种方法均并发安全。
+// OnDetach 自动清理该连接所有 namespace，无需业务 OnClose 配合；重连须重新订阅。
+// nil、零值 Session 返回 ErrInvalidMessage；其他 Server 的连接和 Session 复制品
+// 不在本 Server 就绪索引中，统一返回 websocketx.ErrClosed。Session 不保存 Server 指针。
+// ClearTopic(namespace, topic) 清理本节点该 topic 的全部订阅并返回移除的连接数，
+// 不存在时返回零；允许停机期间调用，不阻止后续重新订阅，也不自动通知其他节点。
+// 退订、替换或清除不撤回已取得目标快照或已入队的推送，客户端应忽略已不关注的数据。
+//
+// 业务负责订阅权限、请求解析、页面离开及业务过期；框架不根据 scene 自动订阅，
+// 不注册通用订阅路由，不推断业务生命周期或提供订阅 TTL。共享连接的多个组件应由业务
+// 汇总 namespace 下的关注集合。PushMessage.ExpiresAt 只控制消息有效期，不控制订阅期限。
+//
 // # 跨节点推送命令
 //
 // 发布端与订阅端使用同一份 UTF-8 JSON。命令上限 1 MiB，kind 为 broadcast 时须省略 id，
-// user/device 则需要非空白 id。message.data 按 ProtoJSON 表示，也可改用 message.error。
+// user/device 则需要非空白 id。kind=topic 必须同时携带 namespace 和 id，其他 kind 必须省略
+// namespace（包括空值和 null）。message.data 按 ProtoJSON 表示，也可改用 message.error。
 // expiresAt 可省略，填写时使用 RFC3339 绝对时间。示例在线上表示为：
 //
 //	{"kind":"user","id":"u42","message":{"type":"home.notice","data":"updated"}}
@@ -150,7 +186,10 @@
 // 消费端调用 UnmarshalPushCommand(data, newData)。newData 按业务 type 提供独立的可写 proto，
 // 例如 home.notice 返回 new(wrapperspb.StringValue)。仅有 error 时无需提供构造函数。
 // 已知事件类型的 data 会忽略本地 proto 未定义的字段，投递时只携带已识别的字段。
-// 调用方按命令 Kind/ID 调用本端 Server 的投递方法，Server 再编码为各连接协商的 JSON/PB。
+// 调用方按命令 Kind/Namespace/ID 调用本端 Server 的投递方法；PushTopic 对应
+// server.PushToTopic(ctx, cmd.Namespace, cmd.ID, cmd.Message)。Server 再编码为各连接协商的 JSON/PB。
+// Redis Pub/Sub 或 NATS Core 由业务装配并广播到各节点，订阅关系只保存在连接所在节点。
+// 旧节点不认识 topic 命令；滚动升级须先升级所有消费节点，再启用 topic 发布。
 //
 // # 当前会话下发与容量
 //

@@ -16,6 +16,8 @@ const (
 var (
 	ErrStarted        = errors.New("realtime: already started")
 	ErrInvalidMessage = errors.New("realtime: invalid message")
+	// ErrTopicLimitExceeded 表示本次变更会超过连接跨 namespace 的订阅总数上限。
+	ErrTopicLimitExceeded = errors.New("realtime: topic subscription limit exceeded")
 )
 
 // ClientInfo 由 Authenticate 在握手时返回，身份在本次连接期间保持不变。
@@ -39,6 +41,9 @@ type Config struct {
 	// 子协议、接纳门、认证及生命周期回调由 Server 持有，不能在此重复配置。
 	// ReadLimit/MaxSendBytes 零值各为 64 KiB，其他零值沿用 websocketx。
 	Transport websocketx.Config
+	// MaxTopicsPerSession 限制每连接跨所有 namespace 的不同订阅总数。
+	// 零值默认 500，负值无效；重复订阅不占额外配额，超限时整批拒绝。
+	MaxTopicsPerSession int
 	// Authenticate 必填；业务允许匿名时需显式返回空身份。
 	Authenticate func(context.Context, *http.Request) (ClientInfo, error)
 	// NewState 仅做快速内存初始化，每个连接返回独立的业务状态。
@@ -60,6 +65,9 @@ type Config struct {
 func validateConfig(cfg Config) error {
 	if cfg.Authenticate == nil || cfg.RegisterHandlers == nil {
 		return errors.New("realtime: Authenticate and RegisterHandlers are required")
+	}
+	if cfg.MaxTopicsPerSession < 0 {
+		return errors.New("realtime: MaxTopicsPerSession must not be negative")
 	}
 	t := cfg.Transport
 	if len(t.Subprotocols) != 0 || t.RequireSubprotocol || t.CheckReady != nil ||

@@ -37,14 +37,16 @@ type PushResult struct {
 }
 
 type pushTarget struct {
-	kind uint8
-	id   string
+	kind      uint8
+	id        string
+	namespace string
 }
 
 const (
 	allTargets uint8 = iota
 	userTarget
 	deviceTarget
+	topicTarget
 )
 
 type sessionSet map[*Session]struct{}
@@ -53,6 +55,7 @@ type pushIndex struct {
 	mu             sync.RWMutex
 	all            sessionSet
 	users, devices map[string]sessionSet
+	namespaces     map[string]*topicNamespace
 }
 
 func addMember(index map[string]sessionSet, id string, s *Session) {
@@ -102,6 +105,9 @@ func (i *pushIndex) remove(s *Session) {
 	delete(i.all, s)
 	removeMember(i.users, s.info.UserID, s)
 	removeMember(i.devices, s.info.DeviceID, s)
+	for topic := range s.topics {
+		i.unsubscribe(s, topic)
+	}
 }
 
 func (i *pushIndex) snapshot(target pushTarget) []*Session {
@@ -115,6 +121,12 @@ func (i *pushIndex) snapshot(target pushTarget) []*Session {
 		set = i.users[target.id]
 	case deviceTarget:
 		set = i.devices[target.id]
+	case topicTarget:
+		if namespace := i.namespaces[target.namespace]; namespace != nil {
+			if topic := namespace.topics[target.id]; topic != nil {
+				set = topic.sessions
+			}
+		}
 	}
 	matches := make([]*Session, 0, len(set))
 	for s := range set {
@@ -138,6 +150,13 @@ func (s *Server) PushToDevice(ctx context.Context, deviceID string, msg PushMess
 	return s.deliver(ctx, pushTarget{kind: deviceTarget, id: deviceID}, msg)
 }
 
+// PushToTopic 向本 Server 上订阅指定 namespace/topic 的已就绪连接投递。
+// namespace/topic 精确匹配，使用与路由标识相同的 1–128 字节 ASCII 标识规则。
+// 零命中是正常结果；其他节点由消息来源分别调用本方法。
+func (s *Server) PushToTopic(ctx context.Context, namespace, topic string, msg PushMessage) (PushResult, error) {
+	return s.deliver(ctx, pushTarget{kind: topicTarget, namespace: namespace, id: topic}, msg)
+}
+
 func (s *Server) deliver(ctx context.Context, target pushTarget, msg PushMessage) (result PushResult, err error) {
 	if ctx == nil {
 		return result, websocketx.ErrNilContext
@@ -146,6 +165,9 @@ func (s *Server) deliver(ctx context.Context, target pushTarget, msg PushMessage
 		return result, ctxErr
 	}
 	if target.kind != allTargets && strings.TrimSpace(target.id) == "" {
+		return result, ErrInvalidMessage
+	}
+	if target.kind == topicTarget && (!validID(target.namespace) || !validID(target.id)) {
 		return result, ErrInvalidMessage
 	}
 	s.pushMu.Lock()

@@ -17,11 +17,15 @@ const (
 	PushBroadcast PushKind = "broadcast"
 	PushUser      PushKind = "user"
 	PushDevice    PushKind = "device"
+	PushTopic     PushKind = "topic"
 )
 
 // PushCommand 是跨节点事件。使用 MarshalPushCommand 和 UnmarshalPushCommand 读写总线 JSON。
 type PushCommand struct {
-	Kind    PushKind
+	Kind PushKind
+	// Namespace 仅用于 PushTopic；其他推送类型必须留空。
+	Namespace string
+	// ID 为用户、设备或 topic 标识；广播时留空。
 	ID      string
 	Message PushMessage
 }
@@ -31,9 +35,11 @@ const maxPushCommandBytes = 1 << 20
 func (c PushCommand) validTarget() bool {
 	switch c.Kind {
 	case PushBroadcast:
-		return c.ID == ""
+		return c.Namespace == "" && c.ID == ""
 	case PushUser, PushDevice:
-		return strings.TrimSpace(c.ID) != ""
+		return c.Namespace == "" && strings.TrimSpace(c.ID) != ""
+	case PushTopic:
+		return validID(c.Namespace) && validID(c.ID)
 	default:
 		return false
 	}
@@ -41,9 +47,10 @@ func (c PushCommand) validTarget() bool {
 
 // 可选字段保留原始值，区分缺失、显式 null 以及合法的 ProtoJSON null 正文。
 type pushCommandJSON struct {
-	Kind    PushKind       `json:"kind"`
-	ID      jsontext.Value `json:"id,omitzero"`
-	Message struct {
+	Kind      PushKind       `json:"kind"`
+	Namespace jsontext.Value `json:"namespace,omitzero"`
+	ID        jsontext.Value `json:"id,omitzero"`
+	Message   struct {
 		Type      string         `json:"type"`
 		Data      jsontext.Value `json:"data,omitzero"`
 		Error     jsontext.Value `json:"error,omitzero"`
@@ -63,6 +70,12 @@ func MarshalPushCommand(cmd PushCommand) ([]byte, error) {
 	wire := pushCommandJSON{Kind: cmd.Kind}
 	wire.Message.Type = msg.Type
 	var err error
+	if cmd.Namespace != "" {
+		wire.Namespace, err = json.Marshal(cmd.Namespace)
+		if err != nil {
+			return nil, fmt.Errorf("%w: namespace: %v", ErrInvalidMessage, err)
+		}
+	}
 	if cmd.ID != "" {
 		wire.ID, err = json.Marshal(cmd.ID)
 		if err != nil {
@@ -105,6 +118,11 @@ func UnmarshalPushCommand(data []byte, newData func(string) proto.Message) (Push
 		return PushCommand{}, fmt.Errorf("%w: %v", ErrInvalidMessage, err)
 	}
 	cmd := PushCommand{Kind: wire.Kind}
+	if wire.Namespace != nil {
+		if cmd.Kind != PushTopic || json.Unmarshal(wire.Namespace, &cmd.Namespace) != nil {
+			return PushCommand{}, ErrInvalidMessage
+		}
+	}
 	if wire.ID != nil {
 		if cmd.Kind == PushBroadcast || json.Unmarshal(wire.ID, &cmd.ID) != nil {
 			return PushCommand{}, ErrInvalidMessage

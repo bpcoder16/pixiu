@@ -32,7 +32,7 @@ type Server struct {
 	started atomic.Bool
 	// 将传输连接关联到已初始化的业务会话，供消息和业务收尾回调使用。
 	sessions sync.Map
-	// 索引已就绪的会话，供广播及按用户、设备推送时定位目标。
+	// 索引会话及 topic 订阅，供广播及按用户、设备、topic 推送时定位目标。
 	targets pushIndex
 	// 接纳推送与 Stop 封门必须在同一把锁内完成。
 	pushMu sync.Mutex
@@ -56,6 +56,9 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	if cfg.Transport.MaxSendBytes == 0 {
 		cfg.Transport.MaxSendBytes = 64 << 10
+	}
+	if cfg.MaxTopicsPerSession == 0 {
+		cfg.MaxTopicsPerSession = 500
 	}
 	var routes Router
 	if err := cfg.RegisterHandlers(&routes); err != nil {

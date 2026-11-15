@@ -73,6 +73,57 @@ func TestPushCommandIgnoresNewDataFields(t *testing.T) {
 	}
 }
 
+func TestTopicPushCommand(t *testing.T) {
+	command := PushCommand{
+		Kind:      PushTopic,
+		Namespace: "auction",
+		ID:        "sale-1",
+		Message: PushMessage{
+			Type: "auction.changed",
+			Data: wrapperspb.String("updated"),
+		},
+	}
+	wire, err := MarshalPushCommand(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"kind":"topic","namespace":"auction","id":"sale-1","message":{"type":"auction.changed","data":"updated"}}`
+	if string(wire) != want {
+		t.Fatalf("topic 命令 = %s", wire)
+	}
+	decoded, err := UnmarshalPushCommand(wire, func(string) proto.Message {
+		return new(wrapperspb.StringValue)
+	})
+	if err != nil || decoded.Kind != PushTopic || decoded.Namespace != command.Namespace || decoded.ID != command.ID || !proto.Equal(decoded.Message.Data, command.Message.Data) {
+		t.Fatalf("topic 命令还原失败: %+v, %v", decoded, err)
+	}
+	for _, invalid := range []PushCommand{
+		{Kind: PushTopic, ID: "sale-1", Message: command.Message},
+		{Kind: PushTopic, Namespace: "auction", ID: "*", Message: command.Message},
+		{Kind: PushUser, Namespace: "auction", ID: "user", Message: command.Message},
+		{Kind: PushBroadcast, Namespace: "auction", Message: command.Message},
+	} {
+		if _, err := MarshalPushCommand(invalid); !errors.Is(err, ErrInvalidMessage) {
+			t.Fatalf("非法 topic 命令未拒绝: %+v, %v", invalid, err)
+		}
+	}
+	for _, invalid := range []string{
+		`{"kind":"topic","id":"sale-1","message":{"type":"x","data":"v"}}`,
+		`{"kind":"topic","namespace":null,"id":"sale-1","message":{"type":"x","data":"v"}}`,
+		`{"kind":"topic","namespace":"auction","message":{"type":"x","data":"v"}}`,
+		`{"kind":"topic","namespace":"auction","id":"*","message":{"type":"x","data":"v"}}`,
+		`{"kind":"user","namespace":"","id":"user","message":{"type":"x","data":"v"}}`,
+		`{"kind":"device","namespace":null,"id":"device","message":{"type":"x","data":"v"}}`,
+		`{"kind":"broadcast","namespace":"auction","message":{"type":"x","data":"v"}}`,
+	} {
+		if _, err := UnmarshalPushCommand([]byte(invalid), func(string) proto.Message {
+			return new(wrapperspb.StringValue)
+		}); err == nil {
+			t.Fatalf("非法 namespace/topic 总线消息未拒绝: %s", invalid)
+		}
+	}
+}
+
 func TestPushCommandRejectsAmbiguousWire(t *testing.T) {
 	for _, raw := range []string{
 		`{"kind":"user","message":{"type":"x","data":"v"}}`,

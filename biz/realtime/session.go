@@ -38,6 +38,8 @@ type Session struct {
 	info         ClientInfo
 	state        any
 	maxSendBytes int64 // 含信封的单帧发送上限。
+	// topics 只保存共享 topic 对象的引用；所有读写由所属 Server 的 targets.mu 保护。
+	topics map[*topicSubscription]struct{}
 }
 
 func (s *Session) ID() string               { return s.raw.ID() }
