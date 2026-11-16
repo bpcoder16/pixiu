@@ -12,8 +12,10 @@
 # streamDefaults:
 #   replicas: 1  # 显式值必须为正整数，0 或负数报错。
 
-streams:  # 可省略、设为 null 或 []；每项必须声明 subjects，统一创建或校验 Stream。
+streams:  # 可省略、设为 null 或 []；每项按 mode 决定 Stream 注册策略。
   - name: "ORDERS"
+    # mode: "create"  # 省略/null 默认 create；create 同配置复用、冲突报错；upsert 创建或更新；existing 只查询已有 Stream。
+    # create/upsert 必填 subjects，其他 Stream 字段按以下默认值组装；upsert 提交完整配置，非字段合并。
     subjects:
       - "orders.>"
     # 以下五项均可省略或设为 null，按需取消注释覆盖。
@@ -45,6 +47,18 @@ streams:  # 可省略、设为 null 或 []；每项必须声明 subjects，统�
         #   maxMessages: 0     # SDK 预取上限，不得为负；0 为有效 workers 的两倍，不含处理中的消息。
         # retryDelay: "0s"     # 不得为负；0 等待 backOff/ackWait 超时重投，正值发送固定延迟 NAK，不能与非空 backOff 同用。
 
+# 仅消费外部维护的 Stream：只需 name、mode 和 consumers，缺失 Stream 或查询失败会阻止启动。
+# existing 需要 Stream info 权限，不比较远端配置；name 和过滤主题仍由客户端添加 namespace。
+# existing 拒绝非空 subjects 及显式非 null 的 replicas/maxBytes/retention/maxAge/duplicates。
+# 按需将下面条目加入上方 streams 列表，并登记对应 Handler：
+#   - name: "EXTERNAL_TASKS"
+#     mode: "existing"
+#     consumers:
+#       - durable: "external-worker"
+#         filterSubjects:
+#           - "external.tasks"
+#         handler: "HandleExternalTask"
+
 coreConsumers:  # 可省略或设为 []。
   - name: "config-refresh"
     subject: "config.refresh"
@@ -58,4 +72,4 @@ coreConsumers:  # 可省略或设为 []。
 # 消费者只在所属 Stream 的 consumers 下声明；不接受旧顶层 jetStreamConsumers 或消费者的 stream 字段。
 # 未引用的 Handler 不启动。
 # 除上述字段外全部沿用 natsx 的 Default，不支持 enabled、热更新或完整 SDK 配置。
-# 删除声明后重启不删除远端 Stream/Durable；同配置复用，冲突报错，不自动更新。
+# 删除声明后重启不删除远端 Stream/Durable；仅 mode: upsert 更新 Stream，Consumer 始终同配置复用、冲突报错。

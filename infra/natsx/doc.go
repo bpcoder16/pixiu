@@ -15,7 +15,7 @@
 // 第一版原样记录错误文本并保留原始错误链，不脱敏其中可能包含的 URL、密码或 Token。
 //
 // Config.Namespace 可选，空值保持原样；非空仅允许 ASCII 字母、数字、_，在拨号前校验并固定。
-// 四个发布/Request 入口和三个 Register 入口都接受原始名称与主题；Default 工厂不添加前缀。
+// 四个发布/Request 入口和各 Register 入口都接受原始名称与主题；Default 工厂不添加前缀。
 // 例如 namespace 为 test01_v1 时，主题 orders.created 变为 test01_v1.orders.created，Stream ORDERS 变为 TEST01_V1_ORDERS。
 // 仅 Stream 名称及引用中的 namespace 转大写，逻辑名称保留原样；含 - 的 namespace 直接报错，不自动替换。
 // 注册的 Stream Name 和 Consumer Stream 添加大写 NAMESPACE_；Durable/非空 Name、Core Name/非空 Queue 添加原始 namespace_。
@@ -80,7 +80,7 @@
 // 显式 CancelConsumers 后 Close 不再等待未退出 Handler；断连引起的取消仍保留原有回调等待。
 // 注册表不保证多实例关闭顺序，各实例使用独立的 CloseTimeout，不支持关闭期跨实例依赖。
 //
-// 应用启动时在依赖就绪后创建并持有客户端，依次调用 RegisterStreams、
+// 应用启动时在依赖就绪后创建并持有客户端，依次调用 RegisterStreams（或 RegisterStreamRegistrations）、
 // RegisterJetStreamConsumers 和 RegisterCoreConsumers；运行期间保持消费关系固定。
 // 受管服务先通过 StopConsumers/WaitConsumers 排空，再由资源栈关闭客户端；独立 New 客户端也可直接 Close，使用已持有引用完成消费收尾。
 // Close 拒绝新增注册，排空消费后拒绝新发布与请求，再等待异步发布结果并 drain 连接。
@@ -192,6 +192,25 @@
 //	return client.RegisterJetStreamConsumers(setupCtx, consumer)
 //
 // 上例的 client 已初始化且已安排 Close，sendSMS 是业务函数；还需导入 time 与官方 jetstream 包。
+// 每个 Stream 需要独立选择策略时，使用以下入口替代上例的 RegisterStreams：
+//
+//	if err := client.RegisterStreamRegistrations(setupCtx,
+//		natsx.StreamRegistration{
+//			Mode:   natsx.StreamModeUpsert,
+//			Config: natsx.DefaultStreamConfig("TASKS", 1, "tasks.sms"),
+//		},
+//		natsx.StreamRegistration{
+//			Mode:   natsx.StreamModeExisting,
+//			Config: jetstream.StreamConfig{Name: "EXTERNAL"},
+//		},
+//	); err != nil {
+//		return err
+//	}
+//
+// Mode 的 Go 零值及 create 使用 CreateStream；upsert 使用 CreateOrUpdateStream；existing 仅查询一次 Stream Info。
+// existing 只允许 Config.Name，要求 Stream 已存在且允许读取信息，不填充或比较远端配置。
+// upsert 提交完整配置，包括默认值，非字段合并；不可变字段或非法更新继续返回服务端错误。
+// 三种模式可混用，只影响 Stream；Consumer 仍采用创建/同配置复用策略。
 // DefaultStreamConfig 返回可直接修改的原生配置，replicas 原样写入副本数，复制传入的 subjects；校验由注册入口和 SDK 承担。
 // 默认 LimitsPolicy、FileStorage、MaxBytes=-1（不设 Stream 容量上限，仍受账户及服务端配额限制）、MaxMsgSize=512 KiB、DiscardNew、MaxAge=90 天（约 3 个月）、Duplicates=2 分钟、NoAck=false，
 // 其余字段沿用 SDK 默认。注册前可直接覆盖字段，例如 streamCfg.MaxBytes = 2 << 30。
@@ -210,17 +229,18 @@
 // 默认构造函数不校验参数；手写消费声明仍须显式配置确认超时。
 // RegisterJetStreamConsumers 仅支持 Pull Consumer，Config.DeliverSubject 非空时在创建本批任何远端 Consumer 前报错。
 // RegisterStreams/RegisterJetStreamConsumers 使用 SDK 创建语义：同配置复用、冲突返回错误，不更新或删除已有资源。
-// RegisterStreams 创建资源前整批检查名称、主题元素非空且无首尾空白，以及同批名称唯一。
+// RegisterStreams/RegisterStreamRegistrations 在远端操作前整批检查模式、名称、主题及名称唯一性。
 // Subjects 列表允许省略或为空，保留原生默认主题及 Mirror 等用法；其余约束由 SDK/服务端处理。
 // RegisterJetStreamConsumers 创建资源前整批校验本地参数及 (Stream, Durable) 唯一。
 // Stream、Durable 必须非空且无首尾空白；过滤条件允许省略，已提供的主题元素须非空且无首尾空白。
 // RegisterCoreConsumers 建立订阅前整批校验本地参数及 Name 唯一。
 // Name、Subject 必须非空且无首尾空白；Queue 为空时广播，非空时不得有首尾空白。
 // 已有使用旧默认 AckWait=5s 的 Durable，采用新默认值前须显式更新远端配置。
-// RegisterStreams、RegisterJetStreamConsumers 和 RegisterCoreConsumers 分别计数，通过入口检查后每个 Client 各只允许调用一次；
+// Stream、JetStream Consumer、Core Consumer 三类分别计数，通过入口检查后每个 Client 各只允许注册一次；
+// RegisterStreams 与 RegisterStreamRegistrations 共用 Stream 次数，两者不能混用。
 // 须一次传入该类的全部配置，空清单或失败也不可重试，各 Client 互不影响。
 // 消费参数校验和归一化统一在注册入口完成，内部 worker 和订阅函数不重复处理。
-// 三个 Register 入口仅在启动阶段串行调用，不与 Close 并发；入口检查初始状态，
+// 各 Register 入口仅在启动阶段串行调用，不与 Close 并发；入口检查初始状态，
 // ctx 仅传给资源 RPC 和有 deadline 时的 Core Flush，由 SDK 处理取消和连接错误。
 // 不额外检查 ctx.Err()；本地消费启动不受启动 ctx 取消限制，全部操作成功即返回 nil。
 // 注册可能在返回前执行 handler；失败返回后须中止启动并 Close，不在同一客户端重试整批注册，

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -13,6 +14,25 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
+
+// StreamMode 控制单个 Stream 的启动期注册行为；零值沿用 create。
+type StreamMode string
+
+const (
+	// StreamModeCreate 创建或复用同配置 Stream，配置冲突报错。
+	StreamModeCreate StreamMode = "create"
+	// StreamModeUpsert 创建或按完整配置更新 Stream，更新限制由服务端校验。
+	StreamModeUpsert StreamMode = "upsert"
+	// StreamModeExisting 只查询已有 Stream，不创建、更新或比较远端配置。
+	StreamModeExisting StreamMode = "existing"
+)
+
+// StreamRegistration 声明单个 Stream 的模式和原生配置。
+// existing 模式只允许 Config.Name，其余字段须为零值，不应用 DefaultStreamConfig。
+type StreamRegistration struct {
+	Mode   StreamMode
+	Config jetstream.StreamConfig
+}
 
 // JetStreamHandler 返回 nil 时由组件 ACK，错误或 panic 按配置重投。
 // handler 须支持配置的并发度并在返回前完成本条工作；不得自行 ACK/NAK/Term 或调用 Client.Close。
@@ -134,21 +154,45 @@ func (c *Client) checkRegistration(ctx context.Context) error {
 	return nil
 }
 
-// RegisterStreams 在启动期依次创建或复用 Stream，不自动更新、删除已有资源。
-// 只在启动阶段串行调用，不与 Close 并发。
-// 通过入口检查后，每个 Client 只允许调用一次；须一次传入全部配置，空清单或失败也不可重试。
-// 创建资源前整批检查名称、主题元素非空且无首尾空白，以及同批名称唯一，不自动裁剪。
-// Subjects 列表允许省略或为空；其余约束交给 SDK。失败保留已创建资源，由应用中止启动并 Close。
-// Name 和 Subjects 使用原始值，由 Client 添加 namespace；其他 SDK 高级字段原样传递。
+// RegisterStreams 保留原生配置入口，全部使用 create 模式；同配置复用、冲突报错。
+// 与 RegisterStreamRegistrations 共用一次性注册限制，不能在同一 Client 上混用。
 func (c *Client) RegisterStreams(ctx context.Context, configs ...jetstream.StreamConfig) error {
+	specs := make([]StreamRegistration, len(configs))
+	for i, cfg := range configs {
+		specs[i].Config = cfg
+	}
+	return c.RegisterStreamRegistrations(ctx, specs...)
+}
+
+// RegisterStreamRegistrations 在启动期按每项模式创建、更新或只读查询 Stream。
+// 只在启动阶段串行调用，不与 Close 并发；与 RegisterStreams 共用一次性注册限制。
+// 通过入口检查后即占用次数，空清单、本地校验失败或远端失败均不可重试。
+// 远端操作前整批校验模式、名称、主题及名称唯一性，不自动裁剪；existing 只允许 Config.Name。
+// create/upsert 的 Subjects 允许省略或为空，其余原生约束交给 SDK/服务端。
+// Name 和 Subjects 填写原始值，Client 统一添加 namespace，不修改调用方声明。
+// existing 查询失败直接返回；upsert 使用完整配置，非字段合并。失败不回滚前序远端操作，由应用中止启动并 Close。
+func (c *Client) RegisterStreamRegistrations(ctx context.Context, specs ...StreamRegistration) error {
 	if err := c.checkRegistration(ctx); err != nil {
 		return err
 	}
 	if !c.streamRegistrationStarted.CompareAndSwap(false, true) {
 		return errors.New("natsx: RegisterStreams already called")
 	}
-	seen := make(map[string]struct{}, len(configs))
-	for _, cfg := range configs {
+	seen := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		cfg := spec.Config
+		switch spec.Mode {
+		case "", StreamModeCreate, StreamModeUpsert:
+		case StreamModeExisting:
+			// 原生配置字段较多，统一检查零值，避免未来新增字段被静默忽略。
+			options := cfg
+			options.Name = ""
+			if !reflect.ValueOf(options).IsZero() {
+				return fmt.Errorf("natsx: stream %q existing mode only accepts Config.Name", cfg.Name)
+			}
+		default:
+			return fmt.Errorf("natsx: stream %q mode %q must be one of create, upsert, existing", cfg.Name, spec.Mode)
+		}
 		if cfg.Name == "" || strings.TrimSpace(cfg.Name) != cfg.Name {
 			return fmt.Errorf("natsx: stream name %q must be nonempty and without surrounding whitespace", cfg.Name)
 		}
@@ -162,10 +206,20 @@ func (c *Client) RegisterStreams(ctx context.Context, configs ...jetstream.Strea
 		}
 		seen[cfg.Name] = struct{}{}
 	}
-	for _, cfg := range configs {
+	for _, spec := range specs {
+		cfg := spec.Config
 		cfg.Name = namespaceValue(c.streamPrefix, cfg.Name)
 		cfg.Subjects = namespaceSubjects(c.subjectPrefix, cfg.Subjects)
-		if _, err := c.js.CreateStream(ctx, cfg); err != nil {
+		var err error
+		switch spec.Mode {
+		case StreamModeUpsert:
+			_, err = c.js.CreateOrUpdateStream(ctx, cfg)
+		case StreamModeExisting:
+			_, err = c.js.Stream(ctx, cfg.Name)
+		default:
+			_, err = c.js.CreateStream(ctx, cfg)
+		}
+		if err != nil {
 			return fmt.Errorf("natsx: register stream %q: %w", cfg.Name, err)
 		}
 	}

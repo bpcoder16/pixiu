@@ -179,6 +179,7 @@ func TestNATSRegistrationExampleOptions(t *testing.T) {
 			if uncomment {
 				// 只去掉注释标记，保留原缩进，验证用户可直接取消注释使用。
 				source = optional.ReplaceAllString(source, "${1}${2}${3}:")
+				source = strings.Replace(source, "    # mode:", "    mode:", 1)
 				wantReplicas = 1
 			}
 			cfg, err := parseNATSRegistration(t, source)
@@ -198,7 +199,7 @@ func TestNATSRegistrationExampleOptions(t *testing.T) {
 			if uncomment {
 				wantConsumer.Config.BackOff = []time.Duration{time.Minute, 5 * time.Minute, 30 * time.Minute}
 			}
-			if !reflect.DeepEqual(batch.streams[0], natsx.DefaultStreamConfig("ORDERS", wantReplicas, "orders.>")) ||
+			if !reflect.DeepEqual(batch.streams[0].Config, natsx.DefaultStreamConfig("ORDERS", wantReplicas, "orders.>")) ||
 				!reflect.DeepEqual(consumer, wantConsumer) {
 				t.Fatalf("模板应默认推导副本数、取消注释后显式覆盖，其他默认值保持一致: stream=%+v, consumer=%+v", batch.streams[0], consumer)
 			}
@@ -219,9 +220,9 @@ func TestNATSRegistrationDefaultsAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantStreams := []jetstream.StreamConfig{
-		natsx.DefaultStreamConfig("ORDERS", 3, "orders.>"),
-		natsx.DefaultStreamConfig("TEMP", 1, "temp.>"),
+	wantStreams := []natsx.StreamRegistration{
+		{Mode: natsx.StreamModeCreate, Config: natsx.DefaultStreamConfig("ORDERS", 3, "orders.>")},
+		{Mode: natsx.StreamModeCreate, Config: natsx.DefaultStreamConfig("TEMP", 1, "temp.>")},
 	}
 	if !reflect.DeepEqual(batch.streams, wantStreams) {
 		t.Fatalf("副本继承、覆盖或 Stream 默认值错误: %+v", batch.streams)
@@ -302,7 +303,7 @@ func TestNATSRegistrationMaxBytes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := batch.streams[0].MaxBytes; got != tc.want {
+			if got := batch.streams[0].Config.MaxBytes; got != tc.want {
 				t.Fatalf("Stream 容量覆盖错误: got %d, want %d", got, tc.want)
 			}
 		})
@@ -343,8 +344,8 @@ func TestNATSRegistrationPreservesEmptyAndInvalidFields(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, got := range []string{
-				batch.streams[0].Name,
-				batch.streams[0].Subjects[0],
+				batch.streams[0].Config.Name,
+				batch.streams[0].Config.Subjects[0],
 				batch.jetStreamConsumers[0].Stream,
 				batch.jetStreamConsumers[0].Config.Durable,
 				batch.jetStreamConsumers[0].Config.FilterSubjects[0],
@@ -605,7 +606,7 @@ func TestNATSRegistrationPreservesSubjectDecoding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(batch.streams[0].Subjects, []string{"orders.>", "audit.>"}) ||
+	if !reflect.DeepEqual(batch.streams[0].Config.Subjects, []string{"orders.>", "audit.>"}) ||
 		!reflect.DeepEqual(batch.jetStreamConsumers[0].Config.FilterSubjects, []string{"orders.created", "audit.created"}) {
 		t.Fatalf("主题字符串应继续按逗号解码为切片: streams=%+v, consumer=%+v", batch.streams, batch.jetStreamConsumers[0].Config)
 	}
@@ -655,7 +656,7 @@ func TestNATSRegistrationOptionalReplicas(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := batch.streams[1].Replicas; got != tc.want {
+			if got := batch.streams[1].Config.Replicas; got != tc.want {
 				t.Fatalf("可选副本数仅在解码后为正数时覆盖: got %d, want %d", got, tc.want)
 			}
 		})
@@ -844,7 +845,7 @@ streams:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if batch.streams[0].Replicas != urlCount || batch.streams[1].Replicas != 1 {
+		if batch.streams[0].Config.Replicas != urlCount || batch.streams[1].Config.Replicas != 1 {
 			t.Fatalf("全局副本数应随本次 URL 数量推导且保留逐项覆盖，不裁剪服务端上限: %+v", batch.streams)
 		}
 	}

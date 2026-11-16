@@ -64,6 +64,7 @@ func TestNATSFromConfig(t *testing.T) {
 		{name: "DuplicateStreams", run: testNATSFromConfigDuplicateStreams},
 		{name: "StreamValidation", run: testNATSFromConfigStreamValidation},
 		{name: "StreamOptions", run: testNATSFromConfigStreamOptions},
+		{name: "StreamModes", run: testNATSFromConfigStreamModes},
 		{name: "JetStreamOptions", run: testNATSFromConfigJetStreamOptions},
 		{name: "JetStreamBackOff", run: testNATSFromConfigJetStreamBackOff},
 		{name: "JetStreamConsumerValidation", run: testNATSFromConfigJetStreamConsumerValidation},
@@ -74,6 +75,84 @@ func TestNATSFromConfig(t *testing.T) {
 	} {
 		t.Run(tc.name, tc.run)
 	}
+}
+
+func testNATSFromConfigStreamModes(t *testing.T) {
+	isolatedNATS(t, func() {
+		clients := registrationClients(t, true, "modes", "missing", "conflict")
+		client := clients[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := client.JetStream().CreateStream(ctx, jetstream.StreamConfig{
+			Name:        "EXTERNAL",
+			Subjects:    []string{"external"},
+			Storage:     jetstream.MemoryStorage,
+			Description: "外部维护的配置",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.JetStream().CreateStream(ctx, natsx.DefaultStreamConfig("UPDATE", 1, "update")); err != nil {
+			t.Fatal(err)
+		}
+		received := make(chan string, 1)
+		handlers := natsx.MustNewJetStreamHandlerRegistry()
+		handlers.MustRegister(func(_ context.Context, msg jetstream.Msg) error {
+			received <- string(msg.Data())
+			return nil
+		}, "task")
+		writeNATSRegistration(t, "modes", `
+streams:
+  - name: CREATED
+    subjects: [created]
+  - name: UPDATE
+    mode: upsert
+    subjects: [update]
+    duplicates: 15s
+  - name: NEW
+    mode: upsert
+    subjects: [new]
+  - name: EXTERNAL
+    mode: existing
+    consumers:
+      - durable: worker
+        handler: task
+`)
+		if err := registerNATSForTest(t, "modes", handlers, nil); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"CREATED", "UPDATE", "NEW", "EXTERNAL"} {
+			stream, err := client.JetStream().Stream(ctx, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := stream.CachedInfo().Config
+			if name == "UPDATE" && cfg.Duplicates != 15*time.Second {
+				t.Fatalf("upsert 未更新配置: %+v", cfg)
+			}
+			if name == "EXTERNAL" && (cfg.Description != "外部维护的配置" || cfg.Storage != jetstream.MemoryStorage) {
+				t.Fatalf("existing 不得用默认配置覆盖远端: %+v", cfg)
+			}
+		}
+		if _, err := client.PublishJetStream(ctx, "external", []byte("消费外部 Stream"), "event"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case got := <-received:
+			if got != "消费外部 Stream" {
+				t.Fatal(got)
+			}
+		case <-ctx.Done():
+			t.Fatal("未消费 existing Stream")
+		}
+		writeNATSRegistration(t, "missing", "streams:\n  - name: MISSING\n    mode: existing\n")
+		if err := registerNATSForTest(t, "missing", nil, nil); !errors.Is(err, jetstream.ErrStreamNotFound) {
+			t.Fatalf("existing 即使没有消费者也应检查存在性: %v", err)
+		}
+		writeNATSRegistration(t, "conflict", "streams:\n  - name: UPDATE\n    subjects: [update]\n")
+		if err := registerNATSForTest(t, "conflict", nil, nil); !errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
+			t.Fatalf("省略 mode 时应保留 create 冲突语义: %v", err)
+		}
+	})
 }
 
 // 同步验证构造与注册阶段；Run 的阻塞、取消和排空另由服务生命周期测试覆盖。
@@ -474,7 +553,7 @@ func testNATSFromConfigReplicaDefaults(t *testing.T) {
 					t.Fatal(err)
 				}
 				t.Cleanup(consumer.cancelRegistration)
-				if got := consumer.batch.streams[0].Replicas; got != tc.want {
+				if got := consumer.batch.streams[0].Config.Replicas; got != tc.want {
 					t.Fatalf("副本数应优先使用显式配置，否则采用当前实例的初始 URL 数量: got %d, want %d", got, tc.want)
 				}
 				if tc.want == 1 {

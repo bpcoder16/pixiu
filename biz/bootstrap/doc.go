@@ -436,12 +436,16 @@
 // 客户端未登记或 CloseAll 开始后查询沿用 natsx.Named 的 panic；配置错误由构造返回，注册失败由 Run 返回。
 // 调用方无论排空结果都回收资源；Run/Stop/Wait/Cancel 分工，启动失败也收尾已启动消费。
 // 服务的 Cancel 先复用 Stop，再取消剩余消费；可直接或重复调用，不关闭共享连接。
-// Start 并发运行服务，登记顺序不规定停机依赖。手动注册可使用 natsx 的三个集中注册入口，资源回收前通过 StopConsumers、WaitConsumers 和必要的 CancelConsumers 处理消费。
+// Start 并发运行服务，登记顺序不规定停机依赖。手动注册可使用 natsx 的集中注册入口，资源回收前通过 StopConsumers、WaitConsumers 和必要的 CancelConsumers 处理消费。
 // 注册 context 可由 Stop 取消，不设置整体注册期限；资源请求与 Core Flush 沿用 SDK 默认行为。
 // Client 关闭状态在配置预检后交给 natsx 注册入口校验；长期 Handler 使用独立消息 context。
 // 文件可使用 conf.example/nats-register.example.yaml，保留示例已登记的 Handler 对应项。
 // JetStream 消费者配置在 streams[].consumers，自动继承父级 name；可配置多个消费者或只声明 Stream。
-// 每项 Stream 必须声明 subjects，统一创建或校验；不支持仅引用外部 Stream。
+// 每项 Stream 的 mode 省略/null 默认 create，同配置复用、冲突报错；upsert 使用完整配置创建或更新。
+// existing 只读取已有 Stream 信息，缺失或查询失败阻止启动；三种模式均注册其 consumers。
+// create/upsert 必填 subjects；existing 只需 name/mode/consumers，不填充 Stream 默认值。
+// existing 拒绝非空 subjects 及显式非 null 的 replicas/maxBytes/retention/maxAge/duplicates。
+// mode 只允许逐 Stream 配置，空字符串及未知值拒绝；Consumer 配置冲突仍报错。
 // 旧顶层 jetStreamConsumers 和消费者的 stream 字段须移除，否则严格解析报错。
 // 消费者的可选参数注释同样位于 consumers 项内，按需取消注释即可使用。
 // 注册文件不接受 namespace；该值统一来自 nats.<name>.yaml 的客户端配置。
@@ -461,7 +465,7 @@
 // urls 仅列种子地址、使用代理入口或需要不同副本策略时应显式配置；最终全局值即使没有 Stream 也校验。
 // 逐项 replicas 解码后非 nil 且大于零时覆盖，否则继承；解码及数字转换沿用 configx。
 // 逐项 replicas 不得超过显式或自动推导的全局值，超限时在注册任何资源前返回错误。
-// Stream maxBytes、retention、maxAge、duplicates 可选，省略或 null 沿用 Default（当前为 -1、limits、90 天、2 分钟）。
+// create/upsert 的 Stream maxBytes、retention、maxAge、duplicates 可选，省略或 null 沿用 Default（当前为 -1、limits、90 天、2 分钟）。
 // maxBytes 使用整数字节数，例如 104857600 表示 100 MiB；0 或 -1 不设 Stream 容量上限，仍受账户及服务端配额限制。
 // 数字解码沿用 configx，不接受带单位字符串；范围及配额校验交给服务端。
 // retention 只接受 limits、interest、workqueue，非法策略在注册任何资源前报错。
@@ -482,7 +486,7 @@
 // 按 subscribers 为当前 Client 建立同组订阅，多订阅 Handler 须支持并发。
 // queue 为空时始终只有一个广播订阅，subscribers 可省略，负数由 natsx 注册入口拒绝。
 // 所有其他运行参数沿用 natsx Default，未引用的 Handler 不启动。
-// 配置层检查全局副本数、逐项副本数上限、Stream subjects 列表必填及 retention、Core 队列订阅数，
+// 配置层检查全局副本数、Stream mode 及字段组合、create/upsert 的副本数上限、subjects 及 retention、Core 队列订阅数，
 // 并在注册前绑定全部 Handler。
 // 各类资源的通用参数校验和判重交给各自的 natsx 注册入口，失败也占用该入口的注册次数。
 // 三个入口各调用一次，空清单也占用次数，不与手动注册混用。

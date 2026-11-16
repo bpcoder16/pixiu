@@ -24,7 +24,9 @@ import (
 // 构造不启动订阅，错误原样返回；服务接入统一停收、排空和取消协议，共享客户端仍由资源栈关闭。
 // 客户端通过 natsx.Named 查询，实例未登记或 CloseAll 开始后查询会 panic。
 // 配置先预检并绑定 Handler；各类资源的通用参数校验和判重交给各自的 natsx 注册入口，失败也占用其注册次数。
-// Stream subjects 列表在配置层必填；消费者在 streams[].consumers 中声明并继承父级 name，不支持仅引用外部 Stream。
+// 每个 Stream 的 mode 省略/null 默认 create；upsert 创建或更新，existing 只查询已有 Stream。
+// create/upsert 要求 subjects，existing 只接受 name/mode/consumers，不填充 Stream 默认配置。
+// 消费者在 streams[].consumers 中声明并继承父级 name，三种模式均沿用原 Consumer 注册策略。
 // 三个入口各调用一次，空清单也占用次数，不能与手动注册混用。
 // 各入口分阶段预检，后序校验失败时前序资源或消费可能已启动。
 // nil 注册表视为空表，未引用的 Handler 不启动；全局 streamDefaults.replicas 显式配置时必须为正整数。
@@ -33,7 +35,7 @@ import (
 // 连接及消费日志沿用客户端 Logger 路由，Handler 及其下游须继续传递消息 ctx。
 // 配置填写原始名称和主题，前缀统一由 Client 的注册及发送入口添加；Handler 名称不变。
 // 逐项 Stream 的 replicas 不得超过全局值，超限时在注册任何资源前返回错误。
-// Stream maxBytes、retention、maxAge、duplicates 可选，省略或 null 沿用 Default；显式零值按 NATS 语义处理。
+// create/upsert 的 Stream maxBytes、retention、maxAge、duplicates 可选，省略或 null 沿用 Default；显式零值按 NATS 语义处理。
 // JetStream ackWait、backOff、maxDeliver、maxAckPending、consume.workers、consume.maxMessages、retryDelay 可选，
 // 省略或 null 沿用 Default，显式值的归一化及校验交给 natsx 注册入口和服务端。
 // backOff 为空列表时保留 Default；非空时覆盖 ackWait，不能与正值 retryDelay 同用。
@@ -182,7 +184,7 @@ func (c *natsConsumer) Cancel() {
 
 func (c *natsConsumer) register(ctx context.Context) error {
 	client, batch, location := c.client, c.batch, c.location
-	if err := client.RegisterStreams(ctx, batch.streams...); err != nil {
+	if err := client.RegisterStreamRegistrations(ctx, batch.streams...); err != nil {
 		return fmt.Errorf("%s: register streams: %w", location, err)
 	}
 	if err := client.RegisterJetStreamConsumers(ctx, batch.jetStreamConsumers...); err != nil {
@@ -204,6 +206,7 @@ type natsRegistrationConfig struct {
 
 type natsStreamRegistration struct {
 	Name       string                      `mapstructure:"name"`
+	Mode       *natsx.StreamMode           `mapstructure:"mode"`
 	Subjects   []string                    `mapstructure:"subjects"`
 	Replicas   *int                        `mapstructure:"replicas"`
 	MaxBytes   *int64                      `mapstructure:"maxBytes"`
@@ -237,7 +240,7 @@ type natsCoreRegistration struct {
 }
 
 type natsRegistrations struct {
-	streams            []jetstream.StreamConfig
+	streams            []natsx.StreamRegistration
 	jetStreamConsumers []natsx.JetStreamConsumer
 	coreConsumers      []natsx.CoreConsumer
 }
@@ -254,43 +257,9 @@ func (cfg *natsRegistrationConfig) bind(urlCount int, jsRegistry *natsx.JetStrea
 	coreHandlers := coreRegistry.Handlers()
 	batch := &natsRegistrations{}
 	for i, spec := range cfg.Streams {
-		if len(spec.Subjects) == 0 {
-			return nil, fmt.Errorf("streams[%d] %q requires nonempty subjects", i, spec.Name)
-		}
-		effectiveReplicas := replicas
-		if spec.Replicas != nil && *spec.Replicas > 0 {
-			if *spec.Replicas > replicas {
-				return nil, fmt.Errorf("streams[%d] %q replicas %d must not exceed streamDefaults.replicas %d", i, spec.Name, *spec.Replicas, replicas)
-			}
-			effectiveReplicas = *spec.Replicas
-		}
-		stream := natsx.DefaultStreamConfig(
-			spec.Name,
-			effectiveReplicas,
-			spec.Subjects...,
-		)
-		// 仅覆盖显式容量，保留 0/-1 的不限量语义；账户及服务端配额继续由 NATS 校验。
-		if spec.MaxBytes != nil {
-			stream.MaxBytes = *spec.MaxBytes
-		}
-		if spec.Retention != nil {
-			switch *spec.Retention {
-			case "limits":
-				stream.Retention = jetstream.LimitsPolicy
-			case "interest":
-				stream.Retention = jetstream.InterestPolicy
-			case "workqueue":
-				stream.Retention = jetstream.WorkQueuePolicy
-			default:
-				return nil, fmt.Errorf("streams[%d] %q retention %q must be one of limits, interest, workqueue", i, spec.Name, *spec.Retention)
-			}
-		}
-		// 显式零时长须覆盖 Default；范围及组合约束继续由服务端校验。
-		if spec.MaxAge != nil {
-			stream.MaxAge = *spec.MaxAge
-		}
-		if spec.Duplicates != nil {
-			stream.Duplicates = *spec.Duplicates
+		stream, err := spec.streamRegistration(replicas)
+		if err != nil {
+			return nil, fmt.Errorf("streams[%d] %q %w", i, spec.Name, err)
 		}
 		batch.streams = append(batch.streams, stream)
 		// 按父级及内部声明顺序展开，Stream 名称只有父级这一处配置来源。
@@ -351,4 +320,62 @@ func (cfg *natsRegistrationConfig) bind(urlCount int, jsRegistry *natsx.JetStrea
 		)
 	}
 	return batch, nil
+}
+
+// streamRegistration 按模式组装声明；existing 保留名称，不填充或比较 Stream 默认配置。
+func (spec natsStreamRegistration) streamRegistration(replicas int) (natsx.StreamRegistration, error) {
+	mode := natsx.StreamModeCreate
+	if spec.Mode != nil {
+		mode = *spec.Mode
+	}
+	registration := natsx.StreamRegistration{
+		Mode:   mode,
+		Config: jetstream.StreamConfig{Name: spec.Name},
+	}
+	switch mode {
+	case natsx.StreamModeExisting:
+		if len(spec.Subjects) != 0 || spec.Replicas != nil || spec.MaxBytes != nil ||
+			spec.Retention != nil || spec.MaxAge != nil || spec.Duplicates != nil {
+			return registration, errors.New("existing mode does not accept subjects, replicas, maxBytes, retention, maxAge or duplicates")
+		}
+		return registration, nil
+	case natsx.StreamModeCreate, natsx.StreamModeUpsert:
+	default:
+		return registration, fmt.Errorf("mode %q must be one of create, upsert, existing", mode)
+	}
+	if len(spec.Subjects) == 0 {
+		return registration, errors.New("requires nonempty subjects")
+	}
+	effectiveReplicas := replicas
+	if spec.Replicas != nil && *spec.Replicas > 0 {
+		if *spec.Replicas > replicas {
+			return registration, fmt.Errorf("replicas %d must not exceed streamDefaults.replicas %d", *spec.Replicas, replicas)
+		}
+		effectiveReplicas = *spec.Replicas
+	}
+	stream := natsx.DefaultStreamConfig(spec.Name, effectiveReplicas, spec.Subjects...)
+	// 仅覆盖显式配置，保留零值语义；范围及组合约束交给服务端。
+	if spec.MaxBytes != nil {
+		stream.MaxBytes = *spec.MaxBytes
+	}
+	if spec.Retention != nil {
+		switch *spec.Retention {
+		case "limits":
+			stream.Retention = jetstream.LimitsPolicy
+		case "interest":
+			stream.Retention = jetstream.InterestPolicy
+		case "workqueue":
+			stream.Retention = jetstream.WorkQueuePolicy
+		default:
+			return registration, fmt.Errorf("retention %q must be one of limits, interest, workqueue", *spec.Retention)
+		}
+	}
+	if spec.MaxAge != nil {
+		stream.MaxAge = *spec.MaxAge
+	}
+	if spec.Duplicates != nil {
+		stream.Duplicates = *spec.Duplicates
+	}
+	registration.Config = stream
+	return registration, nil
 }
