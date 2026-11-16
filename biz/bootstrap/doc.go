@@ -445,7 +445,10 @@
 // existing 只读取已有 Stream 信息，缺失或查询失败阻止启动；三种模式均注册其 consumers。
 // create/upsert 必填 subjects；existing 只需 name/mode/consumers，不填充 Stream 默认值。
 // existing 拒绝非空 subjects 及显式非 null 的 replicas/maxBytes/retention/maxAge/duplicates。
-// mode 只允许逐 Stream 配置，空字符串及未知值拒绝；Consumer 配置冲突仍报错。
+// Stream 的 mode 与各 Consumer 的 mode 独立配置，不支持全局默认或继承，空字符串及未知值拒绝。
+// streams[].consumers[].mode 省略/null 默认 create，同配置复用、冲突报错；upsert 创建或更新，不支持 existing。
+// Consumer upsert 先应用 Default 再覆盖显式字段，提交完整配置，非字段合并；更新限制由服务端校验。
+// 在单个 durable 条目下添加 mode: upsert 即可启用，保留已有 Durable 的消费进度，不删除重建。
 // 旧顶层 jetStreamConsumers 和消费者的 stream 字段须移除，否则严格解析报错。
 // 消费者的可选参数注释同样位于 consumers 项内，按需取消注释即可使用。
 // 注册文件不接受 namespace；该值统一来自 nats.<name>.yaml 的客户端配置。
@@ -486,7 +489,7 @@
 // 按 subscribers 为当前 Client 建立同组订阅，多订阅 Handler 须支持并发。
 // queue 为空时始终只有一个广播订阅，subscribers 可省略，负数由 natsx 注册入口拒绝。
 // 所有其他运行参数沿用 natsx Default，未引用的 Handler 不启动。
-// 配置层检查全局副本数、Stream mode 及字段组合、create/upsert 的副本数上限、subjects 及 retention、Core 队列订阅数，
+// 配置层检查全局副本数、Stream mode 及字段组合、create/upsert 的副本数上限、subjects 及 retention、Consumer mode、Core 队列订阅数，
 // 并在注册前绑定全部 Handler。
 // 各类资源的通用参数校验和判重交给各自的 natsx 注册入口，失败也占用该入口的注册次数。
 // 三个入口各调用一次，空清单也占用次数，不与手动注册混用。

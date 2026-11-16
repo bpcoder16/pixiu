@@ -34,6 +34,16 @@ type StreamRegistration struct {
 	Config jetstream.StreamConfig
 }
 
+// ConsumerMode 控制单个 JetStream Consumer 的启动期注册行为；零值沿用 create。
+type ConsumerMode string
+
+const (
+	// ConsumerModeCreate 创建或复用同配置 Consumer，配置冲突报错。
+	ConsumerModeCreate ConsumerMode = "create"
+	// ConsumerModeUpsert 创建或按完整配置更新 Consumer，更新限制由服务端校验。
+	ConsumerModeUpsert ConsumerMode = "upsert"
+)
+
 // JetStreamHandler 返回 nil 时由组件 ACK，错误或 panic 按配置重投。
 // handler 须支持配置的并发度并在返回前完成本条工作；不得自行 ACK/NAK/Term 或调用 Client.Close。
 // 消息只在回调期间借用，不得修改 Header，跨回调保留数据须自行复制。
@@ -48,6 +58,8 @@ type CoreHandler func(context.Context, *nats.Msg) error
 // 两者同时配置时 BackOff 优先，Name 非空时必须等于 Durable，DeliverSubject 必须为空。
 type JetStreamConsumer struct {
 	Stream string
+	// Mode 独立于所属 Stream，零值为 create；upsert 不删除重建 Consumer。
+	Mode   ConsumerMode
 	Config jetstream.ConsumerConfig
 	// Consume 复用固定 worker 配置；本入口 Workers 零值默认 1，MaxMessages 零值等于 Workers 的两倍。
 	Consume ConsumeConfig
@@ -99,7 +111,7 @@ func DefaultStreamConfig(name string, replicas int, subjects ...string) jetstrea
 	}
 }
 
-// DefaultJetStreamConsumer 构建可直接修改的消费声明，不建立连接或校验参数。
+// DefaultJetStreamConsumer 构建可直接修改的消费声明，Mode 默认为 create，不建立连接或校验参数。
 // 复制 subjects 后写入 FilterSubjects（要求 NATS Server >= 2.10），不传主题时消费整个 Stream。
 // 默认显式确认、AckWait 为 60 秒、最多投递 5 次（含首次），不设置 BackOff 或延迟 NAK。
 // MaxAckPending 显式设为 1000；MaxRequestBatch 和 MaxRequestExpires 保留零值。
@@ -107,6 +119,7 @@ func DefaultStreamConfig(name string, replicas int, subjects ...string) jetstrea
 func DefaultJetStreamConsumer(stream, durable string, handler JetStreamHandler, subjects ...string) JetStreamConsumer {
 	return JetStreamConsumer{
 		Stream: stream,
+		Mode:   ConsumerModeCreate,
 		Config: jetstream.ConsumerConfig{
 			Durable:        durable,                     // 持久化消费者名称，用于恢复消费进度。
 			FilterSubjects: slices.Clone(subjects),      // 仅消费匹配主题的消息；为空时消费整个 Stream，切片与调用方独立。
@@ -229,7 +242,9 @@ func (c *Client) RegisterStreamRegistrations(ctx context.Context, specs ...Strea
 // RegisterJetStreamConsumers 先准备本批全部远端 Consumer，再启动固定 worker；返回前可能执行 handler。
 // 只在依赖就绪后的启动期串行调用，不与 Close 并发。
 // 通过入口检查后，每个 Client 只允许调用一次；须一次传入全部配置，空清单或失败也不可重试。
-// 本地参数及 (Stream, Durable) 判重在创建本批任何远端 Consumer 前完成。
+// 本地参数、模式及 (Stream, Durable) 判重在创建或更新本批任何远端 Consumer 前完成。
+// create（含零值）同配置复用、冲突报错；upsert 使用完整配置创建或更新，非字段合并。
+// 不可更新的字段由服务端报错，不删除重建；失败不回滚前序远端创建或更新。
 // Stream、Durable 必须非空且无首尾空白；过滤条件允许省略，已提供的主题元素须非空且无首尾空白。
 // Stream、Durable、非空 Name 和过滤主题使用原始值，校验后添加当前 Client 的 namespace。
 // ctx 仅传给资源 RPC，不额外限制本地 worker 启动，也不影响长期 handler。
@@ -247,6 +262,11 @@ func (c *Client) RegisterJetStreamConsumers(ctx context.Context, consumers ...Je
 	seen := make(map[[2]string]struct{}, len(specs))
 	for i := range specs {
 		spec := &specs[i]
+		switch spec.Mode {
+		case "", ConsumerModeCreate, ConsumerModeUpsert:
+		default:
+			return fmt.Errorf("natsx: consumer %q/%q mode %q must be one of create, upsert", spec.Stream, spec.Config.Durable, spec.Mode)
+		}
 		if spec.Stream == "" || strings.TrimSpace(spec.Stream) != spec.Stream ||
 			spec.Config.Durable == "" || strings.TrimSpace(spec.Config.Durable) != spec.Config.Durable ||
 			spec.Handler == nil {
@@ -305,7 +325,13 @@ func (c *Client) RegisterJetStreamConsumers(ctx context.Context, consumers ...Je
 	}
 	prepared := make([]jetstream.Consumer, len(specs))
 	for i, spec := range specs {
-		consumer, err := c.js.CreateConsumer(ctx, spec.Stream, spec.Config)
+		var consumer jetstream.Consumer
+		var err error
+		if spec.Mode == ConsumerModeUpsert {
+			consumer, err = c.js.CreateOrUpdateConsumer(ctx, spec.Stream, spec.Config)
+		} else {
+			consumer, err = c.js.CreateConsumer(ctx, spec.Stream, spec.Config)
+		}
 		if err != nil {
 			return fmt.Errorf("natsx: register consumer %q/%q: %w", spec.Stream, spec.Config.Durable, err)
 		}

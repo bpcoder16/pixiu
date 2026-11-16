@@ -217,13 +217,14 @@ type natsStreamRegistration struct {
 }
 
 type natsJetStreamRegistration struct {
-	Durable        string          `mapstructure:"durable"`
-	FilterSubjects []string        `mapstructure:"filterSubjects"`
-	Handler        string          `mapstructure:"handler"`
-	AckWait        *time.Duration  `mapstructure:"ackWait"`
-	BackOff        []time.Duration `mapstructure:"backOff"`
-	MaxDeliver     *int            `mapstructure:"maxDeliver"`
-	MaxAckPending  *int            `mapstructure:"maxAckPending"`
+	Durable        string              `mapstructure:"durable"`
+	Mode           *natsx.ConsumerMode `mapstructure:"mode"`
+	FilterSubjects []string            `mapstructure:"filterSubjects"`
+	Handler        string              `mapstructure:"handler"`
+	AckWait        *time.Duration      `mapstructure:"ackWait"`
+	BackOff        []time.Duration     `mapstructure:"backOff"`
+	MaxDeliver     *int                `mapstructure:"maxDeliver"`
+	MaxAckPending  *int                `mapstructure:"maxAckPending"`
 	Consume        struct {
 		Workers     *int `mapstructure:"workers"`
 		MaxMessages *int `mapstructure:"maxMessages"`
@@ -274,6 +275,14 @@ func (cfg *natsRegistrationConfig) bind(urlCount int, jsRegistry *natsx.JetStrea
 				handler,
 				consumerSpec.FilterSubjects...,
 			)
+			if consumerSpec.Mode != nil {
+				switch *consumerSpec.Mode {
+				case natsx.ConsumerModeCreate, natsx.ConsumerModeUpsert:
+					consumer.Mode = *consumerSpec.Mode
+				default:
+					return nil, fmt.Errorf("streams[%d].consumers[%d] %q/%q mode %q must be one of create, upsert", i, j, spec.Name, consumerSpec.Durable, *consumerSpec.Mode)
+				}
+			}
 			// 仅覆盖显式配置的字段，保留零值语义，由 natsx 和服务端统一归一化及校验。
 			if consumerSpec.AckWait != nil {
 				consumer.Config.AckWait = *consumerSpec.AckWait

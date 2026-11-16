@@ -28,6 +28,9 @@ streams:  # 可省略、设为 null 或 []；每项按 mode 决定 Stream 注册
 
     consumers:  # 可省略、设为 null 或 []；每个消费者自动使用当前 Stream 的 name，可配置多个。
       - durable: "order-created-worker"
+        # mode: "create"  # 省略/null 默认 create；同配置复用、冲突报错；设为 upsert 时创建或更新，不支持 existing。
+        # 仅控制当前 Consumer，不继承 Stream 或其他 Consumer 的 mode，也不支持全局默认。
+        # upsert 提交包含默认值的完整配置，非字段合并；保留消费进度，不可更新的字段由服务端报错，不删除重建。
         filterSubjects:  # 省略或为空时消费整个 Stream。
           - "orders.created"
         handler: "HandleOrderCreated"  # 须由应用的 JetStreamHandlerRegistry 登记。
@@ -55,6 +58,7 @@ streams:  # 可省略、设为 null 或 []；每项按 mode 决定 Stream 注册
 #     mode: "existing"
 #     consumers:
 #       - durable: "external-worker"
+#         mode: "upsert"  # Stream 只引用已有资源，当前 Consumer 仍可独立创建或更新。
 #         filterSubjects:
 #           - "external.tasks"
 #         handler: "HandleExternalTask"
@@ -72,4 +76,4 @@ coreConsumers:  # 可省略或设为 []。
 # 消费者只在所属 Stream 的 consumers 下声明；不接受旧顶层 jetStreamConsumers 或消费者的 stream 字段。
 # 未引用的 Handler 不启动。
 # 除上述字段外全部沿用 natsx 的 Default，不支持 enabled、热更新或完整 SDK 配置。
-# 删除声明后重启不删除远端 Stream/Durable；仅 mode: upsert 更新 Stream，Consumer 始终同配置复用、冲突报错。
+# 删除声明后重启不删除远端 Stream/Durable；Stream 和 Consumer 分别由各自的 mode 决定是否更新。

@@ -65,6 +65,7 @@ func TestNATSFromConfig(t *testing.T) {
 		{name: "StreamValidation", run: testNATSFromConfigStreamValidation},
 		{name: "StreamOptions", run: testNATSFromConfigStreamOptions},
 		{name: "StreamModes", run: testNATSFromConfigStreamModes},
+		{name: "ConsumerModes", run: testNATSFromConfigConsumerModes},
 		{name: "JetStreamOptions", run: testNATSFromConfigJetStreamOptions},
 		{name: "JetStreamBackOff", run: testNATSFromConfigJetStreamBackOff},
 		{name: "JetStreamConsumerValidation", run: testNATSFromConfigJetStreamConsumerValidation},
@@ -75,6 +76,83 @@ func TestNATSFromConfig(t *testing.T) {
 	} {
 		t.Run(tc.name, tc.run)
 	}
+}
+
+func testNATSFromConfigConsumerModes(t *testing.T) {
+	isolatedNATS(t, func() {
+		client := registrationClients(t, true, "consumer-modes")[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := client.JetStream().CreateStream(ctx, natsx.DefaultStreamConfig("EVENTS", 1, "events.*")); err != nil {
+			t.Fatal(err)
+		}
+		for _, durable := range []string{"updated", "reused"} {
+			cfg := natsx.DefaultJetStreamConsumer("EVENTS", durable, nil, "events."+durable).Config
+			if durable == "updated" {
+				cfg.MaxAckPending = 17
+			}
+			if _, err := client.JetStream().CreateConsumer(ctx, "EVENTS", cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		received := make(chan string, 3)
+		handlers := natsx.MustNewJetStreamHandlerRegistry()
+		handlers.MustRegister(func(_ context.Context, msg jetstream.Msg) error {
+			received <- string(msg.Data())
+			return nil
+		}, "task")
+		writeNATSRegistration(t, "consumer-modes", `
+streams:
+  - name: EVENTS
+    mode: existing
+    consumers:
+      - durable: updated
+        mode: upsert
+        filterSubjects: [events.updated]
+        handler: task
+        backOff: [1s, 5s]
+        maxDeliver: 30
+      - durable: reused
+        filterSubjects: [events.reused]
+        handler: task
+      - durable: created
+        mode: upsert
+        filterSubjects: [events.created]
+        handler: task
+`)
+		if err := registerNATSForTest(t, "consumer-modes", handlers, nil); err != nil {
+			t.Fatal(err)
+		}
+		for _, durable := range []string{"updated", "reused", "created"} {
+			consumer, err := client.JetStream().Consumer(ctx, "EVENTS", durable)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := consumer.CachedInfo().Config
+			if durable == "updated" {
+				if cfg.MaxDeliver != 30 || cfg.AckWait != time.Second || cfg.MaxAckPending != 1000 || !slices.Equal(cfg.BackOff, []time.Duration{time.Second, 5 * time.Second}) {
+					t.Fatalf("upsert 未更新 Consumer: %+v", cfg)
+				}
+			} else if cfg.MaxDeliver != 5 || len(cfg.BackOff) != 0 {
+				t.Fatalf("其他 Consumer 不应继承更新配置: %+v", cfg)
+			}
+			if _, err := client.PublishJetStream(ctx, "events."+durable, []byte(durable), durable); err != nil {
+				t.Fatal(err)
+			}
+		}
+		seen := make(map[string]bool)
+		for range 3 {
+			select {
+			case durable := <-received:
+				if seen[durable] {
+					t.Fatalf("重复消费: %s", durable)
+				}
+				seen[durable] = true
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		}
+	})
 }
 
 func testNATSFromConfigStreamModes(t *testing.T) {

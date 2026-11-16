@@ -210,14 +210,18 @@
 // Mode 的 Go 零值及 create 使用 CreateStream；upsert 使用 CreateOrUpdateStream；existing 仅查询一次 Stream Info。
 // existing 只允许 Config.Name，要求 Stream 已存在且允许读取信息，不填充或比较远端配置。
 // upsert 提交完整配置，包括默认值，非字段合并；不可变字段或非法更新继续返回服务端错误。
-// 三种模式可混用，只影响 Stream；Consumer 仍采用创建/同配置复用策略。
+// 三种模式可混用，只影响 Stream；Consumer 的 Mode 独立配置。
+// Consumer 的 Go 零值及 ConsumerModeCreate 使用 CreateConsumer，同配置复用、冲突报错；
+// ConsumerModeUpsert 使用 CreateOrUpdateConsumer，创建或按完整配置更新，保留已有 Durable 的消费进度。
+// 例如在上方消费声明注册前设置 consumer.Mode = natsx.ConsumerModeUpsert。
+// Consumer 不支持 existing；未知模式在本批远端操作前拒绝，不可更新的字段交给服务端报错，不删除重建。
 // DefaultStreamConfig 返回可直接修改的原生配置，replicas 原样写入副本数，复制传入的 subjects；校验由注册入口和 SDK 承担。
 // 默认 LimitsPolicy、FileStorage、MaxBytes=-1（不设 Stream 容量上限，仍受账户及服务端配额限制）、MaxMsgSize=512 KiB、DiscardNew、MaxAge=90 天（约 3 个月）、Duplicates=2 分钟、NoAck=false，
 // 其余字段沿用 SDK 默认。注册前可直接覆盖字段，例如 streamCfg.MaxBytes = 2 << 30。
 // MaxMsgSize 限制 Header 与正文的总大小，须为组件追加的追踪 ID、消息 ID 等 Header 预留空间。
 // LimitsPolicy 下 ACK 不释放容量；达到显式配置的容量上限时拒绝新消息，空间释放后可继续发布，MaxAge 到期也会删除未 ACK 的消息。
 // 需要满额淘汰最老消息时，可在注册前设置 streamCfg.Discard = jetstream.DiscardOld。
-// DefaultJetStreamConsumer 返回可修改的消费声明，默认显式确认、AckWait=60s、MaxDeliver=5（含首次投递），
+// DefaultJetStreamConsumer 返回可修改的消费声明，默认 Mode=create、显式确认、AckWait=60s、MaxDeliver=5（含首次投递），
 // 显式设置 MaxAckPending=1000，限制同一 Durable 下所有实例合计的未确认消息数。
 // MaxRequestBatch 和 MaxRequestExpires 保留零值，不额外指定拉取批量或期限上限。
 // BackOff 为空、RetryDelay 为零；可通过 consumer.Config 覆盖 AckWait、MaxDeliver、MaxAckPending 或设置 BackOff。
@@ -228,10 +232,10 @@
 // Workers 默认设为 1；MaxMessages 保留零值，注册时为有效 Workers 的两倍。
 // 默认构造函数不校验参数；手写消费声明仍须显式配置确认超时。
 // RegisterJetStreamConsumers 仅支持 Pull Consumer，Config.DeliverSubject 非空时在创建本批任何远端 Consumer 前报错。
-// RegisterStreams/RegisterJetStreamConsumers 使用 SDK 创建语义：同配置复用、冲突返回错误，不更新或删除已有资源。
+// RegisterStreams 使用 SDK 创建语义：同配置复用、冲突返回错误，不更新或删除已有资源。
 // RegisterStreams/RegisterStreamRegistrations 在远端操作前整批检查模式、名称、主题及名称唯一性。
 // Subjects 列表允许省略或为空，保留原生默认主题及 Mirror 等用法；其余约束由 SDK/服务端处理。
-// RegisterJetStreamConsumers 创建资源前整批校验本地参数及 (Stream, Durable) 唯一。
+// RegisterJetStreamConsumers 创建或更新资源前整批校验模式、本地参数及 (Stream, Durable) 唯一。
 // Stream、Durable 必须非空且无首尾空白；过滤条件允许省略，已提供的主题元素须非空且无首尾空白。
 // RegisterCoreConsumers 建立订阅前整批校验本地参数及 Name 唯一。
 // Name、Subject 必须非空且无首尾空白；Queue 为空时广播，非空时不得有首尾空白。
