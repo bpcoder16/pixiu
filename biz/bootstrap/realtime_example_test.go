@@ -22,7 +22,7 @@ func exampleRealtimeConfig() realtime.Config {
 			return r.Handle("home", "hello", func(ctx context.Context, session *realtime.Session, message *realtime.Message) error {
 				var request wrapperspb.StringValue
 				if err := message.Decode(&request); err != nil {
-					return session.ReplyError(ctx, message, "request.error", "INVALID_ARGUMENT", "请求参数错误")
+					return session.ReplyError(ctx, message, "request.error", realtime.CodeInvalidArgument, "请求参数错误")
 				}
 				return session.Reply(ctx, message, "home.greeting", wrapperspb.String("hello "+request.Value))
 			})

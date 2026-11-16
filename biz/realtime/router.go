@@ -47,7 +47,7 @@ func (r *Router) seal(onNotFound Handler) Handler {
 	defer r.mu.Unlock()
 	if onNotFound == nil {
 		onNotFound = func(ctx context.Context, s *Session, m *Message) error {
-			return s.ReplyError(ctx, m, "request.error", "NOT_FOUND", "不支持的消息")
+			return s.ReplyError(ctx, m, "request.error", CodeNotFound, "不支持的消息")
 		}
 	}
 	r.sealed = true

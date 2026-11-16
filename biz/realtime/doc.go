@@ -10,7 +10,7 @@
 //		return r.Handle("home", "hello", func(ctx context.Context, session *realtime.Session, message *realtime.Message) error {
 //			var request wrapperspb.StringValue
 //			if err := message.Decode(&request); err != nil {
-//				return session.ReplyError(ctx, message, "request.error", "INVALID_ARGUMENT", "请求参数错误")
+//				return session.ReplyError(ctx, message, "request.error", realtime.CodeInvalidArgument, "请求参数错误")
 //			}
 //			return session.Reply(ctx, message, "home.greeting", wrapperspb.String("hello "+request.Value))
 //		})
@@ -68,6 +68,8 @@
 // 发送不额外限制 JSON 正文容器深度，接收方在解码时执行自己的递归限制。
 // 业务 Decode 错误由 Handler 显式处理；普通 Handler error 只脱敏观察，不自动回复或断连。
 // panic/超时由 websocketx 处理。ReplyError 内容由业务授权公开，不应传入内部错误原文。
+// 通用错误码使用 CodeInvalidArgument、CodeNotFound、CodeUnavailable、CodeTopicLimitExceeded；
+// 文案由业务集中管理，仍允许自定义错误码，不自动将 Go error 映射为公开错误。
 //
 // Message 和其正文只在业务 Handler 回调期间有效，每次 Decode 使用独立可写对象。
 // Reply/ReplyError 由业务传入消息类型，不从路由或 protobuf 类型名推导；检查所属 Session，
