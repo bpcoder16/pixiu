@@ -253,6 +253,7 @@
 // 本地已执行工作和远端资源不回滚。
 // 不同 Client 可共享同一 Durable 分摊消息，服务重启可复用其进度。
 // 每个 Consumer 必须显式配置正值 AckWait 或非空 BackOff，至少一项；两者同时配置时 BackOff 优先。
+// MaxDeliver 为正数时，BackOff 的档数最多为 MaxDeliver，超出时整批预检失败。
 // 无论 RetryDelay 是否为正，都在准备本批远端 Consumer 前检查确认超时配置。
 // 新注册入口默认一个 worker，handler 返回 nil 时 ACK，错误或 panic 且尚有投递次数时按 RetryDelay 决定重投方式；
 // 失败且达到 MaxDeliver 后记录 exhausted，不 ACK/Term/主动 NAK，不自动删除或转入死信队列；

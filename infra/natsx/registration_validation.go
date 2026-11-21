@@ -125,6 +125,9 @@ func validateJetStreamConsumers(specs []JetStreamConsumer) error {
 		if spec.Config.AckWait <= 0 && len(spec.Config.BackOff) == 0 {
 			return fmt.Errorf("natsx: consumer %q requires AckWait or BackOff", spec.Config.Durable)
 		}
+		if limit := spec.Config.MaxDeliver; limit > 0 && len(spec.Config.BackOff) > limit {
+			return fmt.Errorf("natsx: consumer %q/%q BackOff length %d exceeds MaxDeliver %d", spec.Stream, spec.Config.Durable, len(spec.Config.BackOff), limit)
+		}
 		if spec.Consume.Workers < 0 || spec.Consume.MaxMessages < 0 || spec.RetryDelay < 0 {
 			return fmt.Errorf("natsx: consumer %q has negative consumption parameter", spec.Config.Durable)
 		}

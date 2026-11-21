@@ -77,6 +77,21 @@ func TestValidateRegistrations(t *testing.T) {
 	}
 }
 
+func TestValidateRegistrationsBackOffMaxDeliver(t *testing.T) {
+	spec := DefaultJetStreamConsumer("EVENTS", "worker", func(context.Context, jetstream.Msg) error { return nil })
+	spec.Config.BackOff = []time.Duration{time.Second, 2 * time.Second}
+	for _, maxDeliver := range []int{-1, 0, 2, 3} {
+		spec.Config.MaxDeliver = maxDeliver
+		if err := ValidateRegistrations(nil, []JetStreamConsumer{spec}, nil); err != nil {
+			t.Errorf("MaxDeliver=%d 应允许两档 BackOff，得到 %v", maxDeliver, err)
+		}
+	}
+	spec.Config.MaxDeliver = 1
+	if err := ValidateRegistrations(nil, []JetStreamConsumer{spec}, nil); err == nil {
+		t.Fatal("MaxDeliver=1 时应拒绝两档 BackOff")
+	}
+}
+
 func registrationClient(t *testing.T) *Client {
 	t.Helper()
 	c, err := New(Config{
