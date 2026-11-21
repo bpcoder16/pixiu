@@ -1,17 +1,12 @@
-# 复制为 aliyunstsx.<name>.yaml，放在 app.yaml 同目录下。
-# name 和 isDefault 由 MustRegisterAliyunSTS(name, isDefault) 声明。
-region: "cn-hangzhou"
+# 与入口配置放在同一目录，文件名为 aliyunstsx.<实例名>.yaml，实例名由 MustRegisterAliyunSTS 声明。
 
-# 固定 AK/SK，两项必填；部署时填写实际值，不替换环境变量占位符。
+region: "cn-hangzhou"  # 必填，STS 服务地域
+endpoint: ""           # 留空使用地域公网地址，自定义地址填写完整 HTTP(S) URL
+
+# 访问阿里云时填写固定 AccessKey，两项均必填。
 accessKeyID: "<部署时填写 AK>"
 accessKeySecret: "<部署时填写 SK>"
 
-# HTTP(S) 地址；留空使用当前地域公网 STS 地址。
-endpoint: ""
-
-# 零值采用以下默认值；初始化不联网验活，调用方更短的 Context 期限优先。
-requestTimeout: "60s"
-slowThreshold: "500ms"
-
-# 默认关闭；开启后不记录凭据、策略或原始错误。
-logRequests: false
+requestTimeout: "60s"   # 单次请求时限，默认 60s
+slowThreshold: "500ms"  # 慢请求阈值，默认 500ms
+logRequests: false      # 开启后记录请求结果，默认关闭

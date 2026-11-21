@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -56,9 +57,28 @@ func TestNewCloseTimeout(t *testing.T) {
 		t.Fatal("接受负期限")
 	}
 	s, err := New(0)
-	if err != nil || s.closeTimeout != 20*time.Second {
-		t.Fatalf("默认期限不是 20 秒: %+v, %v", s, err)
+	if err != nil || s.closeTimeout != 30*time.Second {
+		t.Fatalf("默认期限应为 30 秒: %+v, %v", s, err)
 	}
+}
+
+func TestZeroStackCloseTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var stack Stack
+		release := make(chan struct{})
+		defer close(release)
+		if err := stack.Register(func() error {
+			<-release
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		err := stack.Close()
+		if elapsed := time.Since(start); !errors.Is(err, ErrCloseTimeout) || elapsed != 30*time.Second {
+			t.Fatalf("零值栈 Close 耗时 %s，错误为 %v", elapsed, err)
+		}
+	})
 }
 
 type blockingPanicValue struct {

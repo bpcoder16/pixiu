@@ -143,6 +143,7 @@ func TestMustLoadAppConfigRejectsInvalidEnvironment(t *testing.T) {
 		{"unknown-field", validYAML + "  appNmae: wrong\n", "appnmae"},
 		{"unknown-null", validYAML + "  extra: null\n", "extra"},
 		{"unknown-log-field", validYAML + "log:\n  formatt: json\n", "formatt"},
+		{"negative-resource-close-timeout", validYAML + "resourceCloseTimeout: -1s\n", "resourceCloseTimeout"},
 		{"unknown-service-type", validYAML + "disabledServices: [crno]\n", "crno"},
 		{"old-nats-type", validYAML + "disabledServices: [nats]\n", "nats"},
 		{"missing-service-instance", validYAML + "disabledServices: ['http:']\n", "http:"},
@@ -286,6 +287,9 @@ func TestConcurrentLoadAndRead(t *testing.T) {
 func TestExampleTemplate(t *testing.T) {
 	isolated(t, func(t *testing.T) {
 		cfg := appconfig.MustLoadAppConfig("conf.example/app.yaml")
+		if cfg.ResourceCloseTimeout != 30*time.Second {
+			t.Fatalf("模板资源关闭期限: %s", cfg.ResourceCloseTimeout)
+		}
 		if cfg.Env.AppName != "example-http" || cfg.Env.RunMode != "debug" || cfg.Env.TimeLocation != "Asia/Shanghai" || cfg.Log.Format != "json" || cfg.Log.Caller || cfg.Log.HookStd == nil || !*cfg.Log.HookStd {
 			t.Fatalf("模板配置不正确: %+v", cfg)
 		}

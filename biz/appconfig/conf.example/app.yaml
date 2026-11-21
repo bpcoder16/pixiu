@@ -1,46 +1,33 @@
 env:
-  # 应用名称，复制到具体项目后修改；必填。
+  # 必填。应用名也是日志子目录名，请使用单个目录名。
   appName: "example-http"
-
-  # debug / test / release；必填。
-  # 使用 bootstrap.NewGinEngine 时，debug/test 自动开放 OpenAPI 与 Elements，须先生成并导入文档包；release 关闭。
+  # 必填。可选 debug、test、release。release 从 Info 级别记录日志，其余从 Debug 开始。
   runMode: "debug"
-
-  # 应用时区，加载时校验并解析；bootstrap 在日志初始化前应用为 time.Local；必填。
+  # 必填。进程时区，也用于确定日志轮转时间。
   timeLocation: "Asia/Shanghai"
-
-  # 可选 IPv4 / IPv6；空字符串在初始化时先查询本机 IPv4，失败后查询 IPv6，再失败则保持为空。
+  # 本机 IP。留空时先查 IPv4，再查 IPv6。
   localIP: ""
 
-# 可选类型：http（含 Gin HTTP）、cron、nats-consumer、websocket。省略或填 [] 时按代码声明启动。
-# 填类型会禁用该类型的所有服务；填 "类型:实例名" 只禁用名称完全相同的实例。
-# 示例一：禁用全部 HTTP 服务和全部 NATS 消费者。
-# disabledServices: [http, nats-consumer]
-# 示例二：只禁用 demo 消费者和 app WebSocket，其他实例照常启动。
-# disabledServices: ["nats-consumer:demo", "websocket:app"]
-# HTTP 和 Cron 内置入口使用单服务名 http、cron。工厂返回命名服务时也可精确匹配，例如 ["http:aaa"]。
-# NATS 共享客户端和 WebSocket 命名实例仍按代码声明初始化。
-disabledServices: []
-
 log:
-  # 是否劫持 stdout/stderr；省略时默认 true，仅支持 Linux/macOS。
-  # 原始输出分别追加到 dir/<appName>/std/stdout.log 和 dir/<appName>/std/stderr.log。
-  # std 目录自动创建，文件不轮转；资源栈关闭后仍生效，直到进程退出。
-  hookStd: true
-
-  # text / json；必填。release 输出 Info 及以上，其他模式输出 Debug 及以上。
+  # 必填。日志格式可选 json 或 text。
   format: "json"
-  # 是否输出调用位置；默认 false，对默认及命名 Logger 同时生效。
+  # 是否记录调用处的文件名和行号，默认 false。
   caller: false
-  # 日志根目录，默认 ./log；相对路径拼接 env.RootDirPath()，绝对路径直接使用。
-  # 业务日志位于 dir/<appName>/biz；不存在时自动创建，启动时检查目录可写权限。
+  # 是否将 stdout、stderr 写入 <dir>/<appName>/std/。默认 true，支持 Linux 和 macOS。
+  hookStd: true
+  # 日志根目录，默认 ./log。相对路径从进程启动目录计算，应用日志写入 <dir>/<appName>/biz/。
   dir: "./log"
-  # 额外的命名 Logger，可通过 logit.Named(name) 或 WithLoggerName(ctx, name) 选择。
-  # 默认文件为 debug.log / info.log / wf.log（Warn、Error、Fatal）；命名 Logger 增加 <name>. 前缀。
+  # 额外的日志名称，例如 [audit] 会生成 audit.info.log 等文件。
   names: []
-  # 固定使用 rotatefile；时间戳和轮转边界使用进程本地时区。
   rotate:
-    # 按本地整小时（1h）或整天（24h）轮转，默认 1h。
+    # 按本地整点（1h）或午夜（24h）轮转，默认 1h。
     every: "1h"
-    # 保留实际文件数量（含当前文件，不含软链），默认 48，最小 3。
+    # 每组日志保留的文件数，含当前文件。默认 48，最少 3。
     maxFiles: 48
+
+# 关闭所有已登记资源的总时限。省略或设为 0s 时使用 30s，负值无效。
+resourceCloseTimeout: "30s"
+
+# 可填 http、cron、nats-consumer、websocket。类型匹配全部实例，“类型:实例名”只匹配指定实例。
+# 例如 ["nats-consumer:orders"] 只关闭 orders 消费者。空列表表示启用代码声明的全部服务。
+disabledServices: []

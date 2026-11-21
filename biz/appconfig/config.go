@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/bpcoder16/pixiu/infra/env"
 )
@@ -24,6 +25,9 @@ type AppConfig struct {
 	Env              env.Config `mapstructure:"env"`
 	Log              LogConfig  `mapstructure:"log"`
 	DisabledServices []string   `mapstructure:"disabledServices"`
+
+	// ResourceCloseTimeout 是整个资源栈共享的关闭期限，零值使用 lifecycle 默认的 30 秒。
+	ResourceCloseTimeout time.Duration `mapstructure:"resourceCloseTimeout"`
 }
 
 // ValidateDisabledServices 校验禁用列表，避免类型拼写错误时意外启动服务。

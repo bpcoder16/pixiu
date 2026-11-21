@@ -23,6 +23,9 @@ func MustLoadAppConfig(filePath string) *AppConfig {
 	if err != nil {
 		panic(fmt.Errorf("appconfig: load app config %q: %w", absolutePath, err))
 	}
+	if cfg.ResourceCloseTimeout < 0 {
+		panic(fmt.Errorf("appconfig: %q resourceCloseTimeout must be non-negative, got %s", absolutePath, cfg.ResourceCloseTimeout))
+	}
 	if err := cfg.ValidateDisabledServices(); err != nil {
 		panic(fmt.Errorf("appconfig: load app config %q: %w", absolutePath, err))
 	}

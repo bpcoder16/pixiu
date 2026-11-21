@@ -1,39 +1,20 @@
-# 复制为 nats.<name>.yaml，放在 app.yaml 同目录下。
-# name 和 isDefault 由 MustRegisterNATS(name, isDefault) 声明，文件内不重复配置。
-# 连接、异步错误及消费链路使用此命名 Logger；在 app.yaml 的 log.names 中声明 nats。
-# 省略、null、空值或未注册名称时回退默认 Logger；发布和 Request 始终跟随调用方 ctx。
-loggerName: "nats"
+# 与入口配置放在同一目录，文件名为 nats.<实例名>.yaml，实例名由 MustRegisterNATS 声明。
 
-# 默认仅记录操作概要和正文字节数；true 时追加完整正文、Header 和正文编码。
-# 详情不截断或脱敏；此开关不改变原始错误文本、连接状态和异步错误事件日志。
-logDetails: false
-
-# 可选环境前缀，省略、null 或空字符串时不启用；仅允许英文字母、数字、_。
-# 含 - 等其他字符直接报错；仅 Stream 名称及引用中的 namespace 转大写，其他名称和主题保留大小写。
-# 初始化后固定；发布、Request 和注册均填写原始主题或名称，由客户端统一添加前缀。
-# 例如 test01_v1 将 orders.created 映射为 test01_v1.orders.created，将 ORDERS 映射为 TEST01_V1_ORDERS。
-# 旧 Stream 不自动迁移；若仍占用相同主题，新 Stream 会因主题重叠而创建失败，须显式迁移。
-namespace: ""
-
-# 列表中的地址属于同一个逻辑实例，不为每个地址创建独立客户端。
-# 注册配置的 streamDefaults.replicas 省略或 null 时，使用初始化时本列表的条目数，不去重、不计入自动发现节点。
-# 自动推导要求完整且不重复列出同一 JetStream 集群节点；仅列种子地址或使用代理入口时应显式配置 replicas。
+# 同一实例至少填写一个节点地址。认证信息单独填写。
 urls:
   - "nats://127.0.0.1:4222"
+username: ""  # 认证用户名，可留空
+password: ""  # 认证密码，填写时须同时提供用户名
 
-# 不接受 URL 内嵌凭据；允许均为空，有密码时必须填写用户名。
-username: ""
-password: ""
+namespace: ""   # 主题和资源名的前缀，限英文字母、数字和下划线，留空时使用原名
 
-# 零值采用以下默认值，负值无效；connectTimeout 是单次拨号而非全部地址总预算。
-connectTimeout: "5s"
-# 仅限制底层连接 Drain。
-drainTimeout: "10s"
-# 消费排空、异步确认等待、最终连接关闭共用此整体期限。
-closeTimeout: "20s"
+loggerName: "nats"  # 连接和消费日志使用的名称，未在 app.yaml 的 log.names 中注册时使用默认日志
+logDetails: false   # 开启后记录完整消息正文和 Header，可能包含敏感数据
 
-# 不负责启用或校验服务端 JetStream；依赖就绪后通过 NewNATSConsumerService
-# 读取独立的 nats-register.<name>.yaml，服务 Run 时准备 Stream/Consumer。
+connectTimeout: "5s"  # 单次拨号超时，默认 5s
+drainTimeout: "10s"   # 底层连接排空超时，默认 10s
+closeTimeout: "20s"   # 客户端关闭的总时限，含排空和等待发布确认，默认 20s
+
+# 消费注册见 nats-register.<实例名>.yaml，其中 streamDefaults.replicas 默认取 urls 的地址数。
 jetStream:
-  # 仅限制默认上下文的异步 PubAck 等待，不影响同步发布或 Consumer AckWait。
-  publishAsyncTimeout: "5s"
+  publishAsyncTimeout: "5s"  # 异步发布等待服务端确认的时限，默认 5s

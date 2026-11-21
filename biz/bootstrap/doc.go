@@ -54,7 +54,10 @@
 // 以下片段放在具名返回 runErr error 的 run 函数内；main 在返回错误后退出：
 //
 //	config := appconfig.MustLoadAppConfig("./conf/app.yaml")
-//	var resources lifecycle.Stack
+//	resources, err := lifecycle.New(config.ResourceCloseTimeout)
+//	if err != nil {
+//		return err
+//	}
 //	defer func() {
 //		runErr = errors.Join(runErr, resources.Close())
 //	}()
@@ -71,7 +74,7 @@
 //	bootstrap.MustRegisterAliyunOSS("assets", true)
 //	bootstrap.MustRegisterAliyunES("search-control", true)
 //	bootstrap.MustRegisterNATS("orders", true)
-//	bootstrap.MustBaseInit(config, &resources)
+//	bootstrap.MustBaseInit(config, resources)
 //	moduleLogger := logit.With(logit.Str("mod", "orders"))
 //	moduleLogger.Info(context.Background(), "application initialized")
 //
@@ -497,7 +500,7 @@
 // Run 注册期间可能执行业务；失败先由管理器排空已启动消费，再由资源栈收尾，不自动重试或删除远端资源。
 // 修改文件重启生效；删除声明不删除 Durable 或进度。消息协议和业务幂等由应用负责。
 // NATS 消费服务的 Stop 启动消费排空，Wait 等待实际回调结束；期间可查询 Default/Named、发布和请求。
-// 排空完成或超时取消后进入资源回收；资源栈默认总期限 20 秒，可通过 lifecycle.New 自定义。
+// 排空完成或超时取消后进入资源回收；资源栈默认总期限 30 秒，可通过 lifecycle.New 自定义。
 // 客户端 CloseTimeout 约束后续异步确认及连接关闭，日志最后关闭。
 //
 // 日志固定使用 rotatefile，format 必须显式设置为 text/json；默认启动目录下的 log 目录、每小时轮转、
@@ -558,7 +561,7 @@
 //	}
 //
 // StartWithConfig 要求显式预算至少 5s；Start/NewAppManager 默认仍为 30s。
-// 总预算不包含资源栈、Client.Close 和日志；这些由应用随后调用 lifecycle.Stack.Close 回收，默认整体 20 秒，日志最后关闭。
+// 总预算不包含资源栈、Client.Close 和日志；这些由应用随后调用 lifecycle.Stack.Close 回收，默认整体 30 秒，日志最后关闭。
 //
 // 应用在统一初始化前声明 WebSocket 命名实例，工厂在共享客户端就绪后执行：
 //

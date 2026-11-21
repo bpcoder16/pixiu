@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const defaultCloseTimeout = 30 * time.Second
+
 var (
 	// ErrClosed 表示关闭已开始，不能再登记关闭函数。
 	ErrClosed = errors.New("lifecycle: stack closed")
@@ -18,7 +20,7 @@ var (
 	ErrCloseTimeout = errors.New("lifecycle: close timeout")
 )
 
-// Stack 按登记逆序回收资源，全部回收共享期限；零值默认 20 秒，使用后不可复制。
+// Stack 按登记逆序回收资源，全部回收共享期限；零值默认 30 秒，使用后不可复制。
 type Stack struct {
 	closeTimeout time.Duration
 	mu           sync.Mutex
@@ -36,13 +38,13 @@ func (e *closePanicError) Error() string {
 	return fmt.Sprintf("lifecycle: close panic: %v", e.value)
 }
 
-// New 设置整个栈的回收期限；零值使用 20 秒，负值非法。期限创建后不可修改。
+// New 设置整个栈的回收期限；零值使用 30 秒，负值非法。期限创建后不可修改。
 func New(closeTimeout time.Duration) (*Stack, error) {
 	if closeTimeout < 0 {
 		return nil, fmt.Errorf("lifecycle: negative close timeout: %s", closeTimeout)
 	}
 	if closeTimeout == 0 {
-		closeTimeout = 20 * time.Second
+		closeTimeout = defaultCloseTimeout
 	}
 	return &Stack{closeTimeout: closeTimeout}, nil
 }
@@ -81,7 +83,7 @@ func (s *Stack) Close() (err error) {
 	s.mu.Unlock()
 	timeout := s.closeTimeout
 	if timeout == 0 {
-		timeout = 20 * time.Second
+		timeout = defaultCloseTimeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

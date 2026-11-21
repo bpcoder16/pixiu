@@ -229,7 +229,10 @@ func main() {
 
 func run() (runErr error) {
 	cfg := appconfig.MustLoadAppConfig("./conf/app.yaml")
-	var resources lifecycle.Stack
+	resources, err := lifecycle.New(cfg.ResourceCloseTimeout)
+	if err != nil {
+		return err
+	}
 	defer func() {
 		if runErr != nil {
 			failure := runErr
@@ -240,7 +243,7 @@ func run() (runErr error) {
 		}
 		runErr = errors.Join(runErr, resources.Close())
 	}()
-	bootstrap.MustBaseInit(cfg, &resources)
+	bootstrap.MustBaseInit(cfg, resources)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -254,7 +257,7 @@ func run() (runErr error) {
 
 </details>
 
-NewHTTPService 构造不监听，Start 接管服务与信号；Stop 统一封闭入口，Wait 共享 30 秒，超时 Cancel。返回后无论是否排空超时都执行资源栈 Close，默认整体最多等待 20 秒。库不退出进程，应用 main 在有界收尾后退出。
+NewHTTPService 构造不监听，Start 接管服务与信号；Stop 统一封闭入口，Wait 共享 30 秒，超时 Cancel。返回后无论是否排空超时都执行资源栈 Close，默认整体最多等待 30 秒。库不退出进程，应用 main 在有界收尾后退出。
 
 通过 bootstrap 初始化后，业务日志默认写入 `<dir>/<appName>/biz/` 下的 `debug.log`、`info.log`、`wf.log`，分别对应 Debug、Info 和 Warn / Error / Fatal；命名 Logger 增加 `<name>.` 文件前缀。`dir` 默认 `./log`，相对应用启动目录解析；release 输出 Info 及以上，debug/test 输出 Debug 及以上。
 
@@ -315,7 +318,10 @@ import (
 
 func main() {
 	cfg := appconfig.MustLoadAppConfig("./conf/app.yaml")
-	var resources lifecycle.Stack
+	resources, err := lifecycle.New(cfg.ResourceCloseTimeout)
+	if err != nil {
+		panic(err)
+	}
 	defer func() {
 		if err := resources.Close(); err != nil {
 			fmt.Fprintln(os.Stderr, "close resources:", err)
@@ -329,7 +335,7 @@ func main() {
 	bootstrap.MustRegisterAliyunSTS("upload", true)
 	bootstrap.MustRegisterAliyunES("search-control", true)
 	bootstrap.MustRegisterNATS("events", true)
-	bootstrap.MustBaseInit(cfg, &resources)
+	bootstrap.MustBaseInit(cfg, resources)
 	logit.Info(context.Background(), "应用初始化完成")
 }
 ```

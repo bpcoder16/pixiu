@@ -17,6 +17,8 @@
 // 顶层 disabledServices 接受服务类型或“类型:实例名”。例如 [cron, "nats-consumer:orders"] 跳过 Cron 和 orders 消费者。
 // 类型对应 ServiceHTTP、ServiceCron、ServiceNATSConsumer 和 ServiceWebSocket。省略或空列表时按代码声明启动。
 // 将 cfg 传给 bootstrap.MustBaseInit 或 MustBaseInitWithoutLogit 后生效。
+// 顶层 resourceCloseTimeout 控制整个资源栈的回收期限。宿主创建栈时传给 lifecycle.New(cfg.ResourceCloseTimeout)。
+// 省略或写 0s 使用 30 秒，负值会在加载时被拒绝。
 // AppConfig.Env 复用 env.Config，并交给 env.Init 校验及发布环境。
 // 应用名称不能为空或全为空白；运行模式必须为 debug、test、release；时区须能通过
 // time.LoadLocation 解析。加载器不内嵌时区数据库，时区数据使用标准库查找机制。
