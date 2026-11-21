@@ -1,14 +1,10 @@
-# 与 app.yaml 放在同一配置目录，由 bootstrap.NewGinEngine 在构造时读取一次。
-# 文件必须存在；使用 {} 可沿用全部默认值。监听和超时仍由 http.yaml 配置。
-# NewGinEngine 在 debug/test 下自动注册 OpenAPI 与 Elements；须先生成并导入 Swag 文档包，release 跳过。
+# 与 app.yaml 放在同一目录，配置 Gin 的可信代理和访问日志。
 
-# 可信代理 IP 或 CIDR；空列表不信任代理转发的客户端地址。
-trustedProxies: []
-# 请求使用的命名 Logger，对应 app.yaml 的 log.names；空值沿用请求 context 的 Logger 路由。
-loggerName: "http"
-# 关闭访问日志及两侧详情采集，不影响 panic 错误日志。
-disableAccessLog: false
-# 请求和响应详情会完整记录凭据和正文，默认关闭。
-# 请求正文在业务中间件之前预读，开启前须在 Engine 外层限制大小及读取期限。
-logRequestInfo: false
-logResponseInfo: false
+trustedProxies: []  # 可信代理 IP 或 CIDR，空列表表示直接使用对端 IP
+
+loggerName: "http"       # 对应 app.yaml 的 log.names，留空沿用请求上下文的日志配置
+disableAccessLog: false  # 设为 true 关闭访问日志和详情采集，仍记录 panic
+
+# 详情包含完整请求头或响应头及正文。开启请求详情前，应在 Gin 外层限制请求体大小和读取时间。
+logRequestInfo: false   # 记录请求详情
+logResponseInfo: false  # 记录响应详情
