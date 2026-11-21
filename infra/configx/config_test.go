@@ -77,11 +77,13 @@ func TestLoadFormats(t *testing.T) {
 
 func TestLoadRejectsWeakTypeConversions(t *testing.T) {
 	type typedConfig struct {
-		Port    int      `mapstructure:"port"`
-		Enabled bool     `mapstructure:"enabled"`
-		Name    string   `mapstructure:"name"`
-		Alias   *string  `mapstructure:"alias"`
-		Origins []string `mapstructure:"origins"`
+		Port    int             `mapstructure:"port"`
+		Limit   *uint16         `mapstructure:"limit"`
+		Delays  []time.Duration `mapstructure:"delays"`
+		Enabled bool            `mapstructure:"enabled"`
+		Name    string          `mapstructure:"name"`
+		Alias   *string         `mapstructure:"alias"`
+		Origins []string        `mapstructure:"origins"`
 	}
 	formats := []struct {
 		ext     string
@@ -97,6 +99,10 @@ func TestLoadRejectsWeakTypeConversions(t *testing.T) {
 		value string
 	}{
 		{"string-to-int", "port", `"8080"`},
+		{"float-to-int", "port", "-1.5"},
+		{"whole-float-to-int", "port", "1.0"},
+		{"float-to-uint-pointer", "limit", "2.5"},
+		{"float-in-duration-slice", "delays", "[0.5]"},
 		{"string-to-bool", "enabled", `"true"`},
 		{"bool-to-int", "port", "true"},
 		{"int-to-bool", "enabled", "1"},
@@ -123,24 +129,38 @@ func TestLoadRejectsWeakTypeConversions(t *testing.T) {
 	}
 }
 
-func TestLoadJSONNumericDurations(t *testing.T) {
-	type durationConfig struct {
+func TestLoadNumbersAndDurations(t *testing.T) {
+	type numericConfig struct {
+		Limit   uint16          `mapstructure:"limit"`
+		Ratio   float64         `mapstructure:"ratio"`
 		Timeout time.Duration   `mapstructure:"timeout"`
 		Retry   *time.Duration  `mapstructure:"retry"`
 		Delays  []time.Duration `mapstructure:"delays"`
 	}
-	name := configName(t)
-	file := configFile(t, ".json", `{"timeout":1000000000,"retry":2000000000,"delays":[3000000000,"4s"]}`)
-	if err := Load[durationConfig](name, file); err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		ext     string
+		content string
+	}{
+		{".yaml", "limit: 12\nratio: 0.25\ntimeout: 1000000000\nretry: 2000000000\ndelays: [3000000000, 1.5s]\n"},
+		{".toml", "limit = 12\nratio = 0.25\ntimeout = 1000000000\nretry = 2000000000\ndelays = [3000000000, '1.5s']\n"},
+		{".json", `{"limit":12,"ratio":0.25,"timeout":1000000000,"retry":2000000000,"delays":[3000000000,"1.5s"]}`},
 	}
-	got, err := Get[durationConfig](name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Timeout != time.Second || got.Retry == nil || *got.Retry != 2*time.Second ||
-		!reflect.DeepEqual(got.Delays, []time.Duration{3 * time.Second, 4 * time.Second}) {
-		t.Fatalf("数字时长应按纳秒解析，字符串时长应保留原有行为: %+v", got)
+	for _, tc := range cases {
+		t.Run(tc.ext, func(t *testing.T) {
+			name := configName(t)
+			if err := Load[numericConfig](name, configFile(t, tc.ext, tc.content)); err != nil {
+				t.Fatal(err)
+			}
+			got, err := Get[numericConfig](name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Limit != 12 || got.Ratio != 0.25 || got.Timeout != time.Second ||
+				got.Retry == nil || *got.Retry != 2*time.Second ||
+				!reflect.DeepEqual(got.Delays, []time.Duration{3 * time.Second, 1500 * time.Millisecond}) {
+				t.Fatalf("数值或时长解析错误: %+v", got)
+			}
+		})
 	}
 }
 

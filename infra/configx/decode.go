@@ -12,8 +12,12 @@ import (
 	"github.com/spf13/viper"
 )
 
-func jsonNumberHook(next mapstructure.DecodeHookFunc) mapstructure.DecodeHookFunc {
+func numberHook(next mapstructure.DecodeHookFunc) mapstructure.DecodeHookFunc {
 	return func(from, to reflect.Value) (any, error) {
+		// YAML 和 TOML 的浮点数若交给 mapstructure 转为整数，小数部分会被截断。
+		if from.CanFloat() && (to.CanInt() || to.CanUint()) {
+			return nil, fmt.Errorf("cannot decode floating-point number as %v", to.Type())
+		}
 		if number, ok := from.Interface().(json.Number); ok {
 			// json.Number 底层是 string，但不能隐式映射为字符串字段。
 			if to.Kind() == reflect.String && to.Type() != from.Type() {

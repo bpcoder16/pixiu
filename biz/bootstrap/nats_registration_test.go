@@ -637,10 +637,6 @@ func TestNATSRegistrationOptionalReplicas(t *testing.T) {
 			value: "3",
 			want:  3,
 		},
-		{
-			value: "1.5",
-			want:  1,
-		},
 	} {
 		t.Run(tc.value, func(t *testing.T) {
 			content := strings.Replace(registrationYAML, "replicas: 1", "replicas: "+tc.value, 1)
@@ -730,6 +726,11 @@ func TestNATSRegistrationRejectsInvalidConfig(t *testing.T) {
 		{name: "bool-default", content: "streamDefaults: {replicas: true}", want: "streamDefaults.replicas"},
 		{name: "invalid-default-with-overrides", content: "streamDefaults: {replicas: 0}\nstreams: [{name: A, replicas: 1, subjects: [a]}]", want: "streamDefaults.replicas"},
 		{name: "string-override", content: strings.Replace(registrationYAML, "replicas: 1", "replicas: '1'", 1), want: "streams[1]"},
+		{
+			name:    "fractional-override",
+			content: strings.Replace(registrationYAML, "replicas: 1", "replicas: 1.5", 1),
+			want:    "streams[1].replicas",
+		},
 		{
 			name:    "override-above-default",
 			content: strings.Replace(registrationYAML, "replicas: 1", "replicas: 4", 1),

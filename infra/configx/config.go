@@ -73,7 +73,7 @@ func Parse[T any](filePath string) (*T, error) {
 				}
 				return data, nil
 			},
-			jsonNumberHook(dc.DecodeHook),
+			numberHook(dc.DecodeHook),
 		)
 	}); err != nil {
 		return nil, fmt.Errorf("configx: decode config file %q: %w", filePath, err)
