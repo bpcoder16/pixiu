@@ -819,7 +819,7 @@ streams:
 
 func testNATSFromConfigStreamOptions(t *testing.T) {
 	isolatedNATS(t, func() {
-		clients := registrationClients(t, true, "options", "negative-age", "negative-duplicates", "invalid-window")
+		clients := registrationClients(t, true, "options", "negative-age", "negative-duplicates")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		const content = `
@@ -852,11 +852,12 @@ streams:
     maxAge: 0
     duplicates: 5m
 `
-		// 后续声明的策略或时长格式非法时，配置预检应阻止前面的 Stream 创建。
+		// 后续声明的策略或时长配置非法时，配置预检应阻止前面的 Stream 创建。
 		for _, invalid := range []string{
 			strings.Replace(content, "retention: interest", "retention: invalid", 1),
 			strings.Replace(content, "maxAge: 1h", "maxAge: 1d", 1),
 			strings.Replace(content, "duplicates: 5m", "duplicates: forever", 1),
+			strings.Replace(content, "maxAge: 1h", "maxAge: 1s", 1),
 		} {
 			writeNATSRegistration(t, "options", invalid)
 			err := registerNATSForTest(t, "options", nil, nil)
@@ -934,10 +935,6 @@ streams:
 			{
 				instance: "negative-duplicates",
 				fields:   "    duplicates: -1s\n",
-			},
-			{
-				instance: "invalid-window",
-				fields:   "    maxAge: 1s\n    duplicates: 2m\n",
 			},
 		} {
 			writeNATSRegistration(t, test.instance, `

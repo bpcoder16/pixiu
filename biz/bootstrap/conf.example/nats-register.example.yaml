@@ -28,7 +28,7 @@ streams:
     # maxBytes: -1         # 容量上限，单位字节，默认 -1 表示不限
     # retention: "limits"  # 可选 limits、interest、workqueue
     # maxAge: "2160h"      # 消息保留时间，0s 表示不限
-    # duplicates: "2m"     # 消息 ID 去重窗口
+    # duplicates: "2m"     # 消息 ID 去重窗口，默认 2m。maxAge 为正时不能超过 maxAge
     consumers:
       - durable: "order-created-worker"
         # mode: "create"  # 可选 create（默认）、upsert

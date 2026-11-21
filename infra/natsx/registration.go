@@ -179,7 +179,7 @@ func (c *Client) RegisterStreams(ctx context.Context, configs ...jetstream.Strea
 // 只在启动阶段串行调用，不与 Close 并发；与 RegisterStreams 共用一次性注册限制。
 // 通过入口检查后即占用次数，空清单、本地校验失败或远端失败均不可重试。
 // 远端操作前整批校验模式、名称、主题及名称唯一性，不自动裁剪；existing 只允许 Config.Name。
-// create/upsert 的 Subjects 允许省略或为空，其余原生约束交给 SDK/服务端。
+// create/upsert 的 MaxAge 为正时，Duplicates 不得超过 MaxAge。Subjects 允许省略或为空。
 // Name 和 Subjects 填写原始值，Client 统一添加 namespace，不修改调用方声明。
 // existing 查询失败直接返回；upsert 使用完整配置，非字段合并。失败不回滚前序远端操作，由应用中止启动并 Close。
 func (c *Client) RegisterStreamRegistrations(ctx context.Context, specs ...StreamRegistration) error {

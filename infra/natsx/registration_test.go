@@ -77,6 +77,31 @@ func TestValidateRegistrations(t *testing.T) {
 	}
 }
 
+func TestValidateRegistrationsStreamDuplicateWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		maxAge     time.Duration
+		duplicates time.Duration
+		wantErr    bool
+	}{
+		{"longer", time.Minute, 2 * time.Minute, true},
+		{"equal", time.Minute, time.Minute, false},
+		{"shorter", time.Minute, time.Second, false},
+		{"unlimited-age", 0, 2 * time.Minute, false},
+		{"server-default-window", time.Minute, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultStreamConfig("EVENTS", 1, "events")
+			cfg.MaxAge = tc.maxAge
+			cfg.Duplicates = tc.duplicates
+			err := ValidateRegistrations([]StreamRegistration{{Config: cfg}}, nil, nil)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("MaxAge=%v Duplicates=%v: err=%v, wantErr=%v", tc.maxAge, tc.duplicates, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateRegistrationsBackOffMaxDeliver(t *testing.T) {
 	spec := DefaultJetStreamConsumer("EVENTS", "worker", func(context.Context, jetstream.Msg) error { return nil })
 	spec.Config.BackOff = []time.Duration{time.Second, 2 * time.Second}

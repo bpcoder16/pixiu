@@ -73,6 +73,10 @@ func validateStreamRegistrations(specs []StreamRegistration) error {
 		if strings.ContainsAny(cfg.Name, invalidResourceNameChars) {
 			return fmt.Errorf("natsx: stream %q: %w", cfg.Name, jetstream.ErrInvalidStreamName)
 		}
+		// 对最终配置做整批预检，避免服务端拒绝该项时前面的 upsert 已经生效。
+		if cfg.MaxAge > 0 && cfg.Duplicates > cfg.MaxAge {
+			return fmt.Errorf("natsx: stream %q duplicates %s exceeds maxAge %s", cfg.Name, cfg.Duplicates, cfg.MaxAge)
+		}
 		for i, subject := range cfg.Subjects {
 			if !validSubscriptionSubject(subject) {
 				return fmt.Errorf("natsx: stream %q subjects[%d] %q: %w", cfg.Name, i, subject, jetstream.ErrInvalidSubject)

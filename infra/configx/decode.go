@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -19,14 +21,44 @@ func numberHook(next mapstructure.DecodeHookFunc) mapstructure.DecodeHookFunc {
 			return nil, fmt.Errorf("cannot decode floating-point number as %v", to.Type())
 		}
 		if number, ok := from.Interface().(json.Number); ok {
-			// json.Number 底层是 string，但不能隐式映射为字符串字段。
-			if to.Kind() == reflect.String && to.Type() != from.Type() {
+			// mapstructure 按 64 位解析 JSON 整数，窄字段须先按实际位宽检查。
+			var err error
+			switch {
+			case to.CanInt():
+				_, err = strconv.ParseInt(number.String(), 10, to.Type().Bits())
+			case to.CanUint():
+				_, err = strconv.ParseUint(number.String(), 10, to.Type().Bits())
+			case to.Kind() == reflect.String && to.Type() != from.Type():
 				return nil, fmt.Errorf("cannot decode JSON number as %v", to.Type())
 			}
-			// 默认字符串 hook 会断言 string；数字绕过它们，由 mapstructure 解析。
+			if err != nil {
+				return nil, fmt.Errorf("cannot decode JSON number as %v: %w", to.Type(), err)
+			}
+			// 保留 json.Number 原值，并绕过只接受普通 string 的默认 hook。
 			return number, nil
 		}
+		if integerOverflows(from, to) {
+			return nil, fmt.Errorf("integer overflows %v", to.Type())
+		}
 		return mapstructure.DecodeHookExec(next, from, to)
+	}
+}
+
+func integerOverflows(from, to reflect.Value) bool {
+	switch {
+	case from.CanInt() && to.CanInt():
+		return to.OverflowInt(from.Int())
+	case from.CanUint() && to.CanUint():
+		return to.OverflowUint(from.Uint())
+	// 跨符号时先检查源值，直接转换会把负数或大于 MaxInt64 的值回绕。
+	case from.CanInt() && to.CanUint():
+		n := from.Int()
+		return n < 0 || to.OverflowUint(uint64(n))
+	case from.CanUint() && to.CanInt():
+		n := from.Uint()
+		return n > math.MaxInt64 || to.OverflowInt(int64(n))
+	default:
+		return false
 	}
 }
 

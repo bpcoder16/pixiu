@@ -234,6 +234,7 @@
 // RegisterJetStreamConsumers 仅支持 Pull Consumer，Config.DeliverSubject 非空时在创建本批任何远端 Consumer 前报错。
 // RegisterStreams 使用 SDK 创建语义：同配置复用、冲突返回错误，不更新或删除已有资源。
 // RegisterStreams/RegisterStreamRegistrations 在远端操作前整批检查模式、名称、主题及名称唯一性。
+// MaxAge 大于零时，最终配置的 Duplicates 不得超过 MaxAge；两者相等时允许注册。
 // Subjects 列表允许省略或为空，保留原生默认主题及 Mirror 等用法；其余约束由 SDK/服务端处理。
 // RegisterJetStreamConsumers 创建或更新资源前整批校验模式、本地参数及 (Stream, Durable) 唯一。
 // Stream、Durable 必须非空且无首尾空白；过滤条件允许省略，已提供的主题元素须非空且无首尾空白。

@@ -2,6 +2,8 @@ package configx
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +11,80 @@ import (
 	"testing"
 	"time"
 )
+
+func TestParseIntegerRanges(t *testing.T) {
+	type delta int8
+	type numbers struct {
+		Delta delta    `mapstructure:"delta"`
+		Count uint8    `mapstructure:"count"`
+		Large int64    `mapstructure:"large"`
+		IDs   []uint64 `mapstructure:"ids"`
+	}
+	for _, format := range []struct {
+		ext     string
+		pattern string
+	}{
+		{".yaml", "%s: %s\n"},
+		{".toml", "%s = %s\n"},
+		{".json", `{"%s":%s}`},
+	} {
+		for _, tc := range []struct {
+			field string
+			value string
+			want  *numbers
+		}{
+			{"delta", "-129", nil},
+			{"delta", "128", nil},
+			{"count", "-1", nil},
+			{"count", "256", nil},
+			{"ids", "[-1]", nil},
+			{"delta", "-128", &numbers{Delta: math.MinInt8}},
+			{"delta", "127", &numbers{Delta: math.MaxInt8}},
+			{"count", "255", &numbers{Count: math.MaxUint8}},
+			{"large", "-9223372036854775808", &numbers{Large: math.MinInt64}},
+			{"large", "9223372036854775807", &numbers{Large: math.MaxInt64}},
+			{"ids", "[9007199254740993]", &numbers{IDs: []uint64{9007199254740993}}},
+		} {
+			t.Run(format.ext+"/"+tc.field+"/"+tc.value, func(t *testing.T) {
+				file := configFile(t, format.ext, fmt.Sprintf(format.pattern, tc.field, tc.value))
+				got, err := Parse[numbers](file)
+				if tc.want == nil {
+					if err == nil || got != nil || !strings.Contains(err.Error(), tc.field) {
+						t.Fatalf("越界应返回字段错误：got=%+v, err=%v", got, err)
+					}
+					return
+				}
+				if err != nil || !reflect.DeepEqual(got, tc.want) {
+					t.Fatalf("整数边界解析错误：got=%+v, want=%+v, err=%v", got, tc.want, err)
+				}
+			})
+		}
+	}
+}
+
+func TestParseMaxUint64(t *testing.T) {
+	// TOML 的整数范围止于 MaxInt64；YAML 和 JSON 还能表达到 MaxUint64。
+	for _, tc := range []struct{ ext, content string }{
+		{".yaml", "value: 18446744073709551615\n"},
+		{".json", `{"value":18446744073709551615}`},
+	} {
+		t.Run(tc.ext, func(t *testing.T) {
+			file := configFile(t, tc.ext, tc.content)
+			unsigned, err := Parse[struct{ Value uint64 }](file)
+			if err != nil || unsigned.Value != math.MaxUint64 {
+				t.Fatalf("uint64 最大值应原样保留：got=%+v, err=%v", unsigned, err)
+			}
+			signed, err := Parse[struct{ Value *int64 }](file)
+			if err == nil || signed != nil {
+				t.Fatalf("uint64 最大值转为 int64 应报错：got=%+v, err=%v", signed, err)
+			}
+			narrow, err := Parse[struct{ Value uint32 }](file)
+			if err == nil || narrow != nil {
+				t.Fatalf("uint64 最大值转为 uint32 应报错：got=%+v, err=%v", narrow, err)
+			}
+		})
+	}
+}
 
 func TestParseReturnsIndependentConfigsWithoutRegistration(t *testing.T) {
 	for _, tc := range []struct {
