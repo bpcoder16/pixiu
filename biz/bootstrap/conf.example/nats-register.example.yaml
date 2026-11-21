@@ -10,7 +10,7 @@ coreConsumers:
   - name: "notification-worker"
     subject: "notifications.send"
     queue: "notification-workers"  # 同组只有一个订阅处理每条消息
-    subscribers: 4                 # 配置 queue 时必填且大于 1，表示每个实例的订阅数
+    subscribers: 4                 # 每个实例的同组订阅数，默认 1，显式填写须为正整数
     handler: "HandleNotification"
 
 # 默认按连接配置的 urls 条目数设置副本数。使用种子地址或代理时可显式指定。

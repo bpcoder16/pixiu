@@ -237,6 +237,8 @@
 // Subjects 列表允许省略或为空，保留原生默认主题及 Mirror 等用法；其余约束由 SDK/服务端处理。
 // RegisterJetStreamConsumers 创建或更新资源前整批校验模式、本地参数及 (Stream, Durable) 唯一。
 // Stream、Durable 必须非空且无首尾空白；过滤条件允许省略，已提供的主题元素须非空且无首尾空白。
+// 配置装配方可先调用 ValidateRegistrations(streams, jetStreamConsumers, coreConsumers) 预检整批声明。
+// 预检不访问远端或占用注册次数。资源存在性、配额及远端配置冲突在实际注册时检查。
 // RegisterCoreConsumers 建立订阅前整批校验本地参数及 Name 唯一。
 // Name、Subject 必须非空且无首尾空白；Queue 为空时广播，非空时不得有首尾空白。
 // 已有使用旧默认 AckWait=5s 的 Durable，采用新默认值前须显式更新远端配置。

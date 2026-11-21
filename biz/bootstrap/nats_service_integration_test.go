@@ -237,8 +237,11 @@ func testNewNATSConsumerService(t *testing.T) {
 				}
 				config := "streamDefaults: {replicas: 1}\ncoreConsumers:\n  - name: work\n    subject: work\n    handler: work\n"
 				if mode == "partial_start" {
-					// JetStream 已启动，再由 Core 的通用参数校验触发启动失败。
-					config = "streamDefaults: {replicas: 1}\nstreams:\n  - name: EVENTS\n    subjects: [events]\n    consumers:\n      - durable: worker\n        handler: task\ncoreConsumers:\n  - name: work\n    subject: ''\n    handler: work\n"
+					// 预先占用 Core 的一次性注册机会，让 Run 在 JetStream worker 启动后失败。
+					if err := client.RegisterCoreConsumers(t.Context()); err != nil {
+						t.Fatal(err)
+					}
+					config = "streamDefaults: {replicas: 1}\nstreams:\n  - name: EVENTS\n    subjects: [events]\n    consumers:\n      - durable: worker\n        handler: task\ncoreConsumers:\n  - name: work\n    subject: work\n    handler: work\n"
 				}
 				writeNATSRegistration(t, "service", config)
 				jsHandlers := &natsx.JetStreamHandlerRegistry{}
@@ -286,8 +289,11 @@ func testNewNATSConsumerService(t *testing.T) {
 				}
 				if mode == "partial_start" {
 					err := manager.Run(context.Background())
-					if err == nil || !strings.Contains(err.Error(), "register Core consumers") {
+					if err == nil || !strings.Contains(err.Error(), "RegisterCoreConsumers already called") {
 						t.Fatalf("部分注册失败应通过 Run 返回并收尾: %v", err)
+					}
+					if _, err := client.JetStream().Consumer(t.Context(), "EVENTS", "worker"); err != nil {
+						t.Fatalf("Core 注册失败应保留已创建的 Durable: %v", err)
 					}
 					select {
 					case <-shutdownFinished:
@@ -519,4 +525,56 @@ func stopAndWait(stop func() error, wait func(context.Context) error, cancel fun
 		cancel()
 	}
 	return errors.Join(err, waitErr)
+}
+
+func testNATSServiceStopDuringCoreRegistration(t *testing.T) {
+	isolatedNATS(t, func() {
+		initNATSRegistrationEnv(t)
+		srv := startNATSTestServer(t, false)
+		nc, err := natsx.NewNamed(natsx.Config{Name: "stopping", URLs: []string{srv.ClientURL()}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer natsx.CloseAll()
+		handlers := natsx.MustNewCoreHandlerRegistry()
+		handlers.MustRegister(func(context.Context, *nats.Msg) error { return nil }, "ping")
+		writeNATSRegistration(t, "stopping", "coreConsumers: [{name: ping, subject: p, handler: ping}]")
+		service, err := NewNATSConsumerService("stopping", nil, handlers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn := nc.Conn()
+		reconnecting := conn.StatusChanged(nats.RECONNECTING)
+		defer conn.RemoveStatusListener(reconnecting)
+		srv.Shutdown()
+		srv.WaitForShutdown()
+		select {
+		case <-reconnecting:
+		case <-time.After(3 * time.Second):
+			t.Fatal("连接未进入重连状态")
+		}
+
+		baseline := conn.NumSubscriptions()
+		done := make(chan error, 1)
+		go func() { done <- service.Run() }()
+		defer conn.Close()
+		deadline := time.Now().Add(3 * time.Second)
+		for conn.NumSubscriptions() == baseline && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if conn.NumSubscriptions() == baseline {
+			t.Fatal("未进入 Core 注册阶段")
+		}
+		if err := service.Stop(); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("停机期间注册应正常退出：%v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("停机未中断 Core 注册等待")
+		}
+	})
 }

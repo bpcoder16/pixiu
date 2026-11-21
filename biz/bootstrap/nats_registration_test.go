@@ -669,10 +669,11 @@ func TestNATSRegistrationQueueSubscribers(t *testing.T) {
 		config string
 		valid  bool
 	}{
-		{name: "omitted"},
+		{name: "omitted", valid: true},
 		{
 			name:   "null",
 			config: "    subscribers: null\n",
+			valid:  true,
 		},
 		{
 			name:   "negative",
@@ -685,6 +686,7 @@ func TestNATSRegistrationQueueSubscribers(t *testing.T) {
 		{
 			name:   "one",
 			config: "    subscribers: 1\n",
+			valid:  true,
 		},
 		{
 			name:   "two",
@@ -705,12 +707,12 @@ func TestNATSRegistrationQueueSubscribers(t *testing.T) {
 			)
 			if tc.valid {
 				if err != nil {
-					t.Fatalf("队列订阅数大于 1 应合法: %v", err)
+					t.Fatalf("省略或指定正数均应合法: %v", err)
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), `coreConsumers[1] "queue" subscribers`) || !strings.Contains(err.Error(), "must be greater than 1") {
-				t.Fatalf("队列订阅数不大于 1 应在配置层拒绝: %v", err)
+			if err == nil || !strings.Contains(err.Error(), `coreConsumers[1] "queue" subscribers`) || !strings.Contains(err.Error(), "must be positive") {
+				t.Fatalf("显式非正队列订阅数应在配置层拒绝: %v", err)
 			}
 		})
 	}

@@ -440,7 +440,7 @@
 // 调用方无论排空结果都回收资源；Run/Stop/Wait/Cancel 分工，启动失败也收尾已启动消费。
 // 服务的 Cancel 先复用 Stop，再取消剩余消费；可直接或重复调用，不关闭共享连接。
 // Start 并发运行服务，登记顺序不规定停机依赖。手动注册可使用 natsx 的集中注册入口，资源回收前通过 StopConsumers、WaitConsumers 和必要的 CancelConsumers 处理消费。
-// 注册 context 可由 Stop 取消，不设置整体注册期限；资源请求与 Core Flush 沿用 SDK 默认行为。
+// Stop 取消注册中的资源请求和 Core Flush。Core 注册的等待上限为 10 秒。
 // Client 关闭状态在配置预检后交给 natsx 注册入口校验；长期 Handler 使用独立消息 context。
 // 文件可使用 conf.example/nats-register.example.yaml，保留示例已登记的 Handler 对应项。
 // JetStream 消费者配置在 streams[].consumers，自动继承父级 name；可配置多个消费者或只声明 Stream。
@@ -488,15 +488,14 @@
 // consume.workers、consume.maxMessages 不得为负；零值分别按 1、有效 workers 的两倍处理。
 // workers 控制本地 Handler 并发，maxMessages 是不含处理中消息的 SDK 预取上限。
 // maxDeliver 包含首次投递；maxAckPending 是同一 Durable 下所有实例合计的未确认消息数上限。
-// coreConsumers 的 queue 非空时，subscribers 必须配置且解码后大于 1，否则在注册任何资源前报错。
+// coreConsumers 的 queue 非空时，subscribers 省略或 null 默认 1，显式填写须为正整数。
 // 按 subscribers 为当前 Client 建立同组订阅，多订阅 Handler 须支持并发。
-// queue 为空时始终只有一个广播订阅，subscribers 可省略，负数由 natsx 注册入口拒绝。
+// queue 为空时始终只有一个广播订阅，subscribers 可省略，负数在预检时拒绝。
 // 所有其他运行参数沿用 natsx Default，未引用的 Handler 不启动。
 // 配置层检查全局副本数、Stream mode 及字段组合、create/upsert 的副本数上限、subjects 及 retention、Consumer mode、Core 队列订阅数，
 // 并在注册前绑定全部 Handler。
-// 各类资源的通用参数校验和判重交给各自的 natsx 注册入口，失败也占用该入口的注册次数。
+// 构造时通过 natsx.ValidateRegistrations 预检全部声明，本地校验失败可修正后重新构造。
 // 三个入口各调用一次，空清单也占用次数，不与手动注册混用。
-// 各入口分阶段预检，后序校验失败时前序资源或消费可能已启动。
 // Run 注册期间可能执行业务；失败先由管理器排空已启动消费，再由资源栈收尾，不自动重试或删除远端资源。
 // 修改文件重启生效；删除声明不删除 Durable 或进度。消息协议和业务幂等由应用负责。
 // NATS 消费服务的 Stop 启动消费排空，Wait 等待实际回调结束；期间可查询 Default/Named、发布和请求。

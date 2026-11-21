@@ -16,6 +16,67 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+func TestValidateRegistrations(t *testing.T) {
+	stream := StreamRegistration{Config: DefaultStreamConfig("EVENTS", 1, "events.>")}
+	js := DefaultJetStreamConsumer("EVENTS", "worker", func(context.Context, jetstream.Msg) error { return nil }, "events.*")
+	js.Consume.Workers = 0
+	core := DefaultCoreQueueConsumer("ping", "ping", "workers", 1, func(context.Context, *nats.Msg) error { return nil })
+	consumers := []JetStreamConsumer{js}
+	for range 2 {
+		if err := ValidateRegistrations([]StreamRegistration{stream}, consumers, []CoreConsumer{core}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if consumers[0].Consume.Workers != 0 || consumers[0].Consume.MaxMessages != 0 {
+		t.Fatal("预检不应改写调用方的消费参数")
+	}
+
+	for _, tc := range []struct {
+		name    string
+		streams []StreamRegistration
+		js      []JetStreamConsumer
+		core    []CoreConsumer
+		want    error
+	}{
+		{
+			name:    "stream-name",
+			streams: []StreamRegistration{{Config: DefaultStreamConfig("A.B", 1)}},
+			want:    jetstream.ErrInvalidStreamName,
+		},
+		{
+			name:    "stream-subject",
+			streams: []StreamRegistration{{Config: DefaultStreamConfig("EVENTS", 1, "events..new")}},
+			want:    jetstream.ErrInvalidSubject,
+		},
+		{
+			name: "durable",
+			js:   []JetStreamConsumer{DefaultJetStreamConsumer("EVENTS", "bad name", js.Handler)},
+			want: jetstream.ErrInvalidConsumerName,
+		},
+		{
+			name: "filter",
+			js:   []JetStreamConsumer{DefaultJetStreamConsumer("EVENTS", "worker", js.Handler, "events.>.end")},
+			want: jetstream.ErrInvalidSubject,
+		},
+		{
+			name: "subject",
+			core: []CoreConsumer{DefaultCoreConsumer("ping", "ping.", core.Handler)},
+			want: nats.ErrBadSubject,
+		},
+		{
+			name: "queue",
+			core: []CoreConsumer{DefaultCoreQueueConsumer("ping", "ping", "bad queue", 1, core.Handler)},
+			want: nats.ErrBadQueueName,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidateRegistrations(tc.streams, tc.js, tc.core); !errors.Is(err, tc.want) {
+				t.Fatalf("预检错误为 %v，期望 %v", err, tc.want)
+			}
+		})
+	}
+}
+
 func registrationClient(t *testing.T) *Client {
 	t.Helper()
 	c, err := New(Config{

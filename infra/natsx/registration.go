@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"runtime/debug"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/bpcoder16/pixiu/logit"
@@ -191,33 +189,8 @@ func (c *Client) RegisterStreamRegistrations(ctx context.Context, specs ...Strea
 	if !c.streamRegistrationStarted.CompareAndSwap(false, true) {
 		return errors.New("natsx: RegisterStreams already called")
 	}
-	seen := make(map[string]struct{}, len(specs))
-	for _, spec := range specs {
-		cfg := spec.Config
-		switch spec.Mode {
-		case "", StreamModeCreate, StreamModeUpsert:
-		case StreamModeExisting:
-			// 原生配置字段较多，统一检查零值，避免未来新增字段被静默忽略。
-			options := cfg
-			options.Name = ""
-			if !reflect.ValueOf(options).IsZero() {
-				return fmt.Errorf("natsx: stream %q existing mode only accepts Config.Name", cfg.Name)
-			}
-		default:
-			return fmt.Errorf("natsx: stream %q mode %q must be one of create, upsert, existing", cfg.Name, spec.Mode)
-		}
-		if cfg.Name == "" || strings.TrimSpace(cfg.Name) != cfg.Name {
-			return fmt.Errorf("natsx: stream name %q must be nonempty and without surrounding whitespace", cfg.Name)
-		}
-		for i, subject := range cfg.Subjects {
-			if subject == "" || strings.TrimSpace(subject) != subject {
-				return fmt.Errorf("natsx: stream %q subjects[%d] must be nonempty and without surrounding whitespace", cfg.Name, i)
-			}
-		}
-		if _, exists := seen[cfg.Name]; exists {
-			return fmt.Errorf("natsx: duplicate stream %q", cfg.Name)
-		}
-		seen[cfg.Name] = struct{}{}
+	if err := validateStreamRegistrations(specs); err != nil {
+		return err
 	}
 	for _, spec := range specs {
 		cfg := spec.Config
@@ -257,61 +230,14 @@ func (c *Client) RegisterJetStreamConsumers(ctx context.Context, consumers ...Je
 	if !c.jetStreamRegistrationStarted.CompareAndSwap(false, true) {
 		return errors.New("natsx: RegisterJetStreamConsumers already called")
 	}
+	if err := validateJetStreamConsumers(consumers); err != nil {
+		return err
+	}
 	// 只复制需要归一化的声明，不改写调用方的消费参数。
 	specs := slices.Clone(consumers)
-	seen := make(map[[2]string]struct{}, len(specs))
 	for i := range specs {
 		spec := &specs[i]
-		switch spec.Mode {
-		case "", ConsumerModeCreate, ConsumerModeUpsert:
-		default:
-			return fmt.Errorf("natsx: consumer %q/%q mode %q must be one of create, upsert", spec.Stream, spec.Config.Durable, spec.Mode)
-		}
-		if spec.Stream == "" || strings.TrimSpace(spec.Stream) != spec.Stream ||
-			spec.Config.Durable == "" || strings.TrimSpace(spec.Config.Durable) != spec.Config.Durable ||
-			spec.Handler == nil {
-			return fmt.Errorf("natsx: consumer %d requires nonempty stream and durable without surrounding whitespace, and handler", i)
-		}
-		if strings.TrimSpace(spec.Config.FilterSubject) != spec.Config.FilterSubject {
-			return fmt.Errorf("natsx: consumer %q filterSubject must be without surrounding whitespace", spec.Config.Durable)
-		}
-		for j, subject := range spec.Config.FilterSubjects {
-			if subject == "" || strings.TrimSpace(subject) != subject {
-				return fmt.Errorf("natsx: consumer %q filterSubjects[%d] must be nonempty and without surrounding whitespace", spec.Config.Durable, j)
-			}
-		}
-		if spec.Config.Name != "" && spec.Config.Name != spec.Config.Durable {
-			return fmt.Errorf("natsx: consumer %q name must equal durable", spec.Config.Durable)
-		}
-		if spec.Config.DeliverSubject != "" {
-			return fmt.Errorf("natsx: consumer %q requires pull mode; DeliverSubject must be empty", spec.Config.Durable)
-		}
-		if spec.Config.AckPolicy != jetstream.AckExplicitPolicy {
-			return fmt.Errorf("natsx: consumer %q requires explicit ack", spec.Config.Durable)
-		}
-		if spec.Config.AckWait <= 0 && len(spec.Config.BackOff) == 0 {
-			return fmt.Errorf("natsx: consumer %q requires AckWait or BackOff", spec.Config.Durable)
-		}
-		if spec.Consume.Workers < 0 || spec.Consume.MaxMessages < 0 || spec.RetryDelay < 0 {
-			return fmt.Errorf("natsx: consumer %q has negative consumption parameter", spec.Config.Durable)
-		}
-		if len(spec.Config.BackOff) > 0 && spec.RetryDelay > 0 {
-			return fmt.Errorf("natsx: consumer %q cannot combine BackOff with positive RetryDelay", spec.Config.Durable)
-		}
-		if spec.Consume.Workers == 0 {
-			spec.Consume.Workers = 1
-		}
-		if spec.Consume.MaxMessages == 0 {
-			spec.Consume.MaxMessages = 2 * spec.Consume.Workers
-		}
-		if err := validatePullLimits(spec.Config, spec.Consume.MaxMessages); err != nil {
-			return err
-		}
-		key := [2]string{spec.Stream, spec.Config.Durable}
-		if _, exists := seen[key]; exists {
-			return fmt.Errorf("natsx: duplicate consumer %q/%q", key[0], key[1])
-		}
-		seen[key] = struct{}{}
+		spec.Consume = registrationConsumeConfig(spec.Consume)
 		spec.Stream = namespaceValue(c.streamPrefix, spec.Stream)
 		spec.Config.Durable = namespaceValue(c.namePrefix, spec.Config.Durable)
 		spec.Config.Name = namespaceValue(c.namePrefix, spec.Config.Name)
@@ -370,21 +296,8 @@ func (c *Client) RegisterCoreConsumers(ctx context.Context, consumers ...CoreCon
 	if !c.coreRegistrationStarted.CompareAndSwap(false, true) {
 		return errors.New("natsx: RegisterCoreConsumers already called")
 	}
-	seen := make(map[string]struct{}, len(consumers))
-	for i, spec := range consumers {
-		if spec.Name == "" || strings.TrimSpace(spec.Name) != spec.Name ||
-			spec.Subject == "" || strings.TrimSpace(spec.Subject) != spec.Subject ||
-			spec.Handler == nil ||
-			strings.TrimSpace(spec.Queue) != spec.Queue ||
-			spec.Subscribers < 0 ||
-			spec.PendingMessages < 0 ||
-			spec.PendingBytes < 0 {
-			return fmt.Errorf("natsx: invalid Core consumer %d", i)
-		}
-		if _, exists := seen[spec.Name]; exists {
-			return fmt.Errorf("natsx: duplicate Core consumer %q", spec.Name)
-		}
-		seen[spec.Name] = struct{}{}
+	if err := validateCoreConsumers(consumers); err != nil {
+		return err
 	}
 	for _, spec := range consumers {
 		spec.Name = namespaceValue(c.namePrefix, spec.Name)

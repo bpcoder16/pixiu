@@ -53,6 +53,7 @@ func TestNATSFromConfig(t *testing.T) {
 		{name: "Service", run: testNewNATSConsumerService},
 		{name: "ServiceConstructionErrors", run: testNewNATSConsumerServiceConstructionErrors},
 		{name: "ServiceConsumerDeleted", run: testNATSServiceConsumerDeleted},
+		{name: "ServiceStopDuringCoreRegistration", run: testNATSServiceStopDuringCoreRegistration},
 		{name: "ServiceConnectionClosed", run: testNATSServiceConnectionClosed},
 		{name: "ServiceDirectCancel", run: testNewNATSConsumerServiceDirectCancel},
 		{name: "ServiceSlowRegistrationLog", run: testNewNATSConsumerServiceSlowRegistrationLog},
@@ -694,11 +695,8 @@ func testNATSFromConfigPreflightAndErrors(t *testing.T) {
 		core.MustRegister(func(context.Context, *nats.Msg) error { return nil }, "core")
 		subscriptions := client.Conn().NumSubscriptions()
 		for _, declaration := range []string{
-			"",
-			"    subscribers: null\n",
 			"    subscribers: -1\n",
 			"    subscribers: 0\n",
-			"    subscribers: 1\n",
 		} {
 			content := strings.Replace(natsRegistrationTemplate, "    subscribers: 4\n", declaration, 1)
 			writeNATSRegistration(t, "demo", content)
@@ -765,10 +763,10 @@ streams:
 				t.Fatalf("重名失败前不应创建本批 Stream %q: %v", name, err)
 			}
 		}
-		// 重名已进入底层入口，修正配置也不能复用本次 Stream 注册机会。
+		// 构造时发现重名，修正配置后仍可在同一实例注册。
 		writeNATSRegistration(t, "demo", "streamDefaults: {replicas: 1}")
-		if err = registerNATSForTest(t, "demo", nil, nil); err == nil || !strings.Contains(err.Error(), "RegisterStreams already called") {
-			t.Fatalf("重名失败应消耗 Stream 注册次数: %v", err)
+		if err = registerNATSForTest(t, "demo", nil, nil); err != nil {
+			t.Fatalf("重名失败不应消耗 Stream 注册次数: %v", err)
 		}
 	})
 }
@@ -804,15 +802,15 @@ streams:
     subjects: [first]
 `+test.stream)
 				err := registerNATSForTest(t, "demo", nil, nil)
-				if err == nil || !strings.Contains(err.Error(), "register streams: natsx:") {
+				if err == nil || !strings.Contains(err.Error(), "validate streams: natsx:") {
 					t.Fatalf("Stream 通用校验应由 natsx 执行: %v", err)
 				}
 				if _, err = client.JetStream().Stream(ctx, "FIRST"); !errors.Is(err, jetstream.ErrStreamNotFound) {
 					t.Fatalf("后续声明非法时不应创建首个 Stream: %v", err)
 				}
 				writeNATSRegistration(t, "demo", "streamDefaults: {replicas: 1}")
-				if err = registerNATSForTest(t, "demo", nil, nil); err == nil || !strings.Contains(err.Error(), "RegisterStreams already called") {
-					t.Fatalf("通用校验失败应消耗 Stream 注册次数: %v", err)
+				if err = registerNATSForTest(t, "demo", nil, nil); err != nil {
+					t.Fatalf("通用校验失败不应消耗 Stream 注册次数: %v", err)
 				}
 			})
 		})
@@ -1217,10 +1215,19 @@ func testNATSFromConfigJetStreamConsumerValidation(t *testing.T) {
 				client := registrationClients(t, true, "demo")[0]
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
+				// 非法的后置 Consumer 必须在前置 Stream 的 upsert 之前被发现。
+				cfg := natsx.DefaultStreamConfig("EVENTS", 1, "events")
+				cfg.MaxBytes = 16384
+				stream, err := client.JetStream().CreateStream(ctx, cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
 				writeNATSRegistration(t, "demo", `
 streamDefaults: {replicas: 1}
 streams:
   - name: EVENTS
+    mode: upsert
+    maxBytes: 8192
     subjects: [events]
     consumers:
       - durable: first
@@ -1230,21 +1237,21 @@ streams:
 `+test.extraConfig)
 				handlers := natsx.MustNewJetStreamHandlerRegistry()
 				handlers.MustRegister(func(context.Context, jetstream.Msg) error { return nil }, "task")
-				err := registerNATSForTest(t, "demo", handlers, nil)
-				if err == nil || !strings.Contains(err.Error(), "register JetStream consumers: natsx:") {
+				err = registerNATSForTest(t, "demo", handlers, nil)
+				if err == nil || !strings.Contains(err.Error(), "validate JetStream consumers: natsx:") {
 					t.Fatalf("Consumer 通用校验及判重应由 natsx 执行: %v", err)
 				}
 				if !strings.Contains(err.Error(), test.want) {
 					t.Fatalf("消费参数校验应保留 natsx 错误 %q: %v", test.want, err)
 				}
-				if _, err = client.JetStream().Stream(ctx, "EVENTS"); err != nil {
-					t.Fatalf("Consumer 校验失败应保留前序已创建的 Stream: %v", err)
+				if info, err := stream.Info(ctx); err != nil || info.Config.MaxBytes != cfg.MaxBytes {
+					t.Fatalf("Consumer 校验失败后 Stream 容量应保持原值：%v, %v", info, err)
 				}
 				if _, err = client.JetStream().Consumer(ctx, "EVENTS", "first"); !errors.Is(err, jetstream.ErrConsumerNotFound) {
 					t.Fatalf("后续声明非法时不应创建本批任何 Consumer: %v", err)
 				}
-				if err = client.RegisterJetStreamConsumers(ctx); err == nil || !strings.Contains(err.Error(), "RegisterJetStreamConsumers already called") {
-					t.Fatalf("Consumer 校验失败应消耗注册次数: %v", err)
+				if err = client.RegisterJetStreamConsumers(ctx); err != nil {
+					t.Fatalf("Consumer 校验失败不应消耗注册次数: %v", err)
 				}
 			})
 		})
@@ -1289,14 +1296,14 @@ coreConsumers:
 				handlers.MustRegister(func(context.Context, *nats.Msg) error { return nil }, "core")
 				subscriptions := client.Conn().NumSubscriptions()
 				err := registerNATSForTest(t, "demo", nil, handlers)
-				if err == nil || !strings.Contains(err.Error(), "register Core consumers: natsx:") {
+				if err == nil || !strings.Contains(err.Error(), "validate Core consumers: natsx:") {
 					t.Fatalf("Core Consumer 通用校验及判重应由 natsx 执行: %v", err)
 				}
 				if client.Conn().NumSubscriptions() != subscriptions {
 					t.Fatal("后续声明非法时不应建立本批任何订阅")
 				}
-				if err = client.RegisterCoreConsumers(ctx); err == nil || !strings.Contains(err.Error(), "RegisterCoreConsumers already called") {
-					t.Fatalf("Core Consumer 校验失败应消耗注册次数: %v", err)
+				if err = client.RegisterCoreConsumers(ctx); err != nil {
+					t.Fatalf("Core Consumer 校验失败不应消耗注册次数: %v", err)
 				}
 			})
 		})
@@ -1310,7 +1317,17 @@ func testNATSFromConfigCoreSubscribers(t *testing.T) {
 		want   int
 	}{
 		{
-			name:   "queue-minimum",
+			name:   "queue-omitted",
+			config: "    queue: workers\n",
+			want:   1,
+		},
+		{
+			name:   "queue-one",
+			config: "    queue: workers\n    subscribers: 1\n",
+			want:   1,
+		},
+		{
+			name:   "queue-two",
 			config: "    queue: workers\n    subscribers: 2\n",
 			want:   2,
 		},
@@ -1380,7 +1397,7 @@ coreConsumers:
 }
 
 func testNATSFromConfigRemoteConflictsAndPartialCleanup(t *testing.T) {
-	for _, scenario := range []string{"stream-conflict", "consumer-conflict", "external-stream", "partial-core"} {
+	for _, scenario := range []string{"stream-conflict", "consumer-conflict", "external-stream", "invalid-core-subject"} {
 		t.Run(scenario, func(t *testing.T) {
 			isolatedNATS(t, func() {
 				client := registrationClients(t, true, "demo")[0]
@@ -1409,8 +1426,8 @@ func testNATSFromConfigRemoteConflictsAndPartialCleanup(t *testing.T) {
 					} else {
 						content = strings.Replace(content, "    subjects: [events]\n", "", 1)
 					}
-				case "partial-core":
-					// SDK 拒绝包含内部空白的主题；前一个 Core 订阅及 JetStream worker 已建立。
+				case "invalid-core-subject":
+					// 后置的 Core 主题非法时，前面的 JetStream 资源也不应创建。
 					content = strings.Replace(content, "subject: jobs", "subject: 'bad subject'", 1)
 				}
 				writeNATSRegistration(t, "demo", content)
@@ -1431,12 +1448,12 @@ func testNATSFromConfigRemoteConflictsAndPartialCleanup(t *testing.T) {
 					if _, err := client.JetStream().Consumer(ctx, "EVENTS", "worker"); !errors.Is(err, jetstream.ErrConsumerNotFound) {
 						t.Fatalf("配置预检失败不得创建 Consumer: %v", err)
 					}
-				case "partial-core":
-					if err == nil || !strings.Contains(err.Error(), "register Core consumers") {
-						t.Fatalf("应返回后置订阅失败: %v", err)
+				case "invalid-core-subject":
+					if !errors.Is(err, nats.ErrBadSubject) {
+						t.Fatalf("应保留主题预检错误: %v", err)
 					}
-					if _, err := client.JetStream().Consumer(ctx, "EVENTS", "worker"); err != nil {
-						t.Fatalf("失败不得删除已创建资源: %v", err)
+					if _, err := client.JetStream().Stream(ctx, "EVENTS"); !errors.Is(err, jetstream.ErrStreamNotFound) {
+						t.Fatalf("Core 预检失败后不应有 Stream: %v", err)
 					}
 				}
 				if err := natsx.CloseAll(); err != nil {

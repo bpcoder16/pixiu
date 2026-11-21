@@ -23,12 +23,11 @@ import (
 // 要求 env、Handler 及底层客户端已就绪；一个 Client 只创建一个消费组件，实际注册在 Run 中执行。
 // 构造不启动订阅，错误原样返回；服务接入统一停收、排空和取消协议，共享客户端仍由资源栈关闭。
 // 客户端通过 natsx.Named 查询，实例未登记或 CloseAll 开始后查询会 panic。
-// 配置先预检并绑定 Handler；各类资源的通用参数校验和判重交给各自的 natsx 注册入口，失败也占用其注册次数。
+// 构造时绑定 Handler 并预检全部声明。本地校验失败不占用注册次数。
 // 每个 Stream 的 mode 省略/null 默认 create；upsert 创建或更新，existing 只查询已有 Stream。
 // create/upsert 要求 subjects，existing 只接受 name/mode/consumers，不填充 Stream 默认配置。
 // 消费者在 streams[].consumers 中声明并继承父级 name，三种模式均沿用原 Consumer 注册策略。
 // 三个入口各调用一次，空清单也占用次数，不能与手动注册混用。
-// 各入口分阶段预检，后序校验失败时前序资源或消费可能已启动。
 // nil 注册表视为空表，未引用的 Handler 不启动；全局 streamDefaults.replicas 显式配置时必须为正整数。
 // 全局 replicas 省略或 null 时使用当前客户端初始化时的 URL 条目数，不计入自动发现的节点。
 // namespace 和 loggerName 来自 nats.<instanceName>.yaml 的客户端初始化配置，本文件不接受这两个字段。
@@ -39,11 +38,11 @@ import (
 // JetStream ackWait、backOff、maxDeliver、maxAckPending、consume.workers、consume.maxMessages、retryDelay 可选，
 // 省略或 null 沿用 Default，显式值的归一化及校验交给 natsx 注册入口和服务端。
 // backOff 为空列表时保留 Default；非空时覆盖 ackWait，不能与正值 retryDelay 同用。
-// Core queue 非空时 subscribers 必须大于 1，否则在注册任何资源前返回错误。
+// Core queue 非空时 subscribers 默认 1，显式填写须为正整数。
 // Run 注册期间可能执行 Handler；失败须中止启动并先排空已启动消费，再由资源栈关闭 Client，不回滚远端资源或业务。
 // 注册成功后，连接永久关闭或任一 JetStream 拉取循环意外终止时 Run 返回错误，由管理器统一停收。
 // 临时断连沿用 SDK 重连，丢失心跳继续拉取。
-// 注册 context 可由 Stop 取消，不设置整体注册期限；资源请求与 Core Flush 沿用 SDK 默认行为。
+// Stop 取消注册中的资源请求和 Core Flush。Core 注册的等待上限为 10 秒。
 // Client 关闭检查沿用 natsx；长期 Handler 使用独立消息 context，不提供热更新或整批重试。
 // disabledServices 命中 nats-consumer 或 nats-consumer:<instanceName> 时直接返回 ErrServiceDisabled。
 func NewNATSConsumerService(instanceName string, jetStreamHandlers *natsx.JetStreamHandlerRegistry, coreHandlers *natsx.CoreHandlerRegistry) (apprun.Service, error) {
@@ -92,6 +91,9 @@ func newNATSConsumer(instanceName string, jetStreamHandlers *natsx.JetStreamHand
 	}
 	// 使用初始化时的原始地址配置，避免重读文件或运行时发现节点改变副本策略。
 	batch, err := cfg.bind(len(client.Conn().Opts.Servers), jetStreamHandlers, coreHandlers)
+	if err == nil {
+		err = natsx.ValidateRegistrations(batch.streams, batch.jetStreamConsumers, batch.coreConsumers)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", location, err)
 	}
@@ -190,7 +192,10 @@ func (c *natsConsumer) register(ctx context.Context) error {
 	if err := client.RegisterJetStreamConsumers(ctx, batch.jetStreamConsumers...); err != nil {
 		return fmt.Errorf("%s: register JetStream consumers: %w", location, err)
 	}
-	if err := client.RegisterCoreConsumers(ctx, batch.coreConsumers...); err != nil {
+	// Core Flush 需要 deadline 才会监听取消信号，沿用 SDK 默认的 10 秒上限。
+	coreCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := client.RegisterCoreConsumers(coreCtx, batch.coreConsumers...); err != nil {
 		return fmt.Errorf("%s: register Core consumers: %w", location, err)
 	}
 	return nil
@@ -236,7 +241,7 @@ type natsCoreRegistration struct {
 	Name        string `mapstructure:"name"`
 	Subject     string `mapstructure:"subject"`
 	Queue       string `mapstructure:"queue"`
-	Subscribers int    `mapstructure:"subscribers"`
+	Subscribers *int   `mapstructure:"subscribers"`
 	Handler     string `mapstructure:"handler"`
 }
 
@@ -309,8 +314,12 @@ func (cfg *natsRegistrationConfig) bind(urlCount int, jsRegistry *natsx.JetStrea
 		}
 	}
 	for i, spec := range cfg.CoreConsumers {
-		if spec.Queue != "" && spec.Subscribers <= 1 {
-			return nil, fmt.Errorf("coreConsumers[%d] %q subscribers %d must be greater than 1 when queue is set", i, spec.Name, spec.Subscribers)
+		var subscribers int
+		if spec.Subscribers != nil {
+			subscribers = *spec.Subscribers
+			if spec.Queue != "" && subscribers <= 0 {
+				return nil, fmt.Errorf("coreConsumers[%d] %q subscribers %d must be positive when queue is set", i, spec.Name, subscribers)
+			}
 		}
 		handler, ok := coreHandlers[spec.Handler]
 		if !ok {
@@ -323,7 +332,7 @@ func (cfg *natsRegistrationConfig) bind(urlCount int, jsRegistry *natsx.JetStrea
 				spec.Name,
 				spec.Subject,
 				spec.Queue,
-				spec.Subscribers,
+				subscribers,
 				handler,
 			),
 		)
