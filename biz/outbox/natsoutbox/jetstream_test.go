@@ -108,10 +108,19 @@ func TestJetStreamAcknowledgementAndStableID(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = natsx.CloseAll() })
+	second, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.Start()
+	t.Cleanup(func() { second.Shutdown(); second.WaitForShutdown() })
+	if !second.ReadyForConnections(5 * time.Second) {
+		t.Fatal("audit NATS 未启动")
+	}
 	auditClient, err := natsx.NewNamed(natsx.Config{
 		Name:      "audit",
-		URLs:      []string{s.ClientURL()},
-		Namespace: "test2",
+		URLs:      []string{second.ClientURL()},
+		Namespace: "test1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +137,7 @@ func TestJetStreamAcknowledgementAndStableID(t *testing.T) {
 	}
 	auditStream, err := auditClient.JetStream().CreateStream(ctx, jetstream.StreamConfig{
 		Name:     "TEST2_EVENTS",
-		Subjects: []string{"test2.events.created"},
+		Subjects: []string{"test1.events.created"},
 		Storage:  jetstream.FileStorage,
 	})
 	if err != nil {
@@ -181,13 +190,23 @@ func TestJetStreamAcknowledgementAndStableID(t *testing.T) {
 	if err := h(ctx, d); err != nil {
 		t.Fatalf("未按任务中的客户端名称路由: %v", err)
 	}
+	d.ResourceName = "events"
+	if err := h(ctx, d); err == nil {
+		t.Fatal("列与旧负载冲突时不能投递")
+	}
+	d.ResourceName = "audit"
+	d.Payload = []byte(`{"subject":"events.created","data":"YXVkaXQ="}`)
+	if err := h(ctx, d); err != nil {
+		t.Fatalf("按 resource_name 发布失败: %v", err)
+	}
 	auditMsg, err := auditStream.GetMsg(ctx, 1)
-	if err != nil || auditMsg.Subject != "test2.events.created" || string(auditMsg.Data) != "audit" || auditMsg.Header.Get("Nats-Msg-Id") != "42" {
+	if err != nil || auditMsg.Subject != "test1.events.created" || string(auditMsg.Data) != "audit" || auditMsg.Header.Get("Nats-Msg-Id") != "42" {
 		t.Fatalf("消息未发布到指定命名客户端: %+v %v", auditMsg, err)
 	}
 	if err := NewJetStreamHandler("events")(ctx, d); err == nil {
 		t.Fatal("已注册但未列入 Handler 的客户端不得发布")
 	}
+	d.ResourceName = ""
 	for _, suffix := range []string{" {}", " invalid"} {
 		d.Payload = []byte(string(data) + suffix)
 		if err := h(ctx, d); err == nil {

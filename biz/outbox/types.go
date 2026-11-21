@@ -47,10 +47,12 @@ type StoreConfig struct {
 // ExpiresAt 为绝对截止时间，零值表示不过期。
 // MySQL 非空 ExpiresAt 的 UTC 整秒必须在 1 至 2147483647 范围内。
 type Task struct {
-	Kind      string
-	Version   int
-	Payload   []byte
-	ExpiresAt time.Time
+	// ResourceName 是入队时确定的目标资源，未指定目标的任务留空。
+	ResourceName string
+	Kind         string
+	Version      int
+	Payload      []byte
+	ExpiresAt    time.Time
 }
 
 type HandlerKey struct {

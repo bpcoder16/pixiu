@@ -23,7 +23,7 @@
 //		}
 //		var err error
 //		taskID, err = natsoutbox.EnqueueJetStreamTx(tx, natsoutbox.JetStreamMessage{
-//			Client:    "events",
+//			ResourceName: "events",
 //			Subject:   "orders.created",
 //			Data:      payload,
 //			ExpiresAt: time.Now().Add(24 * time.Hour),
@@ -48,7 +48,7 @@
 // Header 名由 NATS SDK 在发送时校验，值按 SDK 规则规范化。
 // 重复登记会生成不同 ID；同一任务重试沿用 ID。不同数据库的 ID 可重复，须隔离到不同 Stream。
 // 构造函数支持多个名称；列表为空、名称非法、未登记或注册表关闭时直接 panic。
-// Handler 持有构造时取得的客户端，发送时仅按任务的 Client 在该名称列表内路由。
+// Handler 持有构造时取得的客户端，发送时仅按记录中的 resource_name 在该名称列表内路由。旧记录无该列值时使用 payload.client。
 // 客户端名称、集群和 namespace 在存在积压时须保持稳定。PubAck 不代表消费者业务处理完成；
 // 确认丢失或状态回写失败可能重发，消费端须幂等。
 package natsoutbox

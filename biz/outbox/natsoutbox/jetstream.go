@@ -22,6 +22,8 @@ const JetStreamVersion = 1
 
 // JetStreamMessage 使用原始 subject，由 natsx 添加 namespace；消息标识由登记生成的任务 ID 提供。
 type JetStreamMessage struct {
+	ResourceName string
+	// Client 是旧版目标实例字段。新调用方使用 ResourceName。
 	Client    string
 	Subject   string
 	Data      []byte
@@ -63,8 +65,15 @@ func EnqueueJetStreamTxWithStore(store *outbox.Store, tx *gorm.DB, msg JetStream
 	if store == nil {
 		return 0, fmt.Errorf("%w: nil store", outbox.ErrInvalidArgument)
 	}
+	name := msg.ResourceName
+	if name == "" {
+		name = msg.Client
+	} else if msg.Client != "" && name != msg.Client {
+		return 0, fmt.Errorf("%w: resource name conflicts with client", outbox.ErrInvalidArgument)
+	}
 	p := payload{
-		Client:  msg.Client,
+		// 保留旧版 Worker 认识的名称，允许滚动升级期间消费新任务。
+		Client:  name,
 		Subject: msg.Subject,
 		Data:    msg.Data,
 		Header:  msg.Header,
@@ -78,10 +87,11 @@ func EnqueueJetStreamTxWithStore(store *outbox.Store, tx *gorm.DB, msg JetStream
 		return 0, err
 	}
 	return store.EnqueueTx(tx, outbox.Task{
-		Kind:      JetStreamKind,
-		Version:   JetStreamVersion,
-		Payload:   encoded,
-		ExpiresAt: msg.ExpiresAt,
+		ResourceName: name,
+		Kind:         JetStreamKind,
+		Version:      JetStreamVersion,
+		Payload:      encoded,
+		ExpiresAt:    msg.ExpiresAt,
 	})
 }
 
@@ -105,6 +115,13 @@ func NewJetStreamHandler(names ...string) outbox.Handler {
 		var p payload
 		if err := json.Unmarshal(delivery.Payload, &p); err != nil {
 			return err
+		}
+		// 旧写入器可能仍在运行。只有列为空时才从 v1 快照恢复目标。
+		if delivery.ResourceName != "" {
+			if p.Client != "" && p.Client != delivery.ResourceName {
+				return fmt.Errorf("%w: persisted resource name conflicts with payload", outbox.ErrInvalidArgument)
+			}
+			p.Client = delivery.ResourceName
 		}
 		if err := validate(p); err != nil {
 			return err

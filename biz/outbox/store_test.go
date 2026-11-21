@@ -315,13 +315,13 @@ func TestRegisteredSchemaAndRepeatedMigration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(columns) != 12 {
+		if len(columns) != 13 {
 			t.Fatalf("列数错误: %d", len(columns))
 		}
 		for _, column := range columns {
 			name := column.Name()
 			nullable, ok := column.Nullable()
-			wantNullable := slices.Contains([]string{"expires_at", "finished_at"}, name)
+			wantNullable := slices.Contains([]string{"resource_name", "expires_at", "finished_at"}, name)
 			if !ok || nullable != wantNullable {
 				t.Errorf("%s NULL 属性错误: %v/%v", name, nullable, ok)
 			}

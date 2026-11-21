@@ -113,6 +113,9 @@ func (s *Store) EnqueueTx(tx *gorm.DB, task Task) (int64, error) {
 		"created_at": gorm.Expr(s.nowSQL()),
 		"updated_at": gorm.Expr(s.nowSQL()),
 	}
+	if task.ResourceName != "" {
+		values["resource_name"] = task.ResourceName
+	}
 	// Model 提供自增字段元信息，GORM 通过 LastInsertId / RETURNING 将 ID 回填到 map。
 	if err := clean(tx).Create(values).Error; err != nil {
 		return 0, err

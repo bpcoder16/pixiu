@@ -95,11 +95,12 @@ func (w *Worker) send(ctx context.Context, id int64, retry bool) (taskErr, stora
 		logit.AddMeta(ctx, logit.Str(logit.LogId, row.LogID))
 	}
 	delivery := Delivery{
-		Kind:    string(row.Kind),
-		Version: int(row.Version),
-		Payload: row.Payload,
-		ID:      id,
-		Attempt: row.Attempts,
+		ResourceName: row.ResourceName,
+		Kind:         string(row.Kind),
+		Version:      int(row.Version),
+		Payload:      row.Payload,
+		ID:           id,
+		Attempt:      row.Attempts,
 	}
 	if row.ExpiresAt != nil {
 		delivery.ExpiresAt = row.ExpiresAt.Time

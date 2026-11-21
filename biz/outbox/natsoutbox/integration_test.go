@@ -155,9 +155,9 @@ func TestDatabaseToJetStreamRecovery(t *testing.T) {
 			// Worker 须保留启动时的 Handler 快照，不受调用方后续修改影响。
 			clear(handlers)
 			message := JetStreamMessage{
-				Client:  "events",
-				Subject: "events.created",
-				Data:    []byte("original"),
+				ResourceName: "events",
+				Subject:      "events.created",
+				Data:         []byte("original"),
 			}
 			rollback := errors.New("业务回滚")
 			var id int64
@@ -193,7 +193,7 @@ func TestDatabaseToJetStreamRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			record, err := outbox.Get(ctx, id)
-			if err != nil || record.Status != outbox.Succeeded || record.Attempts != 2 {
+			if err != nil || record.ResourceName != "events" || record.Status != outbox.Succeeded || record.Attempts != 2 {
 				t.Fatalf("补偿状态错误: %+v %v", record, err)
 			}
 
