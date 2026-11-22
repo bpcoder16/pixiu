@@ -1,5 +1,5 @@
 // Package bootstrap 提供日志、MySQL、PostgreSQL、Redis、Elasticsearch、OSS、STS、阿里云 ES 和 NATS 多实例的通用初始化入口，
-// 以及应用运行管理器、Gin Engine、HTTP、realtime 和 Cron 服务的构造方法，供项目自己的 bootstrap 组装。
+// 以及应用运行管理器、Gin Engine、HTTP 和 Cron 服务的构造方法，供项目自己的 bootstrap 组装。
 //
 // # 可选构建标签
 //
@@ -36,10 +36,10 @@
 // 只有同时禁用两者时才排除共享的 SeedOptions 和迁移核心依赖；
 // 禁用 Redis 时没有 MustRegisterRedisLock；禁用 NATS 时没有 NewNATSConsumerService。
 // 任一数据库可用时保留 MustRegisterOutbox；同时禁用两种数据库时排除全部 Outbox 装配入口。
-// MustRegisterJetStreamOutbox 另要求 NATS 未禁用；选择被禁用的数据库后端在声明时 panic。
+// 选择被禁用的数据库后端在声明时 panic。
 // 数据库标签同时裁剪 outbox 对应驱动的错误适配，outbox.NewStore 拒绝被禁用的后端。
 // 仍调用这些专用 API 的应用会编译失败，须移除相关调用或用对应构建约束隔离业务文件。
-// 日志、时区、HTTP/Gin、WebSocket 和普通 Cron 保留；禁用 Redis 后配置非空 Cron lock（含 {}）会明确报错，
+// 日志、时区、HTTP/Gin 和普通 Cron 保留；禁用 Redis 后配置非空 Cron lock（含 {}）会明确报错，
 // 不降级为无锁执行；省略 lock 或设为 null 不受影响。
 // 共享依赖和应用直接导入的适配包不受这些标签控制，go.mod 也不会因此移除 SDK。
 // 在库仓库构建 ./... 仍会编译独立的 infra 适配包；应用裁剪须针对业务入口。
@@ -93,27 +93,12 @@
 // 执行器不新增连接池或关闭动作，业务排空后仍由 Redis 原有资源登记回收。
 // 锁实例名不参与 key 构造，默认执行器与同名 Named 实例共享；未声明锁时跳过该装配阶段。
 //
-// 默认 Store 和 Worker 可由启动声明统一装配，实例本身不使用名称；数据库与 NATS 名称选择已有依赖。
-// 以下片段替换应用装配示例中的相应声明，config 和 resources 由应用提前准备：
+// MustRegisterOutbox 声明默认 Store 与 Worker，按 Kind 和 Version 分派给宿主提供的 Handler。
+// 在 MustBaseInit 前声明数据库和 Outbox（需导入 biz/outbox）：
 //
 //	bootstrap.MustRegisterMySQL("orders", true)
-//	bootstrap.MustRegisterNATS("events", true)
-//	bootstrap.MustRegisterJetStreamOutbox(outbox.MySQL, "orders", "events")
-//	bootstrap.MustBaseInit(config, &resources)
-//
-// 示例另需导入 biz/outbox。快捷入口支持多个 NATS 名称，声明时复制名称清单。
-// 两种 MustBaseInit 入口均在数据库和 NATS 就绪后、WebSocket 工厂执行前创建默认 Store 与 Worker。
-// Store 借用所选数据库的 MasterDB，展示时区使用 env.TimeLocation()；依赖无需设置为默认实例。
-// Handler 在此阶段创建，不在声明阶段访问客户端。Outbox 未声明时跳过，不读额外配置文件。
-//
-// 需要多个 Kind/Version 或混合 Handler 时，使用通用入口替换上述快捷声明（两者只能选一个）：
-//
 //	bootstrap.MustRegisterOutbox(outbox.MySQL, "orders", func() map[outbox.HandlerKey]outbox.Handler {
 //		return map[outbox.HandlerKey]outbox.Handler{
-//			{
-//				Kind:    natsoutbox.JetStreamKind,
-//				Version: natsoutbox.JetStreamVersion,
-//			}: natsoutbox.NewJetStreamHandler("events"),
 //			{
 //				Kind:    "project.notification",
 //				Version: 1,
@@ -121,12 +106,13 @@
 //		}
 //	})
 //
-// 通用示例另需导入 biz/outbox/natsoutbox；sendNotification 由应用提供，签名为 outbox.Handler。
+// sendNotification 的签名为 outbox.Handler。基础初始化在共享客户端就绪后调用工厂。
+// Store 借用所选数据库的 MasterDB，展示时区使用 env.TimeLocation()。
 // 工厂同步返回 Handler 表，随后由 Worker 复制；工厂只构造 Handler，不迁移表或执行任务，panic 原样传播。
 // 重复声明、nil 工厂、非法名称/后端和初始化开始后声明均 panic；依赖缺失或 Handler 无效中止启动。
 // 初始化失败不支持同进程重试，已成功创建的默认实例不重置；底层资源仍由应用关闭栈回收。
 // 表迁移在 MustBaseInit 后通过现有清单登记 &outbox.Record{}，迁移完成后再启动业务和 cron。
-// 业务事务内调用 natsoutbox.EnqueueJetStreamTx(tx, msg)，最外层事务提交后调用 outbox.Send/SendAsync。
+// 业务事务内调用 outbox.EnqueueTx(tx, task)，最外层事务提交后调用 outbox.Send/SendAsync。
 // cron Handler 调用 outbox.RetryPending(ctx, batchSize)，补偿频率和分布式锁由项目现有 cron 配置决定。
 // 装配不启动后台调度、不增加资源所有权，也不改变 SendAsync 无等待/排空的语义。
 //
@@ -156,9 +142,9 @@
 // 此示例另用标准库 net/http 和 pixiu 的 infra/apprun；handler 由应用提供，http.yaml 从 env.ConfigDirPath() 读取。
 // ServiceFactory 的签名为 func() (apprun.Service, error)，Start 按传入顺序同步构造并登记，全部成功后运行。
 // 在 app.yaml 设置 disabledServices: [cron, "nats-consumer:orders"] 可跳过 Cron 与 orders 消费者。
-// 可选类型为 http（含 Gin HTTP）、cron、nats-consumer、websocket；类型匹配全部实例，类型:实例名精确匹配。
+// 可选类型为 http（含 Gin HTTP）、cron、nats-consumer；类型匹配全部实例，类型:实例名精确匹配。
 // HTTP 和 Cron 的内置入口使用单服务名 http、cron。Start 也按工厂返回的最终服务名匹配，例如 http:aaa。
-// 两种基础初始化入口均保存禁用列表。共享 NATS 客户端和 WebSocket 命名实例仍按声明初始化。
+// 两种基础初始化入口均保存禁用列表。共享 NATS 客户端仍按声明初始化。
 // 内置构造入口匹配时在读取专属配置前返回 ErrServiceDisabled。工厂包装或合并错误时，
 // 只有所有原因都匹配 ErrServiceDisabled 才会继续启动后续服务。若名称由工厂在构造后指定，
 // Start 和 StartWithConfig 会在登记前回收匹配的服务并跳过运行。全部跳过时返回 apprun.ErrNoServices。
@@ -561,52 +547,4 @@
 //
 // StartWithConfig 要求显式预算至少 5s；Start/NewAppManager 默认仍为 30s。
 // 总预算不包含资源栈、Client.Close 和日志；这些由应用随后调用 lifecycle.Stack.Close 回收，默认整体 30 秒，日志最后关闭。
-//
-// 应用在统一初始化前声明 WebSocket 命名实例，工厂在共享客户端就绪后执行：
-//
-//	bootstrap.MustRegisterWebSocket("app", newAppServer)
-//	bootstrap.MustBaseInit(config, resources)
-//
-// newAppServer 的签名为 func() (*realtime.Server, error)，仅构造全新 Server。
-// 业务可通过 realtime.Named("app") 获取同一实例，未知名称 panic。
-// 调用 NewWebSocketService("app") 接管其运行和关闭，不向共享资源栈重复登记关闭。
-// 自行初始化时也可用 realtime.Register(name, server) 登记，再以同一方法创建 Service。
-// 同一命名实例只由一个 Service 接管。
-// 已停止的实例仍可按名称获取，推送返回关闭错误，不自动重建或重启。
-//
-// NewWebSocketService(name) 通过实例名称构造独立端口服务。
-// 严格读取 websocket.<name>.yaml，顶层 addr 和 path 必填，监听字段与 http.yaml 相同。
-// HTTP 监听字段均放在顶层，http 嵌套块按未知字段拒绝。
-// 认证、端状态、JSON/PB 和连接限额由声明工厂中的 realtime.Config 提供。
-// 例如（先完成上述初始化并准备 websocket.app.yaml，模板见 conf.example/websocket.example.yaml）：
-//
-//	func startWebSocket() error {
-//		return bootstrap.Start(func() (apprun.Service, error) {
-//			return bootstrap.NewWebSocketService("app")
-//		})
-//	}
-//
-// 可与 NewGinHTTPService 并列登记；app/web/admin 使用不同名称、端口和工厂即可独立运行。
-// 对外只有 websocket:<name> 一个 Service，内部直接管理 Server 和 HTTP 监听；不能重复登记内部服务。
-// 保留 GET /ready/ws（就绪 204、未就绪 503），升级路径与此探针仅允许 GET，其他方法含 HEAD 返回 405。
-// 只处理上述升级入口和就绪探针，其他路径返回 404，不提供普通 HTTP 路由扩展。
-// HTTP 与 realtime 并发 Run，探针确认当前可接纳；一个内部 Run 退出会封闭两侧入口并上报错误。
-// Stop/Cancel 支持先于 Run；Wait 共用外层期限，等待握手、会话回调、OnClose 及内部 Run 全部结束。
-// Wait 超时不取消清理，Cancel 同时通知 HTTP 与 realtime；OnClose 使用原有独立有界 Context。
-// 构造成功后服务取得 Server 所有权；构造失败回收已返回的部分对象，登记失败由 Start 回收。
-// 同进程实例仍共享进程资源与管理器统一停机策略；独立端口不自动隔离鉴权或提供独立进程扩缩容。
-//
-// 共用已有 HTTP 端口时，应用显式构造 apprun.Service，将 Server 的生命周期方法填入对应字段。
-// 同一个 server 挂到 Gin 或 ServeMux，再独立登记 HTTP 服务。
-// Start 工厂可按对象依赖顺序构造；运行与关闭并发进行，注册顺序不是生命周期依赖。
-// 完整 Gin/ServeMux 用法见 Example_realtimeGin 和 Example_realtimeServeMux；原始 Endpoint 不重复登记。
-// 例如已构造的 server 可在 Start 的一个工厂中交接：
-//
-//	return apprun.Service{
-//		Name:   "realtime:app",
-//		Run:    server.Run,
-//		Stop:   server.Stop,
-//		Wait:   server.Wait,
-//		Cancel: server.Cancel,
-//	}, nil
 package bootstrap

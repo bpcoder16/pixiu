@@ -28,6 +28,6 @@ log:
 # 关闭所有已登记资源的总时限。省略或设为 0s 时使用 30s，负值无效。
 resourceCloseTimeout: "30s"
 
-# 可填 http、cron、nats-consumer、websocket。类型匹配全部实例，“类型:实例名”只匹配指定实例。
+# 可填 http、cron、nats-consumer。类型匹配全部实例，“类型:实例名”只匹配指定实例。
 # 例如 ["nats-consumer:orders"] 只关闭 orders 消费者。空列表表示启用代码声明的全部服务。
 disabledServices: []

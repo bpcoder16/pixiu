@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
-	"github.com/bpcoder16/pixiu/biz/realtime"
 	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/lifecycle"
 	"github.com/gin-gonic/gin"
@@ -20,27 +19,14 @@ import (
 
 func TestStartFiltersNamedServices(t *testing.T) {
 	isolatedLog(t, func() {
-		cfg := loadLogConfig(t, "release", "disabledServices: [http:aaa, cron, websocket:app]\n")
+		cfg := loadLogConfig(t, "release", "disabledServices: [http:aaa, cron]\n")
 		var resources lifecycle.Stack
 		defer resources.Close()
-		bootstrap.MustRegisterWebSocket("app2", func() (*realtime.Server, error) {
-			return realtime.NewServer(exampleRealtimeConfig())
-		})
 		bootstrap.MustBaseInitWithoutLogit(cfg, &resources)
 
 		if _, err := bootstrap.NewHTTPService(http.NotFoundHandler()); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("http:aaa 不应禁用默认 HTTP 入口: %v", err)
 		}
-		if _, err := bootstrap.NewWebSocketService("app"); !errors.Is(err, bootstrap.ErrServiceDisabled) {
-			t.Fatalf("禁用的 WebSocket 实例应在读取专属文件前跳过: %v", err)
-		}
-		addr := wsAddress(t)
-		writeWSConfig(t, "app2", addr)
-		ws, err := bootstrap.NewWebSocketService("app2")
-		if err != nil {
-			t.Fatal(err)
-		}
-		runWSService(t, ws, addr)
 
 		ran := make(chan string, 3)
 		stopped := make(chan string, 3)
@@ -84,14 +70,9 @@ func TestStartFiltersNamedServices(t *testing.T) {
 
 func TestStartSkipsDisabledServiceTypes(t *testing.T) {
 	isolatedLog(t, func() {
-		cfg := loadLogConfig(t, "release", "disabledServices: [http, websocket]\n")
+		cfg := loadLogConfig(t, "release", "disabledServices: [http]\n")
 		var resources lifecycle.Stack
 		defer resources.Close()
-		for _, name := range []string{"app", "admin"} {
-			bootstrap.MustRegisterWebSocket(name, func() (*realtime.Server, error) {
-				return realtime.NewServer(exampleRealtimeConfig())
-			})
-		}
 		bootstrap.MustBaseInitWithoutLogit(cfg, &resources)
 		clear(cfg.DisabledServices) // 调用方修改配置不能重新启用服务。
 		factories := []bootstrap.ServiceFactory{
@@ -106,18 +87,8 @@ func TestStartSkipsDisabledServiceTypes(t *testing.T) {
 				return svc, nil
 			},
 		}
-		for _, name := range []string{"app", "admin"} {
-			factories = append(factories, func() (apprun.Service, error) {
-				return bootstrap.NewWebSocketService(name)
-			})
-		}
 		if err := bootstrap.Start(factories...); !errors.Is(err, apprun.ErrNoServices) {
 			t.Fatalf("未提供禁用服务的配置时应跳过所有服务，得到 %v", err)
-		}
-		for _, name := range []string{"app", "admin"} {
-			if realtime.Named(name).Ready() {
-				t.Fatalf("WebSocket %q 应已登记但未启动", name)
-			}
 		}
 
 		factories = append(factories, func() (apprun.Service, error) {

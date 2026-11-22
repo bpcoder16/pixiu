@@ -14,7 +14,6 @@ const (
 	ServiceHTTP         = "http"
 	ServiceCron         = "cron"
 	ServiceNATSConsumer = "nats-consumer"
-	ServiceWebSocket    = "websocket"
 )
 
 // 与 bootstrap 声明实例时使用的名称规则一致。
@@ -35,7 +34,7 @@ func (cfg *AppConfig) ValidateDisabledServices() error {
 	for i, rule := range cfg.DisabledServices {
 		kind, instance, named := strings.Cut(rule, ":")
 		switch kind {
-		case ServiceHTTP, ServiceCron, ServiceNATSConsumer, ServiceWebSocket:
+		case ServiceHTTP, ServiceCron, ServiceNATSConsumer:
 		default:
 			return fmt.Errorf("disabledServices[%d]: unknown service type in %q", i, rule)
 		}
