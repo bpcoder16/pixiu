@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
-	"os"
 	"testing"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
@@ -19,10 +17,6 @@ func TestStartFiltersNamedServices(t *testing.T) {
 		var resources lifecycle.Stack
 		defer resources.Close()
 		bootstrap.MustBaseInitWithoutLogit(cfg, &resources)
-
-		if _, err := bootstrap.NewHTTPService(http.NotFoundHandler()); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("http:aaa 不应禁用默认 HTTP 入口: %v", err)
-		}
 
 		names := []string{"http:aaa", "cron:jobs", "nats-consumer:orders", "http:aaa2"}
 		ran := make(chan string, len(names))
@@ -73,19 +67,10 @@ func TestStartSkipsDisabledServiceTypes(t *testing.T) {
 		bootstrap.MustBaseInitWithoutLogit(cfg, &resources)
 		clear(cfg.DisabledServices) // 调用方修改配置不能重新启用服务。
 		httpService := func() (apprun.Service, error) {
-			return bootstrap.NewHTTPService(http.NotFoundHandler())
+			return apprun.Service{Name: "http"}, nil
 		}
 		if err := bootstrap.Start(httpService); !errors.Is(err, apprun.ErrNoServices) {
-			t.Fatalf("未提供禁用服务的配置时应跳过所有服务，得到 %v", err)
-		}
-
-		failure := errors.New("factory cleanup failed")
-		err := bootstrap.Start(func() (apprun.Service, error) {
-			svc, err := bootstrap.NewHTTPService(http.NotFoundHandler())
-			return svc, errors.Join(err, failure)
-		})
-		if !errors.Is(err, failure) || !errors.Is(err, bootstrap.ErrServiceDisabled) {
-			t.Fatalf("禁用服务时应保留工厂的回收错误，得到 %v", err)
+			t.Fatalf("已禁用的服务应跳过，得到 %v", err)
 		}
 	})
 }

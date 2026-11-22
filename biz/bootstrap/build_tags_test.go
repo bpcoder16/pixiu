@@ -1,7 +1,6 @@
 package bootstrap_test
 
 import (
-	"net/http"
 	"os/exec"
 	"strings"
 	"testing"
@@ -46,12 +45,8 @@ func TestBootstrapWithoutExternalModules(t *testing.T) {
 			}
 		})
 		bootstrap.MustBaseInit(cfg, &resources)
-		writeHTTPConfig(t, "addr: 127.0.0.1:0\n")
-		service, err := bootstrap.NewHTTPService(http.NewServeMux())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := stopAndWait(service.Stop, service.Wait, service.Cancel); err != nil {
+		writeGinConfig(t, "{}\n")
+		if _, err := bootstrap.NewGinEngine(); err != nil {
 			t.Fatal(err)
 		}
 	})

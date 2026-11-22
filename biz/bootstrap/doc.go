@@ -1,5 +1,5 @@
 // Package bootstrap 提供日志、MySQL、PostgreSQL、Redis、Elasticsearch、OSS、STS、阿里云 ES 和 NATS 多实例的通用初始化入口，
-// 以及应用运行管理器、Gin Engine 和 HTTP 服务的构造方法，供项目自己的 bootstrap 组装。
+// 以及应用运行管理器、Gin Engine 的构造方法，供项目自己的 bootstrap 组装。
 //
 // # 可选构建标签
 //
@@ -35,9 +35,6 @@
 // 禁用 PostgreSQL 时，RunPostgreSQLInitialization 不参与构建。
 // 只有同时禁用两者时才排除共享的 SeedOptions 和迁移核心依赖；
 // 禁用 Redis 时没有 MustRegisterRedisLock。
-// 任一数据库可用时保留 MustRegisterOutbox；同时禁用两种数据库时排除全部 Outbox 装配入口。
-// 选择被禁用的数据库后端在声明时 panic。
-// 数据库标签同时裁剪 outbox 对应驱动的错误适配，outbox.NewStore 拒绝被禁用的后端。
 // 仍调用这些专用 API 的应用会编译失败，须移除相关调用或用对应构建约束隔离业务文件。
 // 共享依赖和应用直接导入的适配包不受这些标签控制，go.mod 也不会因此移除 SDK。
 // 在库仓库构建 ./... 仍会编译独立的 infra 适配包；应用裁剪须针对业务入口。
@@ -91,29 +88,6 @@
 // 执行器不新增连接池或关闭动作，业务排空后仍由 Redis 原有资源登记回收。
 // 锁实例名不参与 key 构造，默认执行器与同名 Named 实例共享；未声明锁时跳过该装配阶段。
 //
-// MustRegisterOutbox 声明默认 Store 与 Worker，按 Kind 和 Version 分派给宿主提供的 Handler。
-// 在 MustBaseInit 前声明数据库和 Outbox（需导入 biz/outbox）：
-//
-//	bootstrap.MustRegisterMySQL("orders", true)
-//	bootstrap.MustRegisterOutbox(outbox.MySQL, "orders", func() map[outbox.HandlerKey]outbox.Handler {
-//		return map[outbox.HandlerKey]outbox.Handler{
-//			{
-//				Kind:    "project.notification",
-//				Version: 1,
-//			}: sendNotification,
-//		}
-//	})
-//
-// sendNotification 的签名为 outbox.Handler。基础初始化在共享客户端就绪后调用工厂。
-// Store 借用所选数据库的 MasterDB，展示时区使用 env.TimeLocation()。
-// 工厂同步返回 Handler 表，随后由 Worker 复制；工厂只构造 Handler，不迁移表或执行任务，panic 原样传播。
-// 重复声明、nil 工厂、非法名称/后端和初始化开始后声明均 panic；依赖缺失或 Handler 无效中止启动。
-// 初始化失败不支持同进程重试，已成功创建的默认实例不重置；底层资源仍由应用关闭栈回收。
-// 表迁移在 MustBaseInit 后通过现有清单登记 &outbox.Record{}，迁移完成后再启动业务和 cron。
-// 业务事务内调用 outbox.EnqueueTx(tx, task)，最外层事务提交后调用 outbox.Send/SendAsync。
-// cron Handler 调用 outbox.RetryPending(ctx, batchSize)，补偿频率和分布式锁由项目现有 cron 配置决定。
-// 装配不启动后台调度、不增加资源所有权，也不改变 SendAsync 无等待/排空的语义。
-//
 // 新项目应先完成 MustBaseInit，再通过 logit.Default、logit.With 或 logit.Named 创建和保存模块 Logger，
 // 如上例所示；不要在先于 bootstrap 执行的包变量初始化或 Go 的 init() 中缓存这些 Logger。
 // 初始化前取得的空操作实例不会随后续 SetDefault 或命名注册自动更新。
@@ -129,21 +103,16 @@
 // 任一入口开始初始化后，不论成功或失败，均不能再调用任一入口或追加声明。
 // 两种入口均须在其他 goroutine 并发使用时间或日志前调用。
 //
-// 初始化成功后，可将服务构造函数交给 Start，统一登记服务并接管停机信号：
+// 初始化成功后，将宿主提供的服务工厂交给 Start，统一登记服务并接管停机信号：
 //
-//	func start(handler http.Handler) error {
-//		return bootstrap.Start(func() (apprun.Service, error) {
-//			return bootstrap.NewHTTPService(handler)
-//		})
-//	}
+//	return bootstrap.Start(buildService)
 //
-// 此示例另用标准库 net/http 和 pixiu 的 infra/apprun；handler 由应用提供，http.yaml 从 env.ConfigDirPath() 读取。
 // ServiceFactory 的签名为 func() (apprun.Service, error)，Start 按传入顺序同步构造并登记，全部成功后运行。
 // Start 可按 disabledServices 跳过宿主工厂返回的服务，例如 cron 和 nats-consumer:orders。
 // 可选类型为 http（含 Gin HTTP）、cron、nats-consumer；类型匹配全部实例，类型:实例名精确匹配。
-// NewHTTPService 使用服务名 http。Start 也按工厂返回的最终服务名匹配，例如 http:aaa。
+// Start 按工厂返回的服务名匹配，例如 http:aaa。
 // 两种基础初始化入口均保存禁用列表。共享 NATS 客户端仍按声明初始化。
-// 内置构造入口匹配时在读取专属配置前返回 ErrServiceDisabled。工厂包装或合并错误时，
+// 宿主工厂可以返回 ErrServiceDisabled 跳过构造。工厂包装或合并错误时，
 // 只有所有原因都匹配 ErrServiceDisabled 才会继续启动后续服务。若名称由工厂在构造后指定，
 // Start 和 StartWithConfig 会在登记前回收匹配的服务并跳过运行。全部跳过时返回 apprun.ErrNoServices。
 // 后续构造或登记失败时逆序回收此前成功构造的服务，包括本轮登记失败的服务，并保留原错误与回收错误。
@@ -152,18 +121,20 @@
 // 构造函数返回错误时负责自行回收本轮部分资源；nil 构造函数返回错误，无服务时返回 apprun.ErrNoServices。
 // Start 使用管理器默认的 30 秒运行期总关闭预算；进入运行阶段后由管理器统一停收并行排空服务，不重复回收。
 // 构造及启动前回收不计入运行期关闭预算，信号仅从所有服务登记成功后开始接管。
-// 使用 Gin 的应用可在启动阶段先构造 Engine（另需导入 github.com/gin-gonic/gin 和 pixiu 的 infra/env，
+// 使用 Gin 的应用可在启动阶段构造 HTTP 服务（需导入 net/http、github.com/gin-gonic/gin 及 pixiu 的 infra/env、infra/httpserver，
 // debug/test 模式还须 blank import 应用生成的 Swag 文档包）：
 //
-//	gin.SetMode(env.RunMode())
-//	engine, err := bootstrap.NewGinEngine()
-//	if err != nil {
-//		return err
+//	func newHTTPServer() (*httpserver.Server, error) {
+//		gin.SetMode(env.RunMode())
+//		engine, err := bootstrap.NewGinEngine()
+//		if err != nil {
+//			return nil, err
+//		}
+//		engine.GET("/healthz", func(c *gin.Context) {
+//			c.Status(http.StatusNoContent)
+//		})
+//		return httpserver.New(httpserver.Config{Addr: ":8888"}, engine)
 //	}
-//	engine.GET("/healthz", func(c *gin.Context) {
-//		c.Status(http.StatusNoContent)
-//	})
-//	return start(engine)
 //
 // NewGinEngine 从 env.ConfigDirPath() 下的 gin.yaml 读取一次配置，再调用 ginx.New。
 // 文件必需，{} 沿用默认值：不信任代理、记录访问日志、不记录请求或响应详情。
@@ -188,7 +159,7 @@
 // 文档路由在构造时已注册，之后添加的业务中间件不作用于这些路由。
 // 需要自定义文档注册策略的应用可直接使用 ginx.New 和 ginx.RegisterOpenAPI。
 // 不修改 Gin 全局模式或 Validator，不监听端口或自动注册业务路由。应用构造一次后持有 Engine，
-// 完成业务路由和中间件注册，再传给 NewHTTPService；模式由应用启动时显式设置。
+// 完成业务路由和中间件注册，将 Engine 作为 http.Handler 传给 httpserver.New；模式由应用启动时显式设置。
 // disableAccessLog 覆盖详情开关；详情完整记录且不脱敏，开启前须在 Engine 外层约束请求体规模及读取期限。
 // 全部文档 GET 路由自动忽略访问日志、详情及 Observe，保留 Recovery。
 // 包括文档页面、首页别名、JSON 端点和三个内嵌静态资源。
@@ -197,9 +168,6 @@
 // 也可传入一个不小于 5 秒的 time.Duration，负值或不足 5 秒的正值返回错误；
 // 不保存全局管理器，不自动注册服务或接管信号。
 // 需要自定义预算或自行控制运行 context 时，直接持有 NewAppManager 返回的管理器，登记后调用 Run 或 RunSignals。
-// NewHTTPService 从 env.ConfigDirPath() 下读取 http.yaml，严格解析 httpserver.Config 并返回名为 http 的 apprun.Service，
-// 构造时不监听，HTTP 排空期限由管理器提供，不再读取 shutdownTimeout。
-// Run 将启动与关闭竞争产生的 httpserver.ErrClosed 视为正常退出，保留其他运行与关闭错误。
 // 直接使用管理器时，进入有效 Run 前的构造或登记失败由调用方逆序关闭全部已构造服务（含已登记服务）。
 // 运行后由管理器关闭，不重复登记到资源栈。
 // 排空超时取消剩余任务、关闭未完成普通连接，然后由入口有界回收资源并退出进程。
@@ -370,12 +338,10 @@
 //
 // 需要显式设置运行期总关闭预算时，使用 StartWithConfig（另需导入标准库 time）：
 //
-//	func startWithTimeout(handler http.Handler) error {
+//	func startWithTimeout(buildService bootstrap.ServiceFactory) error {
 //		return bootstrap.StartWithConfig(bootstrap.StartConfig{
 //			ShutdownTimeout: 2 * time.Minute,
-//		}, func() (apprun.Service, error) {
-//			return bootstrap.NewHTTPService(handler)
-//		})
+//		}, buildService)
 //	}
 //
 // StartWithConfig 要求显式预算至少 5s；Start/NewAppManager 默认仍为 30s。

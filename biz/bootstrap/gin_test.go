@@ -24,16 +24,7 @@ func TestGinEngineOpenAPIRunModes(t *testing.T) {
 	for _, mode := range []string{env.RunModeDebug, env.RunModeTest, env.RunModeRelease} {
 		t.Run(mode, func(t *testing.T) {
 			isolatedLog(t, func() {
-				dir := t.TempDir()
-				if err := env.Init(env.Config{
-					AppName:       "bootstrap-gin-test",
-					RunMode:       mode,
-					TimeLocation:  "UTC",
-					ConfigDirPath: dir,
-					LocalIP:       "127.0.0.1",
-				}); err != nil {
-					t.Fatal(err)
-				}
+				dir := initGinTestEnv(t, mode)
 				// 故意与 env 不同，文档开关只取决于应用环境，构造也不得改写 Gin 模式。
 				ginMode := gin.ReleaseMode
 				if mode == env.RunModeRelease {
@@ -102,7 +93,7 @@ func TestGinEngineOpenAPIRunModes(t *testing.T) {
 
 func TestGinEngineRejectsInvalidConfiguration(t *testing.T) {
 	isolatedLog(t, func() {
-		initHTTPConfigDir(t)
+		initGinTestEnv(t, env.RunModeTest)
 		if engine, err := bootstrap.NewGinEngine(); engine != nil || !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("缺失 gin.yaml 应保留错误链: engine=%v, err=%v", engine, err)
 		}
@@ -131,7 +122,7 @@ func TestGinEngineReadsConfigurationAtConstruction(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		initHTTPConfigDir(t)
+		initGinTestEnv(t, env.RunModeTest)
 		// 构造只使用环境中的配置目录，不依赖之后的工作目录。
 		t.Chdir(t.TempDir())
 		for _, tc := range []struct {
@@ -256,6 +247,21 @@ func TestGinEngineReadsConfigurationAtConstruction(t *testing.T) {
 			})
 		}
 	})
+}
+
+func initGinTestEnv(t *testing.T, mode string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := env.Init(env.Config{
+		AppName:       "bootstrap-gin-test",
+		RunMode:       mode,
+		TimeLocation:  "UTC",
+		ConfigDirPath: dir,
+		LocalIP:       "127.0.0.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func writeGinConfig(t *testing.T, content string) {

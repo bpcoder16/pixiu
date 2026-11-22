@@ -173,15 +173,14 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | --- | --- | --- |
 | [`biz/common`](biz/common/doc.go) | 按应用时区生成 ID、格式化时间，int64 万分之一整数与百分比精确互转，名称脱敏 | 常规业务工具；ID 与时间依赖 env，百分比支持负数，MaskName 支持自定义符号 |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
-| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin Engine、标准 HTTP 服务构造、NATS 客户端装配与显式 MySQL / PostgreSQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
+| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin Engine、NATS 客户端装配与显式 MySQL / PostgreSQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
 | [`biz/ossservice`](biz/ossservice/doc.go) | multipart 上传、指定对象的 STS 凭据签发、URL 内容 MD5 | 上传需要 OSS，签发另需 STS；MD5FromURL 为独立包函数，无需客户端 |
 | [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
 | [`biz/appconfig`](biz/appconfig/doc.go) | 严格解析环境、日志与常驻服务禁用列表，返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/appconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，默认及命名执行器，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
-| [`biz/outbox`](biz/outbox/doc.go) | MySQL/PostgreSQL 自增任务 ID、同事务入表、行锁并发发送、外部 cron 补偿与过期失败 | 数据库提交后的可靠发送意图 |
 
-新宿主通过 Baize 的 `httpboot.Gin`、`cronboot.Service` 和 `natsboot.ConsumerService` 装配 Gin HTTP、Cron 和 NATS 消费服务，使用 `bootstrap/realtimeboot.Service` 装配 Realtime，使用 `bootstrap/outboxboot.PrepareJetStream` 装配 JetStream Outbox。[Baize v0.1.0](https://github.com/bpcoder16/baize/tree/v0.1.0)
+新宿主通过 Baize 的 `httpboot.Gin`、`cronboot.Service`、`natsboot.ConsumerService` 和 `realtimeboot.Service` 装配常驻服务。事务发件箱使用 Baize 的 `service/outbox`，JetStream 投递通过 `outboxboot.PrepareJetStream` 装配。[Baize v0.1.0](https://github.com/bpcoder16/baize/tree/v0.1.0)
 
 ## 分层架构
 
@@ -214,10 +213,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"slices"
 
 	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
 	"github.com/bpcoder16/pixiu/infra/apprun"
+	"github.com/bpcoder16/pixiu/infra/configx"
+	"github.com/bpcoder16/pixiu/infra/httpserver"
 	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
@@ -250,14 +253,37 @@ func run() (runErr error) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return bootstrap.Start(func() (apprun.Service, error) {
-		return bootstrap.NewHTTPService(mux)
+		if slices.Contains(cfg.DisabledServices, appconfig.ServiceHTTP) {
+			return apprun.Service{}, bootstrap.ErrServiceDisabled
+		}
+		httpCfg, err := configx.Parse[httpserver.Config](filepath.Join(cfg.Env.ConfigDirPath, "http.yaml"))
+		if err != nil {
+			return apprun.Service{}, err
+		}
+		server, err := httpserver.New(*httpCfg, mux)
+		if err != nil {
+			return apprun.Service{}, err
+		}
+		return apprun.Service{
+			Name: appconfig.ServiceHTTP,
+			Run: func() error {
+				err := server.Run()
+				if errors.Is(err, httpserver.ErrClosed) {
+					return nil
+				}
+				return err
+			},
+			Stop:   server.Stop,
+			Wait:   server.Wait,
+			Cancel: server.Cancel,
+		}, nil
 	})
 }
 ```
 
 </details>
 
-NewHTTPService 构造不监听，Start 接管服务与信号；Stop 统一封闭入口，Wait 共享 30 秒，超时 Cancel。返回后无论是否排空超时都执行资源栈 Close，默认整体最多等待 30 秒。库不退出进程，应用 main 在有界收尾后退出。
+示例由宿主读取监听配置并创建 HTTP 服务，Start 接管服务与信号；Stop 统一封闭入口，Wait 共享 30 秒，超时 Cancel。返回后无论是否排空超时都执行资源栈 Close，默认整体最多等待 30 秒。库不退出进程，应用 main 在有界收尾后退出。
 
 通过 bootstrap 初始化后，业务日志默认写入 `<dir>/<appName>/biz/` 下的 `debug.log`、`info.log`、`wf.log`，分别对应 Debug、Info 和 Warn / Error / Fatal；命名 Logger 增加 `<name>.` 文件前缀。`dir` 默认 `./log`，相对应用启动目录解析；release 输出 Info 及以上，debug/test 输出 Debug 及以上。
 
@@ -265,7 +291,7 @@ NewHTTPService 构造不监听，Start 接管服务与信号；Stop 统一封闭
 
 ### Gin 与 OpenAPI 文档
 
-使用 Gin 时，在初始化环境后显式调用 `gin.SetMode(env.RunMode())`，通过 `bootstrap.NewGinEngine()` 构造 Engine，注册业务路由，再将 Engine 传给 `bootstrap.NewHTTPService`。需额外导入 Gin 和 `infra/env`；将 [`gin.yaml`](biz/bootstrap/conf.example/gin.yaml) 放在同一配置目录。文件必须存在，内容为 `{}` 时沿用默认值。
+使用 Gin 时，在初始化环境后显式调用 `gin.SetMode(env.RunMode())`，通过 `bootstrap.NewGinEngine()` 构造 Engine，注册业务路由，再将 Engine 作为上例中 `httpserver.New` 的 Handler。需额外导入 Gin 和 `infra/env`；将 [`gin.yaml`](biz/bootstrap/conf.example/gin.yaml) 放在同一配置目录。文件必须存在，内容为 `{}` 时沿用默认值。
 
 `NewGinEngine` 根据应用环境决定文档路由：
 
@@ -765,7 +791,7 @@ make test
 make test-race
 ```
 
-`make test` 和 `make test-race` 是完整测试入口，依次运行全量包测试和 bootstrap 构建标签矩阵。矩阵覆盖八个单独禁用、全部禁用及 Redis/NATS 组合，检查注册错误、生产依赖和 HTTP 基础行为，并验证仅保留 PostgreSQL 时的数据库装配。CI 可直接使用这两个入口，等价命令如下：
+`make test` 和 `make test-race` 是完整测试入口，依次运行全量包测试和 bootstrap 构建标签矩阵。矩阵覆盖八个单独禁用、全部禁用及 Redis/NATS 组合，检查注册错误、生产依赖和 Gin Engine 的构造，并验证仅保留 PostgreSQL 时的数据库装配。CI 可直接使用这两个入口，等价命令如下：
 
 ```bash
 go test ./...

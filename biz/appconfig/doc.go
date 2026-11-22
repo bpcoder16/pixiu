@@ -39,7 +39,7 @@
 // 如果环境已由其他启动入口初始化，本入口会 panic 并保留原环境。
 // 返回的配置由调用方持有，修改后不会自动更新全局环境，配置并发读写由调用方协调。
 // 加载不修改 time.Local 或 Gin 模式，也不初始化日志或其他组件。
-// NewHTTPService 和 NewGinEngine 分别读取 http.yaml 和 gin.yaml。
+// NewGinEngine 读取 gin.yaml；标准 HTTP 服务的监听配置由宿主读取。
 //
 // appconfig.LogConfig 只在此解析；biz/bootstrap 校验并应用日志默认值，不回写配置。
 // Logger 固定使用 rotatefile；format 必须显式设置，目录默认 ./log、轮转周期 1h、每个文件保留 48 份。
