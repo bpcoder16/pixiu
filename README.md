@@ -173,7 +173,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | --- | --- | --- |
 | [`biz/common`](biz/common/doc.go) | 按应用时区生成 ID、格式化时间，int64 万分之一整数与百分比精确互转，名称脱敏 | 常规业务工具；ID 与时间依赖 env，百分比支持负数，MaskName 支持自定义符号 |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
-| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin / HTTP / Cron 服务构造、NATS 消费配置装配与显式 MySQL / PostgreSQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
+| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin Engine、标准 HTTP 服务构造、NATS 客户端装配与显式 MySQL / PostgreSQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
 | [`biz/ossservice`](biz/ossservice/doc.go) | multipart 上传、指定对象的 STS 凭据签发、URL 内容 MD5 | 上传需要 OSS，签发另需 STS；MD5FromURL 为独立包函数，无需客户端 |
 | [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
 | [`biz/appconfig`](biz/appconfig/doc.go) | 严格解析环境、日志与常驻服务禁用列表，返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/appconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
@@ -181,7 +181,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
 | [`biz/outbox`](biz/outbox/doc.go) | MySQL/PostgreSQL 自增任务 ID、同事务入表、行锁并发发送、外部 cron 补偿与过期失败 | 数据库提交后的可靠发送意图 |
 
-新宿主使用 Baize 的 `bootstrap/realtimeboot.Service` 装配 Realtime，使用 `bootstrap/outboxboot.PrepareJetStream` 装配 JetStream Outbox。[Baize v0.1.0](https://github.com/bpcoder16/baize/tree/v0.1.0)
+新宿主通过 Baize 的 `httpboot.Gin`、`cronboot.Service` 和 `natsboot.ConsumerService` 装配 Gin HTTP、Cron 和 NATS 消费服务，使用 `bootstrap/realtimeboot.Service` 装配 Realtime，使用 `bootstrap/outboxboot.PrepareJetStream` 装配 JetStream Outbox。[Baize v0.1.0](https://github.com/bpcoder16/baize/tree/v0.1.0)
 
 ## 分层架构
 
@@ -267,8 +267,6 @@ NewHTTPService 构造不监听，Start 接管服务与信号；Stop 统一封闭
 
 使用 Gin 时，在初始化环境后显式调用 `gin.SetMode(env.RunMode())`，通过 `bootstrap.NewGinEngine()` 构造 Engine，注册业务路由，再将 Engine 传给 `bootstrap.NewHTTPService`。需额外导入 Gin 和 `infra/env`；将 [`gin.yaml`](biz/bootstrap/conf.example/gin.yaml) 放在同一配置目录。文件必须存在，内容为 `{}` 时沿用默认值。
 
-也可在 `Start` 的服务构造函数中调用 `bootstrap.NewGinHTTPService(registerRoutes, modules...)`：它设置 Gin 模式、读取 `gin.yaml` 和 `http.yaml`，在 Engine 与文档路由创建成功后调用业务路由注册回调，并返回 `apprun.Service`。构造仍不监听端口，须在启动阶段串行调用；完整装配示例见 [bootstrap 文档](biz/bootstrap/doc.go)。
-
 `NewGinEngine` 根据应用环境决定文档路由：
 
 - **debug/test**：自动注册 OpenAPI 与内嵌的 Stoplight Elements。应用须先使用 Swag CLI 生成文档（例如 `swag init -o ./openapi`），并在入口 blank import 生成包；未注册文档时构造返回错误。默认页面为 `/docs`，文档为 `/openapi/doc.json`。
@@ -348,9 +346,7 @@ PostgreSQL 项目将示例中的 MySQL 声明替换为 `bootstrap.MustRegisterPo
 
 此示例只展示初始化；常驻 HTTP 应用还需接入上面的服务管理器。`MustRegisterNATS` 声明实例，`MustBaseInit` 只完成连接初始化，不会自动准备 Stream 或启动消费。
 
-需要消费时，通过 `natsx.MustNewJetStreamHandlerRegistry` / `MustNewCoreHandlerRegistry` 登记 Handler，在 `Start` 工厂中返回 `bootstrap.NewNATSConsumerService(instanceName, jetStreamHandlers, coreHandlers)`。消费清单见 [NATS 消费配置](biz/bootstrap/conf.example/nats-register.example.yaml)；消费者在服务运行时注册，与 HTTP/Cron 共用停机预算。JetStream 按 Handler 返回结果确认或重投，业务应保证幂等，不自行 ACK / NAK / Term；注册失败应中止启动。
-
-NATS 连接文件可配置 `namespace` 和 `loggerName`。配置装配、注册限制及各组件日志默认值见 [`bootstrap` 包文档](biz/bootstrap/doc.go)，主题映射与消息处理契约见 [`natsx` 包文档](infra/natsx/doc.go)。
+NATS 连接文件可配置 `namespace` 和 `loggerName`。连接装配及日志默认值见 [`bootstrap` 包文档](biz/bootstrap/doc.go)，主题映射与消息处理契约见 [`natsx` 包文档](infra/natsx/doc.go)。
 
 OSS 上传与临时凭据签发可通过 [`biz/ossservice`](biz/ossservice/doc.go) 组合已有 OSS、STS 客户端，应用负责文件校验、Key 生成和记录保存。各阿里云组件的连接参数与默认值见上方配置模板及模块导航中的包文档。
 
@@ -393,9 +389,7 @@ go test -tags="$BOOTSTRAP_TAGS" ./...
 
 禁用后，基础 `MustRegisterXxx(name, isDefault)` 方法仍保留，显式调用立即 panic 并指出对应标签；基础初始化跳过该模块，不读取其配置或登记关闭。
 
-涉及 SDK 类型的专用 API 随模块排除：禁用 MySQL 时没有 `RunMySQLInitialization`；禁用 PostgreSQL 时没有 `RunPostgreSQLInitialization`；只有两者都禁用才排除共享的 `SeedOptions` 和迁移核心依赖；禁用 Redis 时没有 `MustRegisterRedisLock`；禁用 NATS 时没有 `NewNATSConsumerService`。应用仍调用这些入口时会编译失败，应一并移除或用对应构建约束隔离相关业务文件。
-
-日志、时区、HTTP/Gin 和普通 Cron 保留。禁用 Redis 后，Cron 配置中出现非空 `lock`（包括 `{}`）会明确返回标签错误，不会降级为无锁执行；省略 `lock` 或配置 `lock: null` 不受影响。
+涉及 SDK 类型的专用 API 随模块排除：禁用 MySQL 时没有 `RunMySQLInitialization`；禁用 PostgreSQL 时没有 `RunPostgreSQLInitialization`；只有两者都禁用才排除共享的 `SeedOptions` 和迁移核心依赖；禁用 Redis 时没有 `MustRegisterRedisLock`。应用仍调用这些入口时会编译失败，应一并移除或用对应构建约束隔离相关业务文件。
 
 标签只排除 bootstrap 引入的依赖，不删除 `go.mod` 中的模块；其他已启用组件共享的依赖、应用自身直接导入的 SDK 或适配包仍会参与编译。在 Pixiu 库仓库执行 `go build -tags=... ./...` 仍会构建独立的 infra 适配包；裁剪应用应针对业务入口构建。
 
@@ -751,7 +745,7 @@ func run() error {
 | 文件轮转 | 路径必须为绝对路径，同一路径由一个 Writer 管理。进入新时段后的首次 Write 触发轮转，每小时整点清理旧文件，清理完成前文件数可能暂时超过保留上限；旧文件异步 Sync / Close，Writer 的 Sync / Close 等待收尾。 |
 | 日志详情 | 各适配包的日志开关与默认值见包文档。开启 Header / Body / SQL / 命令参数等详情时，按包契约保留完整内容，应用需决定记录范围及敏感数据策略。 |
 | 数据库读写 | 事务与要求读己之写的查询显式使用主库；可接受延迟的读取可选择从库。模型迁移由应用决定。 |
-| Redis 锁 | `biz/lockx/redislock` 使用固定租期；Cron 通过 bootstrap 组合 gocron-redis-lock 的自动续租。同一资源的竞争者使用相同实现与协议，业务自行响应取消，并结合幂等、事务或数据端版本约束保护结果。 |
+| Redis 锁 | `biz/lockx/redislock` 使用固定租期。同一资源的竞争者使用相同实现与协议，业务自行响应取消，并结合幂等、事务或数据端版本约束保护结果。 |
 | JWT 验签 | 实例固定算法与密钥。每次验签使用新的空 claims 对象，仅在 `Verify` 返回 nil 后使用身份字段；失败时丢弃可能已解码的不可信内容。HTTP 认证可组合 httpauth / ginauth，会话刷新、撤销与授权规则由应用处理。 |
 | 应用退出 | 先停止入口与生产者，等待任务结束，再关闭下游资源，最后关闭日志。`lifecycle.Stack` 逆序关闭资源，所以日志关闭函数应先登记。 |
 
@@ -771,19 +765,15 @@ make test
 make test-race
 ```
 
-`make test` 和 `make test-race` 是完整测试入口，依次运行默认构建、NATS 配置注册集成测试和 bootstrap 构建标签矩阵。矩阵覆盖八个单独禁用、全部禁用及 Redis/NATS 组合，检查注册错误、生产依赖和 HTTP/Cron 基础行为，并验证仅保留 PostgreSQL 时的数据库装配。CI 可直接使用这两个入口，等价命令如下：
+`make test` 和 `make test-race` 是完整测试入口，依次运行全量包测试和 bootstrap 构建标签矩阵。矩阵覆盖八个单独禁用、全部禁用及 Redis/NATS 组合，检查注册错误、生产依赖和 HTTP 基础行为，并验证仅保留 PostgreSQL 时的数据库装配。CI 可直接使用这两个入口，等价命令如下：
 
 ```bash
 go test ./...
-go test -tags=natsintegration ./biz/bootstrap -run '^TestNATSFromConfig$'
 make test-bootstrap-tags
 
 go test -race ./...
-go test -race -tags=natsintegration ./biz/bootstrap -run '^TestNATSFromConfig$'
 make test-bootstrap-tags BOOTSTRAP_TEST_FLAGS=-race
 ```
-
-NATS 集成测试与被测代码保持同目录，通过 `natsintegration` build tag 编入内嵌服务端，无需预先安装服务端或在测试中另行构建可执行文件。常规测试不编入该组用例；带标签的第二轮仅运行 `TestNATSFromConfig`，其中不调用会修改 `time.Local` 的 `MustBaseInit`。不要使用 `go test -tags=natsintegration ./...` 混跑全部用例，否则 macOS 上服务端初始化的后台采样可能与时区初始化测试发生竞争。直接执行 `go test ./...` 或 `go test -race ./...` 只完成第一轮。
 
 开发时遵循以下约定：
 
@@ -794,8 +784,6 @@ NATS 集成测试与被测代码保持同目录，通过 `natsintegration` build
 5. 日志或轮转热路径变更需运行与功能等价的性能基准，保留正确性门禁和原始结果。
 
 数据库、Redis 和 Elasticsearch 的真实服务验证需要相应环境；具体条件与跳过行为以各包测试为准。全量构建包含 SQLite 驱动，需要 CGO 与 C 编译器。
-
-Cron 的真实 Redis 验收通过 `PIXIU_CRON_REDIS_ADDR` 指定独立测试实例的 `host:port`，然后执行 `go test ./biz/bootstrap -run TestCronRedisLeaseAndDrain`（也支持 `-race`）。测试使用随机 key 前缀，验证两个调度器互斥、跨 TTL 续租及停机解锁；未设置地址时跳过该项。
 
 ### 文档入口
 

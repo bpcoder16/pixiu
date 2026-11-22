@@ -15,7 +15,5 @@ func TestBootstrapWithoutRedis(t *testing.T) {
 		"github.com/bpcoder16/pixiu/infra/redisx",
 		"github.com/bpcoder16/pixiu/biz/lockx/redislock",
 		"github.com/redis/go-redis/",
-		"github.com/go-co-op/gocron-redis-lock/",
-		"github.com/go-redsync/",
 	)
 }

@@ -14,7 +14,7 @@
 //	_ = env.RootDirPath()
 //
 // 文件读取复用 infra/configx.Parse，支持 YAML、TOML、JSON，未知字段和弱类型转换报错。
-// 顶层 disabledServices 接受服务类型或“类型:实例名”。例如 [cron, "nats-consumer:orders"] 跳过 Cron 和 orders 消费者。
+// 顶层 disabledServices 接受服务类型或“类型:实例名”。例如 [cron, "nats-consumer:orders"] 跳过宿主登记的同类型或同名服务。
 // 类型对应 ServiceHTTP、ServiceCron 和 ServiceNATSConsumer。省略或空列表时按代码声明启动。
 // 将 cfg 传给 bootstrap.MustBaseInit 或 MustBaseInitWithoutLogit 后生效。
 // 顶层 resourceCloseTimeout 控制整个资源栈的回收期限。宿主创建栈时传给 lifecycle.New(cfg.ResourceCloseTimeout)。
@@ -39,7 +39,7 @@
 // 如果环境已由其他启动入口初始化，本入口会 panic 并保留原环境。
 // 返回的配置由调用方持有，修改后不会自动更新全局环境，配置并发读写由调用方协调。
 // 加载不修改 time.Local 或 Gin 模式，也不初始化日志或其他组件。
-// HTTP、Gin、Cron 由 bootstrap 从各自的独立文件读取，app 文件不接受 http/gin/cron 段。
+// NewHTTPService 和 NewGinEngine 分别读取 http.yaml 和 gin.yaml。
 //
 // appconfig.LogConfig 只在此解析；biz/bootstrap 校验并应用日志默认值，不回写配置。
 // Logger 固定使用 rotatefile；format 必须显式设置，目录默认 ./log、轮转周期 1h、每个文件保留 48 份。

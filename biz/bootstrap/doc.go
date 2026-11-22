@@ -1,5 +1,5 @@
 // Package bootstrap 提供日志、MySQL、PostgreSQL、Redis、Elasticsearch、OSS、STS、阿里云 ES 和 NATS 多实例的通用初始化入口，
-// 以及应用运行管理器、Gin Engine、HTTP 和 Cron 服务的构造方法，供项目自己的 bootstrap 组装。
+// 以及应用运行管理器、Gin Engine 和 HTTP 服务的构造方法，供项目自己的 bootstrap 组装。
 //
 // # 可选构建标签
 //
@@ -11,8 +11,8 @@
 //   - pixiu_bootstrap_no_aliyun_es：阿里云 ES 管理端，与 Elasticsearch 数据面独立。
 //   - pixiu_bootstrap_no_mysql：MySQL 及对应的迁移、种子初始化入口。
 //   - pixiu_bootstrap_no_postgresql：PostgreSQL 及对应的迁移、种子初始化入口。
-//   - pixiu_bootstrap_no_redis：Redis、RedisLock 装配及 Cron 的 Redis 分布式锁。
-//   - pixiu_bootstrap_no_nats：NATS 客户端装配、消费服务及注册配置解析。
+//   - pixiu_bootstrap_no_redis：Redis 和 RedisLock 装配。
+//   - pixiu_bootstrap_no_nats：NATS 客户端装配。
 //
 // 在业务应用包含 main 包的入口目录执行：
 //
@@ -34,13 +34,11 @@
 // 禁用 MySQL 时，RunMySQLInitialization 不参与构建；
 // 禁用 PostgreSQL 时，RunPostgreSQLInitialization 不参与构建。
 // 只有同时禁用两者时才排除共享的 SeedOptions 和迁移核心依赖；
-// 禁用 Redis 时没有 MustRegisterRedisLock；禁用 NATS 时没有 NewNATSConsumerService。
+// 禁用 Redis 时没有 MustRegisterRedisLock。
 // 任一数据库可用时保留 MustRegisterOutbox；同时禁用两种数据库时排除全部 Outbox 装配入口。
 // 选择被禁用的数据库后端在声明时 panic。
 // 数据库标签同时裁剪 outbox 对应驱动的错误适配，outbox.NewStore 拒绝被禁用的后端。
 // 仍调用这些专用 API 的应用会编译失败，须移除相关调用或用对应构建约束隔离业务文件。
-// 日志、时区、HTTP/Gin 和普通 Cron 保留；禁用 Redis 后配置非空 Cron lock（含 {}）会明确报错，
-// 不降级为无锁执行；省略 lock 或设为 null 不受影响。
 // 共享依赖和应用直接导入的适配包不受这些标签控制，go.mod 也不会因此移除 SDK。
 // 在库仓库构建 ./... 仍会编译独立的 infra 适配包；应用裁剪须针对业务入口。
 // 在 Pixiu 仓库执行以下命令验证标签矩阵；完整入口 make test 与 make test-race 已包含对应检查：
@@ -80,9 +78,9 @@
 //
 // 示例使用标准库 context、errors、time，以及 pixiu 的 biz/appconfig、biz/bootstrap、biz/lockx/redislock、
 // lifecycle、logit。初始化 panic 原样传播，已创建资源由应用的 defer 关闭。
-// 通用入口接收 *appconfig.AppConfig；HTTP 与 Cron 共用 env/log 配置及初始化流程。
+// 通用入口接收 *appconfig.AppConfig。
 // 先应用 env 时区，再依次初始化日志、OSS、STS、阿里云 ES、MySQL、PostgreSQL、Redis、Elasticsearch 和 NATS；
-// 共享客户端仅初始化已声明的实例。HTTP、Cron 和 NATS 消费者完成排空或超时取消后，
+// 共享客户端仅初始化已声明的实例。宿主运行的服务完成排空或超时取消后，
 // 资源栈依次关闭 NATS、Elasticsearch、Redis、PostgreSQL、MySQL、阿里云 ES、STS、OSS、日志。
 // 该顺序按组件类别描述，不保证同一组件内多个命名实例的关闭顺序。
 //
@@ -141,9 +139,9 @@
 //
 // 此示例另用标准库 net/http 和 pixiu 的 infra/apprun；handler 由应用提供，http.yaml 从 env.ConfigDirPath() 读取。
 // ServiceFactory 的签名为 func() (apprun.Service, error)，Start 按传入顺序同步构造并登记，全部成功后运行。
-// 在 app.yaml 设置 disabledServices: [cron, "nats-consumer:orders"] 可跳过 Cron 与 orders 消费者。
+// Start 可按 disabledServices 跳过宿主工厂返回的服务，例如 cron 和 nats-consumer:orders。
 // 可选类型为 http（含 Gin HTTP）、cron、nats-consumer；类型匹配全部实例，类型:实例名精确匹配。
-// HTTP 和 Cron 的内置入口使用单服务名 http、cron。Start 也按工厂返回的最终服务名匹配，例如 http:aaa。
+// NewHTTPService 使用服务名 http。Start 也按工厂返回的最终服务名匹配，例如 http:aaa。
 // 两种基础初始化入口均保存禁用列表。共享 NATS 客户端仍按声明初始化。
 // 内置构造入口匹配时在读取专属配置前返回 ErrServiceDisabled。工厂包装或合并错误时，
 // 只有所有原因都匹配 ErrServiceDisabled 才会继续启动后续服务。若名称由工厂在构造后指定，
@@ -166,25 +164,6 @@
 //		c.Status(http.StatusNoContent)
 //	})
 //	return start(engine)
-//
-// 常用 Gin HTTP 装配可直接使用 NewGinHTTPService，由其设置模式并读取两份配置；
-// 业务只提供路由注册回调和文档模块，通过 Start 接管运行（另需导入 infra/ginx）：
-//
-//	func startGin() error {
-//		return bootstrap.Start(func() (apprun.Service, error) {
-//			return bootstrap.NewGinHTTPService(func(r *gin.Engine) {
-//				r.GET("/healthz", func(c *gin.Context) {
-//					c.Status(http.StatusNoContent)
-//				})
-//			},
-//				ginx.OpenAPIModule{Name: "app", Title: "App"},
-//				ginx.OpenAPIModule{Name: "admin", Title: "Admin"},
-//			)
-//		})
-//	}
-//
-// 回调在 Engine 和文档路由创建成功后同步调用一次，nil 表示不注册业务路由。
-// NewGinHTTPService 须在启动阶段串行调用，运行期间不得借此切换 Gin 全局模式。
 //
 // NewGinEngine 从 env.ConfigDirPath() 下的 gin.yaml 读取一次配置，再调用 ginx.New。
 // 文件必需，{} 沿用默认值：不信任代理、记录访问日志、不记录请求或响应详情。
@@ -224,69 +203,6 @@
 // 直接使用管理器时，进入有效 Run 前的构造或登记失败由调用方逆序关闭全部已构造服务（含已登记服务）。
 // 运行后由管理器关闭，不重复登记到资源栈。
 // 排空超时取消剩余任务、关闭未完成普通连接，然后由入口有界回收资源并退出进程。
-//
-// Cron 独立加载 cron.yaml，通过任务名绑定业务方法；不需要 HTTP/Gin 配置。
-// 包级具名函数可通过 infra/cronx 在业务包中批量声明，无需为每个任务编写 init：
-//
-//	func Heartbeat(ctx context.Context) error {
-//		logit.Info(ctx, "heartbeat")
-//		return nil
-//	}
-//
-//	var Registry = cronx.MustNewHandlerRegistry(
-//		Heartbeat,
-//	)
-//
-// 构造服务时调用 NewCronService(Registry.Handlers()...)，示例自动名称为 Heartbeat。
-// 注册器只登记元数据、不读配置或执行任务，各实例独立，Handlers 返回副本。
-// 零值 cronx.HandlerRegistry 也可直接使用；MustRegister(handler, name) 支持显式稳定名称，
-// 适用于闭包、方法值、泛型函数和需要保持 YAML/锁标识兼容的重命名。
-// 自动名称保留包级函数名的大小写，配置中的 name 必须与之完全一致；nil、无法自动取名、非法名称及重名均 panic。
-// 登记与读取快照可并发，首次使用后不得复制注册器；登记不会更新已构造的 Scheduler。
-//
-// 也可直接传入带有稳定名称的 cronx.NamedHandler；以下示例只在 jobs 中启用 scan-orders：
-//
-//	service, err := bootstrap.NewCronService(cronx.NamedHandler{
-//		Name: "scan-orders",
-//		Handler: func(ctx context.Context) error {
-//			logit.Info(ctx, "scan orders")
-//			return nil
-//		},
-//	})
-//	if err != nil {
-//		return err
-//	}
-//	manager, err := bootstrap.NewAppManager(40 * time.Second)
-//	if err != nil {
-//		_ = service.Stop()
-//		service.Cancel()
-//		return err
-//	}
-//	if err := manager.Register(service); err != nil {
-//		_ = service.Stop()
-//		service.Cancel()
-//		return err
-//	}
-//	return manager.RunSignals()
-//
-// 此示例使用标准库 context、time；cron.yaml 中只配置 scan-orders 或补齐其他 Handler，模板见 conf.example/cron.yaml。
-// 代码可以注册全部 Handler，jobs 只列出需要启用的任务；引用未注册的名称会报绑定错误。
-// 注释或删除某个 job 后重启即可停用，全部注释或 jobs: [] 时允许零任务运行。
-// 任务支持六字段 Cron、固定 every、随机 randomEvery，三者互斥；关闭由 Stop、Wait(ctx)、Cancel 组成，不设置组件级排空预算。
-// every 与 randomEvery.min 最短均为 100ms，小于下限时构造报错。
-// 默认管理器的 30s 可覆盖独立 Cron；上例保留显式 40s 作为自定义预算的用法。
-// 使用默认预算时，可通过 ServiceFactory 直接构造 Cron 服务：
-//
-//	return bootstrap.Start(func() (apprun.Service, error) {
-//		return bootstrap.NewCronService(Registry.Handlers()...)
-//	})
-//
-// NewCronService 读取调度配置并绑定 Handler，构造错误原样返回，成功后由管理器接管运行与关闭。
-// lock 段存在时通过已初始化的命名 Redis 构造 gocron-redis-lock，配置 TTL 与自动续租；
-// 任务须设置正 timeout。仅在租约有效时互斥，不保证每周期一次，失租不自动取消业务。
-// 混合运行统一停收所有服务、共享一个排空期限；资源栈在正常完成或超时取消后执行。
-// 具体独立与混合运行样例后续在 pixiu-demo 中引入。
-// Wait 超时后仍可能有业务运行；Cancel 不保证业务已结束，入口回收资源后退出。
 //
 // 初始化最先将 time.Local 设置为 env.TimeLocation()，随后创建日志及轮转资源。
 // 配置加载只发布环境，设置默认时区由本包负责；必须在并发使用时间或日志前执行。
@@ -392,7 +308,6 @@
 // 未声明时跳过。模板见 conf.example/nats.example.yaml；文件不接受 name、isDefault。
 // loggerName 指定连接及消费链路的命名 Logger；模板为 nats，须在 app.yaml 的 log.names 中声明。
 // 省略、null、空值或名称未注册时回退默认 Logger；HTTP/Cron 发布仍跟随调用方 ctx。
-// 消费者通过 NewNATSConsumerService 纳入 Start，与 HTTP/Cron 同时停收，登记顺序不保证业务依赖。
 // 全部服务共享总关闭预算；ErrShutdownTimeout 时取消剩余任务，入口仍执行资源栈回收，普通错误沿用管理器和资源栈汇总。
 // 转换阶段检查 URL 解析及内嵌凭据，通用参数由 natsx 在构造时校验；
 // 入口须在初始化前登记资源栈 defer，后续实例校验失败时也回收已创建的客户端。
@@ -404,89 +319,7 @@
 // 超时零值使用 natsx 默认值，负值无效；connectTimeout 默认 5s，是单次拨号期限。
 // drainTimeout 默认 10s，仅用于底层连接 Drain；closeTimeout 默认 20s，限制完整关闭流程。
 // jetStream.publishAsyncTimeout 默认 5s，只限制默认上下文的异步 PubAck 等待。
-// 连接成功不代表 JetStream 已启用或业务权限已验证。迁移和 Handler 依赖就绪后，
-// NewNATSConsumerService 读取独立的 nats-register.<name>.yaml 并绑定 Handler，
-// 构造错误原样返回；Run 调用 natsx 的三个注册入口：
-//
-//	jsHandlers := natsx.MustNewJetStreamHandlerRegistry()
-//	jsHandlers.MustRegister(func(ctx context.Context, msg jetstream.Msg) error {
-//	    // 完成本条业务后返回；组件根据结果 ACK 或重投。
-//	    return nil
-//	}, "HandleOrderCreated")
-//	coreHandlers := natsx.MustNewCoreHandlerRegistry()
-//	coreHandlers.MustRegister(func(ctx context.Context, msg *nats.Msg) error {
-//	    return nil
-//	}, "HandleConfigRefresh")
-//	return bootstrap.Start(func() (apprun.Service, error) {
-//		return bootstrap.NewNATSConsumerService("orders", jsHandlers, coreHandlers)
-//	})
-//
-// 示例需导入 context、infra/apprun、infra/natsx、nats.go 和 nats.go/jetstream，并已初始化 orders 命名客户端及配置环境。
-// 客户端未登记或 CloseAll 开始后查询沿用 natsx.Named 的 panic；配置错误由构造返回，注册失败由 Run 返回。
-// 调用方无论排空结果都回收资源；Run/Stop/Wait/Cancel 分工，启动失败也收尾已启动消费。
-// 服务的 Cancel 先复用 Stop，再取消剩余消费；可直接或重复调用，不关闭共享连接。
-// Start 并发运行服务，登记顺序不规定停机依赖。手动注册可使用 natsx 的集中注册入口，资源回收前通过 StopConsumers、WaitConsumers 和必要的 CancelConsumers 处理消费。
-// Stop 取消注册中的资源请求和 Core Flush。Core 注册的等待上限为 10 秒。
-// Client 关闭状态在配置预检后交给 natsx 注册入口校验；长期 Handler 使用独立消息 context。
-// 文件可使用 conf.example/nats-register.example.yaml，保留示例已登记的 Handler 对应项。
-// JetStream 消费者配置在 streams[].consumers，自动继承父级 name；可配置多个消费者或只声明 Stream。
-// 每项 Stream 的 mode 省略/null 默认 create，同配置复用、冲突报错；upsert 使用完整配置创建或更新。
-// existing 只读取已有 Stream 信息，缺失或查询失败阻止启动；三种模式均注册其 consumers。
-// create/upsert 必填 subjects；existing 只需 name/mode/consumers，不填充 Stream 默认值。
-// existing 拒绝非空 subjects 及显式非 null 的 replicas/maxBytes/retention/maxAge/duplicates。
-// Stream 的 mode 与各 Consumer 的 mode 独立配置，不支持全局默认或继承，空字符串及未知值拒绝。
-// streams[].consumers[].mode 省略/null 默认 create，同配置复用、冲突报错；upsert 创建或更新，不支持 existing。
-// Consumer upsert 先应用 Default 再覆盖显式字段，提交完整配置，非字段合并；更新限制由服务端校验。
-// 在单个 durable 条目下添加 mode: upsert 即可启用，保留已有 Durable 的消费进度，不删除重建。
-// 旧顶层 jetStreamConsumers 和消费者的 stream 字段须移除，否则严格解析报错。
-// 消费者的可选参数注释同样位于 consumers 项内，按需取消注释即可使用。
-// 注册文件不接受 namespace；该值统一来自 nats.<name>.yaml 的客户端配置。
-// 例如 namespace: test1 时，Stream 名称及引用 ORDERS 变为 TEST1_ORDERS，Durable worker 变为 test1_worker；
-// Core name、非空 queue 同样添加 test1_；subjects、filterSubjects、Core subject 添加 test1.。
-// 通配主题 orders.> 变为 test1.orders.>；空 queue 保持广播，空过滤列表仍消费整个 Stream。
-// 配置填写原始名称，Handler 引用不加前缀；消费者继承的 Stream 名称由注册入口添加一次前缀。
-// 发布和 Request 同样传入原始主题，例如 orders.created；Client 自动发送到 test1.orders.created。
-// 回调、日志和原生返回值保留前缀；Request 回复用 Msg.Respond，不改写回复 inbox。
-// Conn()/JetStream() 原生入口不添加前缀；旧注册文件中的 namespace 须移至连接文件，否则严格解析报错。
-// 修改 namespace 后使用新的资源名称，旧 Stream/Durable 不自动迁移或删除。
-// 升级时须修改含连字符的 namespace；旧 Stream 若仍占用相同主题，新 Stream 会因主题重叠而创建失败，须显式迁移。
-// 包级具名函数可直接传入构造器，自动名称保留大小写；方法值、闭包、泛型函数必须显式命名。
-// streamDefaults.replicas 可省略或为 null，沿用当前实例初始化时 nats.<name>.yaml 中 urls 的条目数。
-// streamDefaults 整体省略、null 或空对象同样回退；显式 replicas 解码后必须为正整数，0 或负数报错。
-// 自动计数不去重、不计入自动发现节点、不重读连接文件；直接创建命名客户端时采用 natsx.Config.URLs 的数量。
-// urls 仅列种子地址、使用代理入口或需要不同副本策略时应显式配置；最终全局值即使没有 Stream 也校验。
-// 逐项 replicas 解码后非 nil 且大于零时覆盖，否则继承；解码及数字转换沿用 configx。
-// 逐项 replicas 不得超过显式或自动推导的全局值，超限时在注册任何资源前返回错误。
-// create/upsert 的 Stream maxBytes、retention、maxAge、duplicates 可选，省略或 null 沿用 Default（当前为 -1、limits、90 天、2 分钟）。
-// maxBytes 使用整数字节数，例如 104857600 表示 100 MiB；0 或 -1 不设 Stream 容量上限，仍受账户及服务端配额限制。
-// 数字解码沿用 configx，不接受带单位字符串；范围及配额校验交给服务端。
-// retention 只接受 limits、interest、workqueue，非法策略在注册任何资源前报错。
-// 两个时长沿用 configx 解码，推荐 2160h、2m 等 Go 时长字符串；数字按纳秒处理，不支持 d 单位。
-// maxAge 为 0 时不限制消息年龄；duplicates 为 0 时由服务端确定窗口，不代表关闭去重。
-// 时长范围及组合约束由服务端校验；maxAge 大于 0 时，去重窗口不得超过它。
-// JetStream 的 ackWait、backOff、maxDeliver、maxAckPending、consume.workers、consume.maxMessages、retryDelay 可选。
-// 省略或 null 沿用 Default（当前依次为 60s、空列表、5、1000、1、0、0）；consume 整体也可省略或为 null。
-// 时长沿用 configx 的 Go 时长字符串或纳秒数解码；显式值覆盖 Default，交给 natsx 和服务端校验。
-// backOff 支持行内或多行时长列表，例如 ["60s", "5m", "30m"]；空列表保留 Default。
-// 非空 backOff 覆盖 ackWait，按投递次数设置确认超时，列表用尽后重复最后一档，元素范围及列表长度交给服务端校验。
-// 未配置非空 backOff 时 ackWait 必须大于 0；确认超时从投递开始，应覆盖预取等待和业务处理时间。
-// retryDelay 不得为负，0 等待 backOff/ackWait 超时重投，正值在失败后发送固定延迟 NAK，不能与非空 backOff 同用。
-// consume.workers、consume.maxMessages 不得为负；零值分别按 1、有效 workers 的两倍处理。
-// workers 控制本地 Handler 并发，maxMessages 是不含处理中消息的 SDK 预取上限。
-// maxDeliver 包含首次投递；maxAckPending 是同一 Durable 下所有实例合计的未确认消息数上限。
-// coreConsumers 的 queue 非空时，subscribers 省略或 null 默认 1，显式填写须为正整数。
-// 按 subscribers 为当前 Client 建立同组订阅，多订阅 Handler 须支持并发。
-// queue 为空时始终只有一个广播订阅，subscribers 可省略，负数在预检时拒绝。
-// 所有其他运行参数沿用 natsx Default，未引用的 Handler 不启动。
-// 配置层检查全局副本数、Stream mode 及字段组合、create/upsert 的副本数上限、subjects 及 retention、Consumer mode、Core 队列订阅数，
-// 并在注册前绑定全部 Handler。
-// 构造时通过 natsx.ValidateRegistrations 预检全部声明，本地校验失败可修正后重新构造。
-// 三个入口各调用一次，空清单也占用次数，不与手动注册混用。
-// Run 注册期间可能执行业务；失败先由管理器排空已启动消费，再由资源栈收尾，不自动重试或删除远端资源。
-// 修改文件重启生效；删除声明不删除 Durable 或进度。消息协议和业务幂等由应用负责。
-// NATS 消费服务的 Stop 启动消费排空，Wait 等待实际回调结束；期间可查询 Default/Named、发布和请求。
-// 排空完成或超时取消后进入资源回收；资源栈默认总期限 30 秒，可通过 lifecycle.New 自定义。
-// 客户端 CloseTimeout 约束后续异步确认及连接关闭，日志最后关闭。
+// 连接成功不代表 JetStream 已启用或业务权限已验证。
 //
 // 日志固定使用 rotatefile，format 必须显式设置为 text/json；默认启动目录下的 log 目录、每小时轮转、
 // 每个分流文件保留 48 个实际文件。config.Log 可配置 format、caller、dir 目录、names、rotate。

@@ -15,6 +15,5 @@ connectTimeout: "5s"  # 单次拨号超时，默认 5s
 drainTimeout: "10s"   # 底层连接排空超时，默认 10s
 closeTimeout: "20s"   # 客户端关闭的总时限，含排空和等待发布确认，默认 20s
 
-# 消费注册见 nats-register.<实例名>.yaml，其中 streamDefaults.replicas 默认取 urls 的地址数。
 jetStream:
   publishAsyncTimeout: "5s"  # 异步发布等待服务端确认的时限，默认 5s

@@ -6,15 +6,12 @@ BOOTSTRAP_DISABLE_TAGS := pixiu_bootstrap_no_es pixiu_bootstrap_no_aliyun_oss \
 
 .PHONY: test test-race test-bootstrap-tags test-outbox-integration
 
-# NATS 集成测试单独执行，避免服务端的后台采样与 bootstrap 时区初始化测试混跑。
 test:
 	$(GO) test ./...
-	$(GO) test -tags=natsintegration ./biz/bootstrap -run '^TestNATSFromConfig$$'
 	$(MAKE) test-bootstrap-tags
 
 test-race:
 	$(GO) test -race ./...
-	$(GO) test -race -tags=natsintegration ./biz/bootstrap -run '^TestNATSFromConfig$$'
 	$(MAKE) test-bootstrap-tags BOOTSTRAP_TEST_FLAGS=-race
 
 # 显式验收入口必须同时提供两种数据库；测试仅创建随机命名的临时数据库。
@@ -30,7 +27,7 @@ test-bootstrap-tags:
 	for bootstrap_tags in $(BOOTSTRAP_DISABLE_TAGS) "$$bootstrap_all_tags" pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats; do \
 		printf 'bootstrap tags: %s\n' "$$bootstrap_tags"; \
 		$(GO) test $(BOOTSTRAP_TEST_FLAGS) -tags="$$bootstrap_tags" ./biz/bootstrap \
-			-run '^(TestBootstrapWithout|TestCronWithoutRedis|TestCronStandaloneDoesNotNeedHTTPAndShutdownBeforeRun)'; \
+			-run '^TestBootstrapWithout'; \
 	done
 	$(GO) test $(BOOTSTRAP_TEST_FLAGS) -tags=pixiu_bootstrap_no_mysql ./biz/bootstrap -run '^TestPostgreSQL'
 	$(GO) test $(BOOTSTRAP_TEST_FLAGS) -tags=pixiu_bootstrap_no_nats ./biz/bootstrap -run '^TestOutbox'
