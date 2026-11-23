@@ -1,4 +1,4 @@
-package estextsearch_test
+package textsearch_test
 
 import (
 	"bytes"

@@ -1,4 +1,4 @@
-# estextsearch 索引模板
+# textsearch 索引模板
 
 `ik.json` 和 `standard.json` 是独立维护的索引定义，直接编辑 JSON 后创建索引。
 Go 模块仅构建查询 DSL，不生成、读取或校验这些模板，也不处理数据写入。
@@ -13,8 +13,8 @@ Go 模块仅构建查询 DSL，不生成、读取或校验这些模板，也不�
 
 | 入口 | 能力与选择 |
 | --- | --- |
-| `estextsearch.Query("query_text", text)` | 保留整句 OR 分段 AND 的基础能力，包含重复关键词修复 |
-| `estextsearch.QueryExpanded("query_text", text)` | 扩展跨词同义词与编号组合的召回，省去冗余外层分段路径；额外成本由调用方评估 |
+| `textsearch.Query("query_text", text)` | 保留整句 OR 分段 AND 的基础能力，包含重复关键词修复 |
+| `textsearch.QueryExpanded("query_text", text)` | 扩展跨词同义词与编号组合的召回，省去冗余外层分段路径；额外成本由调用方评估 |
 
 全文和包含沿用 ES 原生评分；混合路径中的字面约束使用 filter、不计分。过滤、排序和分页由业务决定。
 
@@ -117,7 +117,7 @@ Query 保留完整普通文本的全文分支，因此可应用跨词同义词�
 ES_URL='http://127.0.0.1:9200'
 curl --fail-with-body -X PUT "$ES_URL/your-project-search-v1" \
   -H 'Content-Type: application/json' \
-  --data-binary @infra/estextsearch/templates/ik.json
+  --data-binary @infra/elasticsearchx/textsearch/templates/ik.json
 ```
 
 使用 Standard 时将文件名替换为 `standard.json`；使用 IK 前安装相应插件。两种配置都须先部署上述词典文件。
@@ -129,7 +129,7 @@ curl --fail-with-body -X PUT "$ES_URL/your-project-search-v1" \
 
 ```bash
 jq '{index_patterns: ["your-project-search-*"], version: 1, template: .}' \
-  infra/estextsearch/templates/ik.json > /tmp/pixiu-estextsearch-index-template.json
+  infra/elasticsearchx/textsearch/templates/ik.json > /tmp/pixiu-estextsearch-index-template.json
 
 curl --fail-with-body -X PUT "$ES_URL/_index_template/your-project-search-v1?create=true" \
   -H 'Content-Type: application/json' \
@@ -188,7 +188,7 @@ Go 单元测试验证 DSL、非法输入、整句/分段组合与并发隔离，
 for analyzer in standard ik; do
   PIXIU_ESTEXTSEARCH_TEST_URL=http://127.0.0.1:9200 \
     PIXIU_ESTEXTSEARCH_TEST_ANALYZER="$analyzer" \
-    go test -race ./infra/estextsearch -run '^TestElasticsearch(Synonyms|Mixed)?Integration$' -count=1 -v
+    go test -race ./infra/elasticsearchx/textsearch -run '^TestElasticsearch(Synonyms|Mixed)?Integration$' -count=1 -v
 done
 ```
 

@@ -1,4 +1,4 @@
-package estextsearch_test
+package textsearch_test
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bpcoder16/pixiu/infra/estextsearch"
+	"github.com/bpcoder16/pixiu/infra/elasticsearchx/textsearch"
 )
 
 func assertJSON(t *testing.T, got map[string]any, want string) {
@@ -32,7 +32,7 @@ func assertJSON(t *testing.T, got map[string]any, want string) {
 
 func mustQuery(t *testing.T, field, text string) map[string]any {
 	t.Helper()
-	query, err := estextsearch.Query(field, text)
+	query, err := textsearch.Query(field, text)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func mustQuery(t *testing.T, field, text string) map[string]any {
 
 func mustQueryExpanded(t *testing.T, field, text string) map[string]any {
 	t.Helper()
-	query, err := estextsearch.QueryExpanded(field, text)
+	query, err := textsearch.QueryExpanded(field, text)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,8 +357,8 @@ func TestQueryLongInputStillUsesContains(t *testing.T) {
 
 func TestQueryValidationAndComposition(t *testing.T) {
 	for name, build := range map[string]func(string, string) (map[string]any, error){
-		"Query":         estextsearch.Query,
-		"QueryExpanded": estextsearch.QueryExpanded,
+		"Query":         textsearch.Query,
+		"QueryExpanded": textsearch.QueryExpanded,
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, text := range []string{"", " \t\n\u3000"} {
@@ -369,12 +369,12 @@ func TestQueryValidationAndComposition(t *testing.T) {
 			}
 			for _, field := range []string{"", " ", "query text", "query_text.*", "query?", "title\x00", "\xff"} {
 				got, err := build(field, "private search")
-				if got != nil || !errors.Is(err, estextsearch.ErrInvalidField) || strings.Contains(err.Error(), "private search") {
+				if got != nil || !errors.Is(err, textsearch.ErrInvalidField) || strings.Contains(err.Error(), "private search") {
 					t.Fatalf("非法字段应报错且不泄漏查询：%v，%v", got, err)
 				}
 			}
 			got, err := build("query_text", "private\xff")
-			if got != nil || !errors.Is(err, estextsearch.ErrInvalidUTF8) || strings.Contains(err.Error(), "private") {
+			if got != nil || !errors.Is(err, textsearch.ErrInvalidUTF8) || strings.Contains(err.Error(), "private") {
 				t.Fatalf("非法 UTF-8 应报错且不泄漏查询：%v，%v", got, err)
 			}
 			text := `a"},"match_all":{}\\`
@@ -402,8 +402,8 @@ func TestQueryValidationAndComposition(t *testing.T) {
 
 func TestQueryResultsAreIndependentAndConcurrent(t *testing.T) {
 	for name, build := range map[string]func(string, string) (map[string]any, error){
-		"Query":         estextsearch.Query,
-		"QueryExpanded": estextsearch.QueryExpanded,
+		"Query":         textsearch.Query,
+		"QueryExpanded": textsearch.QueryExpanded,
 	} {
 		t.Run(name, func(t *testing.T) {
 			initial, err := build("query_text", "personal computer PR-PV02")

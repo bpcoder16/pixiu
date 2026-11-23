@@ -1,4 +1,4 @@
-package estextsearch
+package textsearch
 
 import (
 	"errors"

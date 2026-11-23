@@ -1,14 +1,14 @@
-package estextsearch_test
+package textsearch_test
 
 import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/bpcoder16/pixiu/infra/estextsearch"
+	"github.com/bpcoder16/pixiu/infra/elasticsearchx/textsearch"
 )
 
 func ExampleQuery() {
-	clause, err := estextsearch.Query("query_text", "apple PR-PV02")
+	clause, err := textsearch.Query("query_text", "apple PR-PV02")
 	if err != nil {
 		panic(err)
 	}

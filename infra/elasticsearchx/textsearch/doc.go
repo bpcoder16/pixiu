@@ -1,4 +1,4 @@
-// Package estextsearch 构建短文本检索的 Elasticsearch 查询子句，仅依赖标准库。
+// Package textsearch 构建短文本检索的 Elasticsearch 查询子句，仅依赖标准库。
 // Query(field, text) 提供基础召回，QueryExpanded(field, text) 扩展混合输入的召回。
 // 两个入口均无需初始化或配置对象，不执行网络请求，由调用方选择召回与性能的取舍。
 // 普通关键词、编号、部分词搜索或成本优先时选 Query；单独的跨词同义词查询也可由 Query 支持。
@@ -7,7 +7,7 @@
 //
 // 使用示例：
 //
-//	clause, err := estextsearch.Query("query_text", "apple PR-PV02")
+//	clause, err := textsearch.Query("query_text", "apple PR-PV02")
 //	if err != nil {
 //		return err
 //	}
@@ -27,7 +27,7 @@
 //
 // 需要组合跨词同义词和编号时，可将上述构建调用替换为：
 //
-//	clause, err := estextsearch.QueryExpanded("query_text", "personal computer PR-PV02")
+//	clause, err := textsearch.QueryExpanded("query_text", "personal computer PR-PV02")
 //	if err != nil {
 //		return err
 //	}
@@ -61,4 +61,4 @@
 //
 // templates/ 中的 JSON 由人工独立维护，用于创建索引；Go API 不生成或读取模板。
 // 模板使用说明见 templates/README.md。
-package estextsearch
+package textsearch
