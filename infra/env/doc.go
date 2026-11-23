@@ -39,5 +39,4 @@
 // 再次初始化都返回 ErrAlreadyInitialized。校验失败不发布环境，允许修正后重试。
 // 初始化前调用读取方法会 panic，成功后可并发读取。修改输入配置不会更新环境。
 // 本包不修改 time.Local，不提供重置或热更新，不初始化其他组件。
-// 接入 biz/bootstrap 时，由其在日志初始化前将 time.Local 设置为 TimeLocation()。
 package env

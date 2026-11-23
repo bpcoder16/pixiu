@@ -9,7 +9,7 @@
 // 获取未登记的实例会 panic。启动阶段完成全部登记后再运行业务，不支持配置热切换。
 // 执行器不拥有后端资源，也不提供 Close；应用须先停止业务，再关闭共享客户端。
 // 名称仅选择配置，不参与 key 构造；同一 Redis 数据库的相同 key 在不同执行器之间仍然互斥。
-// 使用 biz/bootstrap 时可由 MustRegisterRedisLock 按代码声明，在 Redis 就绪后统一装配。
+// 使用 Baize 的宿主可通过 redisboot.PrepareLock 在 Redis 就绪后登记命名执行器。
 //
 // 以下示例需导入 context 和 github.com/bpcoder16/pixiu/biz/lockx；
 // locker 由启动流程注入，confirm 为应用提供的业务函数：

@@ -31,6 +31,4 @@
 // NewNamed/NewDefault 仅在启动阶段串行初始化，Named/Default 在未初始化或 CloseAll 后 panic。
 // 共享实例统一关闭 CloseAll；独立 New 的实例自行 Close，不受 CloseAll 影响。
 // Close 幂等且不排空在途请求；先停止并等待使用方，最后关闭日志。
-// biz/bootstrap.MustRegisterAliyunSTS(name, isDefault) 声明实例，
-// MustBaseInit 从 aliyunstsx.<name>.yaml 加载连接配置，并统一登记 CloseAll。
 package stsx

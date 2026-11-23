@@ -53,8 +53,6 @@
 //
 // InstanceID 从旧操作参数移至 Config；ListSynonymsDicts(ctx)、DescribeInstance(ctx) 仅接收 ctx，
 // UpdateSynonymsDictsRequest 仅包含 ClientToken 和 Dicts，查询结果中的 InstanceID 保留服务端值。
-// biz/bootstrap 通过 MustRegisterAliyunES(name, isDefault) 声明实例，
-// MustBaseInit 读取 aliyunesx.<name>.yaml 并创建固定 AK/SK 客户端。
 //
 // NewNamed/NewDefault 仅在启动阶段串行初始化，Named/Default 在未初始化或
 // CloseAll 开始后 panic。共享实例统一登记 CloseAll 至 lifecycle.Stack；

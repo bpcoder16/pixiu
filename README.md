@@ -104,7 +104,7 @@ func main() {
 
 默认全局 Logger 为空操作 Logger：未调用 `SetDefault` 时，日志不输出到 stdout/stderr，所有级别（包括 Fatal）直接返回，`Enabled` 为 false，`Close` 返回 nil。仅使用 `biz/lockx`、`infra/elasticsearchx` 等能力时，无需初始化 logit。需要日志时，在启动阶段通过 `New` / `MustNew` 构造实例并调用 `SetDefault`；也可直接使用独立实例，或通过 `SetNamed` 注册命名 Logger。`WithContext` 的前置约束和 panic 专用接口语义保持不变。
 
-新项目应先完成 `bootstrap.MustBaseInit` 初始化，再通过 `logit.Default()`、`logit.With(...)` 或 `logit.Named(...)` 创建和保存模块 Logger。不要在先于 bootstrap 执行的包变量初始化或 Go 的 `init()` 中缓存这些 Logger：初始化前取到的空操作实例不会随后续 `SetDefault` 或命名注册自动更新。包级 `logit.Info(ctx, ...)` 等方法每次调用时选择当前 Logger，可在初始化完成后直接使用。默认静默便于老项目引入其他 Pixiu 能力，不影响已完成日志初始化的新项目。
+需要缓存模块 Logger 时，应在启动阶段完成 `logit.SetDefault` 或 `logit.SetNamed` 后再获取实例。初始化前缓存的空操作 Logger 会继续保持静默。包级 `logit.Info(ctx, ...)` 等方法在每次调用时选择当前 Logger。
 
 ## 模块导航
 
@@ -173,14 +173,13 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | --- | --- | --- |
 | [`biz/common`](biz/common/doc.go) | 按应用时区生成 ID、格式化时间，int64 万分之一整数与百分比精确互转，名称脱敏 | 常规业务工具；ID 与时间依赖 env，百分比支持负数，MaskName 支持自定义符号 |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
-| [`biz/bootstrap`](biz/bootstrap/doc.go) | 应用时区、日志及多实例初始化，Gin Engine、NATS 客户端装配与显式 MySQL / PostgreSQL 迁移入口 | 声明实例、登记关闭栈；通过 Start 或自持 Manager 运行服务，日志最后关闭 |
+| [`biz/bootstrap`](biz/bootstrap/doc.go) | 从 gin.yaml 构造独立 Gin Engine | 注册业务路由，在 debug/test 环境提供 OpenAPI 文档 |
 | [`biz/ossservice`](biz/ossservice/doc.go) | multipart 上传、指定对象的 STS 凭据签发、URL 内容 MD5 | 上传需要 OSS，签发另需 STS；MD5FromURL 为独立包函数，无需客户端 |
 | [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
-| [`biz/appconfig`](biz/appconfig/doc.go) | 严格解析环境、日志与常驻服务禁用列表，返回配置指针并初始化环境 | 从 [`app.yaml` 模板](biz/appconfig/conf.example/app.yaml) 加载配置，不在 configx 注册全局配置 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，默认及命名执行器，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
 | [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
 
-新宿主通过 Baize 的 `httpboot.Gin`、`cronboot.Service`、`natsboot.ConsumerService` 和 `realtimeboot.Service` 装配常驻服务。事务发件箱使用 Baize 的 `service/outbox`，JetStream 投递通过 `outboxboot.PrepareJetStream` 装配。[Baize v0.1.0](https://github.com/bpcoder16/baize/tree/v0.1.0)
+新宿主使用 Baize 加载应用配置、初始化日志、装配资源和执行数据库迁移，通过 Baize 的 `httpboot.Gin`、`cronboot.Service`、`natsboot.ConsumerService` 和 `realtimeboot.Service` 装配常驻服务。事务发件箱使用 Baize 的 `service/outbox`，JetStream 投递通过 `outboxboot.PrepareJetStream` 装配。[Baize v0.1.0](https://github.com/bpcoder16/baize/tree/v0.1.0)
 
 ## 分层架构
 
@@ -194,13 +193,11 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 
 ## 使用示例
 
-下面的完整示例可分别保存为独立程序，安装相应包后运行。完整配置与边界请阅读对应包文档；应用组合示例可参考 [pixiu-demo](https://github.com/bpcoder16/pixiu-demo)。
+下面的完整示例可分别保存为独立程序，安装相应包后运行。完整配置与边界请阅读对应包文档；新宿主接入示例见 [baize-demo](https://github.com/bpcoder16/baize-demo)。
 
 ### 最小 HTTP 应用
 
-这个示例无需数据库等外部服务，使用标准 `http.Handler` 提供健康检查，并通过管理器接收停机信号、等待 HTTP 排空，最后关闭共享资源与日志。
-
-将 [`app.yaml`](biz/appconfig/conf.example/app.yaml) 和 [`http.yaml`](biz/bootstrap/conf.example/http.yaml) 复制到应用的 `conf/` 目录，修改应用名称。保存以下代码为 `main.go`，安装 `biz/bootstrap` 后执行 `go run .`，再访问 `http://127.0.0.1:8888/healthz`，应返回 HTTP 204；在终端按 Ctrl+C 关闭。
+示例读取 HTTP 监听配置，提供健康检查，并在收到停机信号后等待请求排空。将模板复制为 `conf/http.yaml`，保存以下代码为 `main.go` 后运行 `go run .`。访问 `http://127.0.0.1:8888/healthz` 应返回 HTTP 204，按 Ctrl+C 关闭服务。[HTTP 配置模板](biz/bootstrap/conf.example/http.yaml)
 
 <details>
 <summary>展开完整示例（无需外部服务）</summary>
@@ -212,86 +209,56 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
-	"slices"
 
-	"github.com/bpcoder16/pixiu/biz/appconfig"
-	"github.com/bpcoder16/pixiu/biz/bootstrap"
 	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/httpserver"
-	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
 func main() {
-	if run() != nil {
-		os.Exit(1)
+	if err := run(); err != nil {
+		log.Fatal(err)
 	}
 }
 
-func run() (runErr error) {
-	cfg := appconfig.MustLoadAppConfig("./conf/app.yaml")
-	resources, err := lifecycle.New(cfg.ResourceCloseTimeout)
+func run() error {
+	cfg, err := configx.Parse[httpserver.Config]("./conf/http.yaml")
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if runErr != nil {
-			failure := runErr
-			_ = resources.Register(func() error {
-				log.Printf("server exit: %v", failure)
-				return nil
-			})
-		}
-		runErr = errors.Join(runErr, resources.Close())
-	}()
-	bootstrap.MustBaseInit(cfg, resources)
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	return bootstrap.Start(func() (apprun.Service, error) {
-		if slices.Contains(cfg.DisabledServices, appconfig.ServiceHTTP) {
-			return apprun.Service{}, bootstrap.ErrServiceDisabled
-		}
-		httpCfg, err := configx.Parse[httpserver.Config](filepath.Join(cfg.Env.ConfigDirPath, "http.yaml"))
-		if err != nil {
-			return apprun.Service{}, err
-		}
-		server, err := httpserver.New(*httpCfg, mux)
-		if err != nil {
-			return apprun.Service{}, err
-		}
-		return apprun.Service{
-			Name: appconfig.ServiceHTTP,
-			Run: func() error {
-				err := server.Run()
-				if errors.Is(err, httpserver.ErrClosed) {
-					return nil
-				}
-				return err
-			},
-			Stop:   server.Stop,
-			Wait:   server.Wait,
-			Cancel: server.Cancel,
-		}, nil
-	})
+	server, err := httpserver.New(*cfg, mux)
+	if err != nil {
+		return err
+	}
+	var manager apprun.Manager
+	if err := manager.Register(apprun.Service{
+		Name: "http",
+		Run: func() error {
+			err := server.Run()
+			if errors.Is(err, httpserver.ErrClosed) {
+				return nil
+			}
+			return err
+		},
+		Stop:   server.Stop,
+		Wait:   server.Wait,
+		Cancel: server.Cancel,
+	}); err != nil {
+		return err
+	}
+	return manager.RunSignals()
 }
 ```
 
 </details>
 
-示例由宿主读取监听配置并创建 HTTP 服务，Start 接管服务与信号；Stop 统一封闭入口，Wait 共享 30 秒，超时 Cancel。返回后无论是否排空超时都执行资源栈 Close，默认整体最多等待 30 秒。库不退出进程，应用 main 在有界收尾后退出。
-
-通过 bootstrap 初始化后，业务日志默认写入 `<dir>/<appName>/biz/` 下的 `debug.log`、`info.log`、`wf.log`，分别对应 Debug、Info 和 Warn / Error / Fatal；命名 Logger 增加 `<name>.` 文件前缀。`dir` 默认 `./log`，相对应用启动目录解析；release 输出 Info 及以上，debug/test 输出 Debug 及以上。
-
-`log.hookStd` 省略时默认开启，模板也显式开启：stdout / stderr 原始输出分别追加到 `<dir>/<appName>/std/stdout.log` 和 `stderr.log`，文件不轮转，重定向持续至进程退出。该能力仅支持 Linux/macOS；其他平台或需要保留终端标准输出时，在 `app.yaml` 的 `log` 段显式设置 `hookStd: false`。业务日志仍按上述文件分流。
-
 ### Gin 与 OpenAPI 文档
 
-使用 Gin 时，在初始化环境后显式调用 `gin.SetMode(env.RunMode())`，通过 `bootstrap.NewGinEngine()` 构造 Engine，注册业务路由，再将 Engine 作为上例中 `httpserver.New` 的 Handler。需额外导入 Gin 和 `infra/env`；将 [`gin.yaml`](biz/bootstrap/conf.example/gin.yaml) 放在同一配置目录。文件必须存在，内容为 `{}` 时沿用默认值。
+将 `gin.yaml` 放入 `env.Init` 指定的配置目录，文件内容为 `{}` 时使用默认值。初始化环境后调用 `gin.SetMode(env.RunMode())`，通过 `biz/bootstrap` 的 `NewGinEngine()` 创建 Engine。注册业务路由后，将 Engine 传给上例中的 `httpserver.New`。[Gin 配置模板](biz/bootstrap/conf.example/gin.yaml)
 
 `NewGinEngine` 根据应用环境决定文档路由：
 
@@ -304,144 +271,13 @@ func run() (runErr error) {
 
 文档页面、JSON 端点和内嵌静态资源的 GET 路由会自动跳过 ginx 访问日志、请求和响应详情采集及 `Observe`，仍保留请求作用域、组中间件与 Recovery。`gin.yaml` 模板默认保留普通访问日志，关闭请求和响应详情。已复制旧模板的服务需自行将 `logRequestInfo`、`logResponseInfo` 改为 `false`。其他需要跳过观察的路由可通过 `ginx.RegisterIgnoredRoute` 显式登记。
 
-### 应用配置与多实例初始化
+### MySQL / PostgreSQL 表结构迁移与种子
 
-将 [`app.yaml`](biz/appconfig/conf.example/app.yaml) 复制到应用的 `conf/app.yaml`。按下表选择组件并复制模板到同一配置目录，填写实际连接信息；完整示例使用其中七个组件：
-
-| 声明 | 配置文件 | 模板 |
-| --- | --- | --- |
-| `MustRegisterMySQL("orders", true)` | `conf/mysql.orders.yaml` | [MySQL](biz/bootstrap/conf.example/mysql.example.yaml) |
-| `MustRegisterPostgreSQL("orders", true)` | `conf/postgresql.orders.yaml` | [PostgreSQL](biz/bootstrap/conf.example/postgresql.example.yaml) |
-| `MustRegisterRedis("cache", true)` | `conf/redis.cache.yaml` | [Redis](biz/bootstrap/conf.example/redis.example.yaml) |
-| `MustRegisterElasticsearch("search", true)` | `conf/elasticsearch.search.yaml` | [Elasticsearch](biz/bootstrap/conf.example/elasticsearch.example.yaml) |
-| `MustRegisterAliyunOSS("assets", true)` | `conf/aliyunossx.assets.yaml` | [阿里云 OSS](biz/bootstrap/conf.example/aliyunossx.example.yaml) |
-| `MustRegisterAliyunSTS("upload", true)` | `conf/aliyunstsx.upload.yaml` | [阿里云 STS](biz/bootstrap/conf.example/aliyunstsx.example.yaml) |
-| `MustRegisterAliyunES("search-control", true)` | `conf/aliyunesx.search-control.yaml` | [阿里云 ES 管理端](biz/bootstrap/conf.example/aliyunesx.example.yaml) |
-| `MustRegisterNATS("events", true)` | `conf/nats.events.yaml` | [NATS](biz/bootstrap/conf.example/nats.example.yaml) |
-
-实例名与默认标记只在代码中声明，实例文件不接受 `name` / `isDefault`。Elasticsearch 文件的 `version` 必须与部署主版本一致，支持 7 / 8 / 9；`caCertFile` 相对路径基于配置目录。只需某个组件时，保留对应声明与配置文件即可；未声明的实例不会加载。
-
-NATS 操作日志默认记录概要和消息正文字节数；完整正文、Header 和编码字段需将 `natsx.Config.LogDetails` 显式设为 `true`，或在 `nats.<name>.yaml` 中配置 `logDetails: true`。该开关按实例固定，不影响追踪、耗时、原始错误文本和连接状态日志；已有依赖完整消息日志的应用需显式开启。
-
-<details>
-<summary>展开完整示例（需要实际下游服务）</summary>
-
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"os"
-
-	"github.com/bpcoder16/pixiu/biz/appconfig"
-	"github.com/bpcoder16/pixiu/biz/bootstrap"
-	"github.com/bpcoder16/pixiu/lifecycle"
-	"github.com/bpcoder16/pixiu/logit"
-)
-
-func main() {
-	cfg := appconfig.MustLoadAppConfig("./conf/app.yaml")
-	resources, err := lifecycle.New(cfg.ResourceCloseTimeout)
-	if err != nil {
-		panic(err)
-	}
-	defer func() {
-		if err := resources.Close(); err != nil {
-			fmt.Fprintln(os.Stderr, "close resources:", err)
-		}
-	}()
-
-	bootstrap.MustRegisterMySQL("orders", true)
-	bootstrap.MustRegisterRedis("cache", true)
-	bootstrap.MustRegisterElasticsearch("search", true)
-	bootstrap.MustRegisterAliyunOSS("assets", true)
-	bootstrap.MustRegisterAliyunSTS("upload", true)
-	bootstrap.MustRegisterAliyunES("search-control", true)
-	bootstrap.MustRegisterNATS("events", true)
-	bootstrap.MustBaseInit(cfg, resources)
-	logit.Info(context.Background(), "应用初始化完成")
-}
-```
-
-</details>
-
-PostgreSQL 项目将示例中的 MySQL 声明替换为 `bootstrap.MustRegisterPostgreSQL("orders", true)`，使用 `postgresql.orders.yaml`，初始化后通过 `postgresqlx.Default()` 或 `postgresqlx.Named("orders")` 获取客户端。以 PostgreSQL 18 为验证基准；配置、TLS、时区和缓存开关见模板。
-
-各组件独立选择默认实例，`Default()` 与 `Named(默认名称)` 返回同一客户端。共享组件由 bootstrap 各登记一次 `CloseAll`，业务无需重复登记单个客户端关闭。初始化失败会 panic，提前登记的 defer 负责回收已创建资源；初始化只在启动阶段串行执行，失败后不支持重试。
-
-此示例只展示初始化；常驻 HTTP 应用还需接入上面的服务管理器。`MustRegisterNATS` 声明实例，`MustBaseInit` 只完成连接初始化，不会自动准备 Stream 或启动消费。
-
-NATS 连接文件可配置 `namespace` 和 `loggerName`。连接装配及日志默认值见 [`bootstrap` 包文档](biz/bootstrap/doc.go)，主题映射与消息处理契约见 [`natsx` 包文档](infra/natsx/doc.go)。
-
-OSS 上传与临时凭据签发可通过 [`biz/ossservice`](biz/ossservice/doc.go) 组合已有 OSS、STS 客户端，应用负责文件校验、Key 生成和记录保存。各阿里云组件的连接参数与默认值见上方配置模板及模块导航中的包文档。
-
-### 按需裁剪 bootstrap 编译依赖
-
-默认构建保留全部组件，只有通过 `MustRegisterXxx` 声明的实例才会初始化。构建标签用于进一步排除不需要的组件编译依赖，与 `app.yaml` 的运行时配置无关；省略标签不改变现有行为。
-
-| 不使用的组件 | 构建标签 |
-| --- | --- |
-| Elasticsearch 7/8/9 | `pixiu_bootstrap_no_es` |
-| 阿里云 OSS | `pixiu_bootstrap_no_aliyun_oss` |
-| 阿里云 STS | `pixiu_bootstrap_no_aliyun_sts` |
-| 阿里云 ES 管理端 | `pixiu_bootstrap_no_aliyun_es` |
-| MySQL | `pixiu_bootstrap_no_mysql` |
-| PostgreSQL | `pixiu_bootstrap_no_postgresql` |
-| Redis | `pixiu_bootstrap_no_redis` |
-| NATS | `pixiu_bootstrap_no_nats` |
-
-在业务应用包含 `main` 包的入口目录执行，多个标签用逗号分隔：
-
-```bash
-# 不使用 Elasticsearch 数据面，阿里云 ES 管理端仍可单独使用。
-go build -tags=pixiu_bootstrap_no_es -o app .
-
-# 不使用 MySQL。
-go build -tags=pixiu_bootstrap_no_mysql -o app .
-
-# 不使用 Redis 和 NATS。
-go build -tags=pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats -o app .
-
-# 不使用三个阿里云组件。
-go build -tags=pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es -o app .
-
-# 排除全部八个组件；构建、运行和测试使用同一组标签。
-BOOTSTRAP_TAGS='pixiu_bootstrap_no_es,pixiu_bootstrap_no_aliyun_oss,pixiu_bootstrap_no_aliyun_sts,pixiu_bootstrap_no_aliyun_es,pixiu_bootstrap_no_mysql,pixiu_bootstrap_no_postgresql,pixiu_bootstrap_no_redis,pixiu_bootstrap_no_nats'
-go build -tags="$BOOTSTRAP_TAGS" -o app .
-go run -tags="$BOOTSTRAP_TAGS" .
-go test -tags="$BOOTSTRAP_TAGS" ./...
-```
-
-禁用后，基础 `MustRegisterXxx(name, isDefault)` 方法仍保留，显式调用立即 panic 并指出对应标签；基础初始化跳过该模块，不读取其配置或登记关闭。
-
-涉及 SDK 类型的专用 API 随模块排除：禁用 MySQL 时没有 `RunMySQLInitialization`；禁用 PostgreSQL 时没有 `RunPostgreSQLInitialization`；只有两者都禁用才排除共享的 `SeedOptions` 和迁移核心依赖；禁用 Redis 时没有 `MustRegisterRedisLock`。应用仍调用这些入口时会编译失败，应一并移除或用对应构建约束隔离相关业务文件。
-
-标签只排除 bootstrap 引入的依赖，不删除 `go.mod` 中的模块；其他已启用组件共享的依赖、应用自身直接导入的 SDK 或适配包仍会参与编译。在 Pixiu 库仓库执行 `go build -tags=... ./...` 仍会构建独立的 infra 适配包；裁剪应用应针对业务入口构建。
-
-### 显式执行 MySQL / PostgreSQL 表结构迁移
-
-项目维护 `[]schemamigrate.Table` 模型清单，在 `MustBaseInit` 完成后、业务服务启动前调用 `bootstrap.RunMySQLInitialization("orders", tables, bootstrap.SeedOptions{})`，并检查返回的报告与错误。空 `SeedOptions` 表示只迁移结构。名称对应已声明的 MySQL 实例，迁移在其主库执行；失败时停止启动，不忽略错误后开放业务入口。
-
-PostgreSQL 使用 `bootstrap.RunPostgreSQLInitialization("orders", tables, bootstrap.SeedOptions{})`；需要同时校准种子时，在 `SeedOptions` 中填写种子配置，参数与下方 MySQL 示例相同。PostgreSQL 支持 `Table.Comment`，仅注释变化时执行 `COMMENT ON TABLE`，空值不管理已有注释；`Charset`、`Collation` 仍仅支持 MySQL，PostgreSQL 显式配置会在整批 DDL 前报错。两个数据库入口均读取 `migrate.<name>.yaml`，同名实例共享迁移开关，需要独立控制时使用不同实例名。
-
-将 [`migrate.example.yaml`](biz/bootstrap/conf.example/migrate.example.yaml) 复制为 `conf/migrate.orders.yaml`。调用初始化入口时文件必须存在，`enabled` 默认 false，显式开启后执行；`timeout` 默认 5 分钟。迁移不会自动挂到 `MustBaseInit` 或连接构造中，关闭或表与种子清单均为空时不获取数据库。
+使用 Pixiu 直接执行迁移时，将上下文、获取主库连接的函数和模型清单传给 `schemamigrate.Apply`。使用 Baize 的宿主可将迁移声明为启动计划中的准备步骤。
 
 每张表通过 `Model` 登记，可选 `Name` 指定物理表名、`Comment` 管理 MySQL / PostgreSQL 表注释。只迁移显式登记的表，关联表和多对多中间表须单独登记，不自动创建关联外键。没有跨实例迁移锁，发布时应避免多实例同时执行；DDL 失败或超时可能已部分生效，不能保证整批回滚。完整样例与报告语义见 [`schemamigrate` 包文档](infra/schemamigrate/doc.go)。
 
-需要同时初始化 SQL 种子时使用组合入口：
-
-```go
-report, err := bootstrap.RunMySQLInitialization("orders", tables, bootstrap.SeedOptions{
-    Files: seedFiles, // 项目内嵌的 embed.FS。
-    Seeds: []schemamigrate.Seed{
-        {Model: &OrderStatus{}, Where: map[string]any{"category": "default"}, File: "seeds/statuses.sql"},
-    },
-    Timeout: 3 * time.Minute,
-})
-```
-
-项目保留 Model、表清单、种子声明和 SQL 文件。`enabled` 同时控制迁移与 seeds；关闭时不访问数据库或读取 SQL，迁移失败不会执行 seeds。表清单为空仍可对已有表执行种子。YAML 的 `timeout` 仅限制表结构迁移；`SeedOptions.Timeout` 从种子阶段开始独立计时，限制整批 seeds，零值默认 2 分钟、负值非法。返回的报告仅记录结构迁移结果，调用方必须处理任一阶段的错误。
+表结构就绪后，可通过 `schemamigrate.ApplySeeds` 执行项目内嵌的种子 SQL。
 
 种子 SQL 每个有效行必须是一条以分号结束、插入一行的 `INSERT INTO`；关键字不区分大小写，空行与 `--` 整行注释不计数。空文件、跨行 SQL 及其他语句报错。有效行数与 `Where` 范围内的物理记录数（含软删除记录）相同则保留内容；不同则事务 DELETE 该范围并重建，空 `Where` 明确作用于整表。每条 INSERT 必须影响一行，完成后再次核对范围内数量；失败回滚当前项的删除与插入并停止，之前完成的项保留。
 
@@ -791,15 +627,7 @@ make test
 make test-race
 ```
 
-`make test` 和 `make test-race` 是完整测试入口，依次运行全量包测试和 bootstrap 构建标签矩阵。矩阵覆盖八个单独禁用、全部禁用及 Redis/NATS 组合，检查注册错误、生产依赖和 Gin Engine 的构造，并验证仅保留 PostgreSQL 时的数据库装配。CI 可直接使用这两个入口，等价命令如下：
-
-```bash
-go test ./...
-make test-bootstrap-tags
-
-go test -race ./...
-make test-bootstrap-tags BOOTSTRAP_TEST_FLAGS=-race
-```
+`make test` 执行 `go test ./...`，`make test-race` 执行 `go test -race ./...`。
 
 开发时遵循以下约定：
 

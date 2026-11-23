@@ -15,7 +15,7 @@ import (
 func TestGinEngineOpenAPIModules(t *testing.T) {
 	for _, mode := range []string{env.RunModeDebug, env.RunModeTest, env.RunModeRelease} {
 		t.Run(mode, func(t *testing.T) {
-			isolatedLog(t, func() {
+			isolatedGinTest(t, func() {
 				if err := env.Init(env.Config{
 					AppName:       "gin-modules-test",
 					RunMode:       mode,

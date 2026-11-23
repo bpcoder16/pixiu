@@ -66,7 +66,6 @@
 //	return client.Publish(context.Background(), "events.created", []byte("hello"))
 //
 // 上例默认只记录概要；需要完整消息时，在 Config 中设置 LogDetails: true。
-// bootstrap 对应连接配置 nats.<name>.yaml 的 logDetails，默认 false。
 //
 // NewDefault/NewNamed 只在启动阶段串行调用，不能与 CloseAll 并发；失败不占用名称。
 // 注册表先拒绝重复或关闭状态，连接参数统一由 New 校验。

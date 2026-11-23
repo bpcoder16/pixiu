@@ -54,8 +54,6 @@
 //	}
 //
 // Bucket 在构造时校验，上传请求仅指定 Key 和数据；旧请求中的 Bucket 须移到 Config。
-// biz/bootstrap 可通过 MustRegisterAliyunOSS(name, isDefault) 声明实例，
-// MustBaseInit 读取 aliyunossx.<name>.yaml 并创建固定 AK/SK 客户端。
 //
 // NewNamed/NewDefault 仅在启动阶段串行初始化，Named/Default 在未初始化或
 // CloseAll 开始后 panic。共享实例统一登记 CloseAll 至 lifecycle.Stack；

@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -23,7 +25,7 @@ import (
 func TestGinEngineOpenAPIRunModes(t *testing.T) {
 	for _, mode := range []string{env.RunModeDebug, env.RunModeTest, env.RunModeRelease} {
 		t.Run(mode, func(t *testing.T) {
-			isolatedLog(t, func() {
+			isolatedGinTest(t, func() {
 				dir := initGinTestEnv(t, mode)
 				// 故意与 env 不同，文档开关只取决于应用环境，构造也不得改写 Gin 模式。
 				ginMode := gin.ReleaseMode
@@ -92,7 +94,7 @@ func TestGinEngineOpenAPIRunModes(t *testing.T) {
 }
 
 func TestGinEngineRejectsInvalidConfiguration(t *testing.T) {
-	isolatedLog(t, func() {
+	isolatedGinTest(t, func() {
 		initGinTestEnv(t, env.RunModeTest)
 		if engine, err := bootstrap.NewGinEngine(); engine != nil || !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("缺失 gin.yaml 应保留错误链: engine=%v, err=%v", engine, err)
@@ -116,7 +118,7 @@ func TestGinEngineRejectsInvalidConfiguration(t *testing.T) {
 }
 
 func TestGinEngineReadsConfigurationAtConstruction(t *testing.T) {
-	isolatedLog(t, func() {
+	isolatedGinTest(t, func() {
 		swag.Register(swag.Name, &swag.Spec{SwaggerTemplate: `{"swagger":"2.0","info":{"title":"test API","version":"1.0"},"paths":{}}`})
 		template, err := os.ReadFile("conf.example/gin.yaml")
 		if err != nil {
@@ -247,6 +249,21 @@ func TestGinEngineReadsConfigurationAtConstruction(t *testing.T) {
 			})
 		}
 	})
+}
+
+// env 只允许初始化一次，Swag 按进程登记文档，各运行模式需要独立进程。
+func isolatedGinTest(t *testing.T, run func()) {
+	t.Helper()
+	const marker = "PIXIU_BOOTSTRAP_GIN_TEST"
+	if os.Getenv(marker) == t.Name() {
+		run()
+		return
+	}
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$")
+	cmd.Env = append(os.Environ(), marker+"="+t.Name())
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Gin 独立进程测试失败: %v\n%s", err, output)
+	}
 }
 
 func initGinTestEnv(t *testing.T, mode string) string {

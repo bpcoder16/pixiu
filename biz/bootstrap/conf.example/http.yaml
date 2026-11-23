@@ -1,4 +1,4 @@
-# 与 app.yaml 放在同一目录，配置 HTTP 监听地址、请求头大小和网络超时。
+# 由宿主读取为 httpserver.Config，用于配置 HTTP 监听和网络超时。
 
 addr: ":8888"          # 监听所有网卡的 8888 端口
 maxHeaderBytes: 65536  # 请求行和请求头的总大小上限，单位字节，默认 64 KiB
