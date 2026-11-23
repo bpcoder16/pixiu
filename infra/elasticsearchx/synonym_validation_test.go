@@ -1,4 +1,4 @@
-package elasticsearchservice_test
+package elasticsearchx_test
 
 import (
 	"context"
@@ -14,14 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bpcoder16/pixiu/biz/elasticsearchservice"
 	"github.com/bpcoder16/pixiu/infra/elasticsearchx"
 	v7 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v7"
 	v8 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v8"
 	v9 "github.com/bpcoder16/pixiu/infra/elasticsearchx/v9"
 )
 
-func newHTTPService(t *testing.T, major int, handler http.HandlerFunc) *elasticsearchservice.Service {
+func newValidationHTTPClient(t *testing.T, major int, handler http.HandlerFunc) *elasticsearchx.Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Elastic-Product", "Elasticsearch")
@@ -42,11 +41,7 @@ func newHTTPService(t *testing.T, major int, handler http.HandlerFunc) *elastics
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	svc, err := elasticsearchservice.New(client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return svc
+	return client
 }
 
 func TestValidationUsesStrictIndexAcrossVersions(t *testing.T) {
@@ -54,7 +49,7 @@ func TestValidationUsesStrictIndexAcrossVersions(t *testing.T) {
 		t.Run(fmt.Sprint(major), func(t *testing.T) {
 			var paths []string
 			var definition map[string]any
-			svc := newHTTPService(t, major, func(w http.ResponseWriter, r *http.Request) {
+			client := newValidationHTTPClient(t, major, func(w http.ResponseWriter, r *http.Request) {
 				paths = append(paths, r.Method+" "+r.URL.Path)
 				switch r.Method {
 				case http.MethodPut:
@@ -68,8 +63,8 @@ func TestValidationUsesStrictIndexAcrossVersions(t *testing.T) {
 					t.Errorf("意外方法: %s", r.Method)
 				}
 			})
-			got, err := svc.ValidateSynonyms(context.Background(), elasticsearchservice.ValidationOptions{SynonymsPath: "analysis/synonyms.txt"})
-			if err != nil || !got.Valid || got.Stage != elasticsearchservice.StageComplete || got.Cleanup != elasticsearchservice.CleanupSucceeded || got.MayExist {
+			got, err := client.ValidateSynonyms(context.Background(), elasticsearchx.SynonymValidationOptions{SynonymsPath: "analysis/synonyms.txt"})
+			if err != nil || !got.Valid || got.Stage != elasticsearchx.SynonymStageComplete || got.Cleanup != elasticsearchx.SynonymCleanupSucceeded || got.MayExist {
 				t.Fatalf("result=%+v err=%v", got, err)
 			}
 			if !strings.HasPrefix(got.Index, "pixiu-synonym-validation-") || len(got.Index) != len("pixiu-synonym-validation-")+32 {
@@ -119,8 +114,8 @@ func TestValidationFailureStates(t *testing.T) {
 		createBody string
 		deleteCode int
 		deleteBody string
-		stage      elasticsearchservice.ValidationStage
-		cleanup    elasticsearchservice.CleanupStatus
+		stage      elasticsearchx.SynonymValidationStage
+		cleanup    elasticsearchx.SynonymCleanupStatus
 		valid      bool
 		mayExist   bool
 		wantErr    bool
@@ -130,8 +125,8 @@ func TestValidationFailureStates(t *testing.T) {
 			name:       "非法同义词规则",
 			createCode: 400,
 			createBody: `{"error":{"type":"illegal_argument_exception","caused_by":{"type":"parse_exception","reason":"Invalid synonym rule at line 3"}}}`,
-			stage:      elasticsearchservice.StageCreate,
-			cleanup:    elasticsearchservice.CleanupNotAttempted,
+			stage:      elasticsearchx.SynonymStageCreate,
+			cleanup:    elasticsearchx.SynonymCleanupNotAttempted,
 			mayExist:   true,
 			wantErr:    true,
 			wantCalls:  "PUT",
@@ -140,8 +135,8 @@ func TestValidationFailureStates(t *testing.T) {
 			name:       "词库文件缺失",
 			createCode: 400,
 			createBody: `{"error":{"type":"illegal_argument_exception","caused_by":{"type":"file_not_found_exception","reason":"missing file"}}}`,
-			stage:      elasticsearchservice.StageCreate,
-			cleanup:    elasticsearchservice.CleanupNotAttempted,
+			stage:      elasticsearchx.SynonymStageCreate,
+			cleanup:    elasticsearchx.SynonymCleanupNotAttempted,
 			mayExist:   true,
 			wantErr:    true,
 			wantCalls:  "PUT",
@@ -150,8 +145,8 @@ func TestValidationFailureStates(t *testing.T) {
 			name:       "名称冲突不删除已有索引",
 			createCode: 400,
 			createBody: `{"error":{"type":"resource_already_exists_exception"}}`,
-			stage:      elasticsearchservice.StageCreate,
-			cleanup:    elasticsearchservice.CleanupNotAttempted,
+			stage:      elasticsearchx.SynonymStageCreate,
+			cleanup:    elasticsearchx.SynonymCleanupNotAttempted,
 			wantErr:    true,
 			wantCalls:  "PUT",
 		},
@@ -159,8 +154,8 @@ func TestValidationFailureStates(t *testing.T) {
 			name:       "权限错误",
 			createCode: 403,
 			createBody: `{"error":{"type":"security_exception"}}`,
-			stage:      elasticsearchservice.StageCreate,
-			cleanup:    elasticsearchservice.CleanupNotAttempted,
+			stage:      elasticsearchx.SynonymStageCreate,
+			cleanup:    elasticsearchx.SynonymCleanupNotAttempted,
 			mayExist:   true,
 			wantErr:    true,
 			wantCalls:  "PUT",
@@ -168,8 +163,8 @@ func TestValidationFailureStates(t *testing.T) {
 		{
 			name:       "创建未确认",
 			createBody: `{"acknowledged":false,"shards_acknowledged":false,"index":"$index"}`,
-			stage:      elasticsearchservice.StageCreate,
-			cleanup:    elasticsearchservice.CleanupNotAttempted,
+			stage:      elasticsearchx.SynonymStageCreate,
+			cleanup:    elasticsearchx.SynonymCleanupNotAttempted,
 			mayExist:   true,
 			wantErr:    true,
 			wantCalls:  "PUT",
@@ -177,8 +172,8 @@ func TestValidationFailureStates(t *testing.T) {
 		{
 			name:       "创建畸形响应",
 			createBody: `{"acknowledged":true}`,
-			stage:      elasticsearchservice.StageCreate,
-			cleanup:    elasticsearchservice.CleanupNotAttempted,
+			stage:      elasticsearchx.SynonymStageCreate,
+			cleanup:    elasticsearchx.SynonymCleanupNotAttempted,
 			mayExist:   true,
 			wantErr:    true,
 			wantCalls:  "PUT",
@@ -186,8 +181,8 @@ func TestValidationFailureStates(t *testing.T) {
 		{
 			name:       "分片启动超时仍清理",
 			createBody: `{"acknowledged":true,"shards_acknowledged":false,"index":"$index"}`,
-			stage:      elasticsearchservice.StageCreate,
-			cleanup:    elasticsearchservice.CleanupSucceeded,
+			stage:      elasticsearchx.SynonymStageCreate,
+			cleanup:    elasticsearchx.SynonymCleanupSucceeded,
 			wantErr:    true,
 			wantCalls:  "PUT,DELETE",
 		},
@@ -195,8 +190,8 @@ func TestValidationFailureStates(t *testing.T) {
 			name:       "验证成功但清理失败",
 			deleteCode: 403,
 			deleteBody: `{"error":{"type":"security_exception"}}`,
-			stage:      elasticsearchservice.StageComplete,
-			cleanup:    elasticsearchservice.CleanupFailed,
+			stage:      elasticsearchx.SynonymStageComplete,
+			cleanup:    elasticsearchx.SynonymCleanupFailed,
 			valid:      true,
 			mayExist:   true,
 			wantErr:    true,
@@ -205,8 +200,8 @@ func TestValidationFailureStates(t *testing.T) {
 		{
 			name:       "删除未确认",
 			deleteBody: `{"acknowledged":false}`,
-			stage:      elasticsearchservice.StageComplete,
-			cleanup:    elasticsearchservice.CleanupFailed,
+			stage:      elasticsearchx.SynonymStageComplete,
+			cleanup:    elasticsearchx.SynonymCleanupFailed,
 			valid:      true,
 			mayExist:   true,
 			wantErr:    true,
@@ -216,8 +211,8 @@ func TestValidationFailureStates(t *testing.T) {
 			name:       "索引已被删除",
 			deleteCode: 404,
 			deleteBody: `{"error":{"type":"index_not_found_exception"}}`,
-			stage:      elasticsearchservice.StageComplete,
-			cleanup:    elasticsearchservice.CleanupSucceeded,
+			stage:      elasticsearchx.SynonymStageComplete,
+			cleanup:    elasticsearchx.SynonymCleanupSucceeded,
 			valid:      true,
 			wantCalls:  "PUT,DELETE",
 		},
@@ -225,8 +220,8 @@ func TestValidationFailureStates(t *testing.T) {
 			name:       "非索引缺失的404",
 			deleteCode: 404,
 			deleteBody: `{"error":{"type":"other_error"}}`,
-			stage:      elasticsearchservice.StageComplete,
-			cleanup:    elasticsearchservice.CleanupFailed,
+			stage:      elasticsearchx.SynonymStageComplete,
+			cleanup:    elasticsearchx.SynonymCleanupFailed,
 			valid:      true,
 			mayExist:   true,
 			wantErr:    true,
@@ -237,8 +232,8 @@ func TestValidationFailureStates(t *testing.T) {
 			createBody: `{"acknowledged":true,"shards_acknowledged":false,"index":"$index"}`,
 			deleteCode: 500,
 			deleteBody: `{"error":{"type":"delete_error"}}`,
-			stage:      elasticsearchservice.StageCreate,
-			cleanup:    elasticsearchservice.CleanupFailed,
+			stage:      elasticsearchx.SynonymStageCreate,
+			cleanup:    elasticsearchx.SynonymCleanupFailed,
 			mayExist:   true,
 			wantErr:    true,
 			wantCalls:  "PUT,DELETE",
@@ -246,7 +241,7 @@ func TestValidationFailureStates(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var calls []string
-			svc := newHTTPService(t, 8, func(w http.ResponseWriter, r *http.Request) {
+			client := newValidationHTTPClient(t, 8, func(w http.ResponseWriter, r *http.Request) {
 				calls = append(calls, r.Method)
 				code, body := tt.createCode, tt.createBody
 				switch r.Method {
@@ -271,7 +266,7 @@ func TestValidationFailureStates(t *testing.T) {
 				w.WriteHeader(code)
 				fmt.Fprint(w, body)
 			})
-			got, err := svc.ValidateSynonyms(context.Background(), elasticsearchservice.ValidationOptions{SynonymsPath: "analysis/test.txt"})
+			got, err := client.ValidateSynonyms(context.Background(), elasticsearchx.SynonymValidationOptions{SynonymsPath: "analysis/test.txt"})
 			if (err != nil) != tt.wantErr || got.Stage != tt.stage || got.Cleanup != tt.cleanup || got.Valid != tt.valid || got.MayExist != tt.mayExist || strings.Join(calls, ",") != tt.wantCalls {
 				t.Fatalf("result=%+v err=%v calls=%v", got, err, calls)
 			}
@@ -299,7 +294,7 @@ func response(body string) *http.Response {
 	}
 }
 
-func newDirectService(t *testing.T, perform performFunc) *elasticsearchservice.Service {
+func newValidationClient(t *testing.T, perform performFunc) *elasticsearchx.Client {
 	t.Helper()
 	cfg := elasticsearchx.Config{
 		Name:      "direct",
@@ -319,11 +314,7 @@ func newDirectService(t *testing.T, perform performFunc) *elasticsearchservice.S
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	svc, err := elasticsearchservice.New(client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return svc
+	return client
 }
 
 func TestValidationCancellationAndBoundedCleanup(t *testing.T) {
@@ -333,7 +324,7 @@ func TestValidationCancellationAndBoundedCleanup(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "request"))
 			defer cancel()
 			deleted := false
-			svc := newDirectService(t, func(r *http.Request) (*http.Response, error) {
+			client := newValidationClient(t, func(r *http.Request) (*http.Response, error) {
 				switch r.Method {
 				case http.MethodPut:
 					cancel()
@@ -353,14 +344,14 @@ func TestValidationCancellationAndBoundedCleanup(t *testing.T) {
 				t.Fatalf("意外请求 %s", r.Method)
 				return nil, nil
 			})
-			got, err := svc.ValidateSynonyms(ctx, elasticsearchservice.ValidationOptions{
+			got, err := client.ValidateSynonyms(ctx, elasticsearchx.SynonymValidationOptions{
 				SynonymsPath:   "analysis/test.txt",
 				CleanupTimeout: 30 * time.Millisecond,
 			})
-			if !deleted || ctx.Err() != context.Canceled || (err != nil) != cleanupTimeout || !got.Valid || got.Stage != elasticsearchservice.StageComplete || got.MayExist != cleanupTimeout {
+			if !deleted || ctx.Err() != context.Canceled || (err != nil) != cleanupTimeout || !got.Valid || got.Stage != elasticsearchx.SynonymStageComplete || got.MayExist != cleanupTimeout {
 				t.Fatalf("取消与清理结果错误: %+v %v", got, err)
 			}
-			if cleanupTimeout && (!errors.Is(err, context.DeadlineExceeded) || got.Cleanup != elasticsearchservice.CleanupFailed) {
+			if cleanupTimeout && (!errors.Is(err, context.DeadlineExceeded) || got.Cleanup != elasticsearchx.SynonymCleanupFailed) {
 				t.Fatalf("清理超时丢失: %+v %v", got, err)
 			}
 		})
@@ -368,14 +359,15 @@ func TestValidationCancellationAndBoundedCleanup(t *testing.T) {
 }
 
 func TestValidationRejectsLocalErrorsWithoutCreatingIndex(t *testing.T) {
-	if _, err := elasticsearchservice.New(nil); err == nil {
+	var nilClient *elasticsearchx.Client
+	if _, err := nilClient.ValidateSynonyms(context.Background(), elasticsearchx.SynonymValidationOptions{}); err == nil {
 		t.Fatal("接受 nil client")
 	}
-	svc := newDirectService(t, func(r *http.Request) (*http.Response, error) {
+	client := newValidationClient(t, func(r *http.Request) (*http.Response, error) {
 		t.Fatalf("本地错误仍发出请求: %s", r.URL)
 		return nil, nil
 	})
-	for _, options := range []elasticsearchservice.ValidationOptions{
+	for _, options := range []elasticsearchx.SynonymValidationOptions{
 		{},
 		{SynonymsPath: "  "},
 		{SynonymsPath: "test\x00"},
@@ -384,13 +376,27 @@ func TestValidationRejectsLocalErrorsWithoutCreatingIndex(t *testing.T) {
 			CleanupTimeout: -time.Second,
 		},
 	} {
-		got, err := svc.ValidateSynonyms(context.Background(), options)
-		if err == nil || got.MayExist || got.Valid || got.Stage != elasticsearchservice.StagePrepare || got.Cleanup != elasticsearchservice.CleanupNotAttempted {
+		got, err := client.ValidateSynonyms(context.Background(), options)
+		if err == nil || got.MayExist || got.Valid || got.Stage != elasticsearchx.SynonymStagePrepare || got.Cleanup != elasticsearchx.SynonymCleanupNotAttempted {
 			t.Fatalf("本地失败状态错误: %+v %v", got, err)
 		}
 	}
-	if _, err := svc.ValidateSynonyms(nil, elasticsearchservice.ValidationOptions{SynonymsPath: "test"}); err == nil {
+	if _, err := client.ValidateSynonyms(nil, elasticsearchx.SynonymValidationOptions{SynonymsPath: "test"}); err == nil {
 		t.Fatal("接受 nil context")
+	}
+}
+
+func TestValidateSynonymsClosedClient(t *testing.T) {
+	client := newValidationClient(t, func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("客户端关闭后仍发送请求: %s", r.URL)
+		return nil, nil
+	})
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.ValidateSynonyms(context.Background(), elasticsearchx.SynonymValidationOptions{SynonymsPath: "analysis/test.txt"})
+	if err == nil || got.Valid || got.Index != "" || got.MayExist || got.Stage != elasticsearchx.SynonymStagePrepare || got.Cleanup != elasticsearchx.SynonymCleanupNotAttempted {
+		t.Fatalf("关闭的客户端未发送创建请求，应无遗留索引: %+v err=%v", got, err)
 	}
 }
 
@@ -398,15 +404,15 @@ func TestValidationDelegatesCanceledContextToClient(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	calls := 0
-	svc := newDirectService(t, func(r *http.Request) (*http.Response, error) {
+	client := newValidationClient(t, func(r *http.Request) (*http.Response, error) {
 		calls++
 		if r.Method != http.MethodPut || r.Context().Err() != context.Canceled {
 			t.Fatalf("取消未交给创建请求处理: method=%s err=%v", r.Method, r.Context().Err())
 		}
 		return nil, r.Context().Err()
 	})
-	got, err := svc.ValidateSynonyms(ctx, elasticsearchservice.ValidationOptions{SynonymsPath: "test"})
-	if calls != 1 || !errors.Is(err, context.Canceled) || got.Index == "" || !got.MayExist || got.Valid || got.Stage != elasticsearchservice.StageCreate || got.Cleanup != elasticsearchservice.CleanupNotAttempted {
+	got, err := client.ValidateSynonyms(ctx, elasticsearchx.SynonymValidationOptions{SynonymsPath: "test"})
+	if calls != 1 || !errors.Is(err, context.Canceled) || got.Index == "" || !got.MayExist || got.Valid || got.Stage != elasticsearchx.SynonymStageCreate || got.Cleanup != elasticsearchx.SynonymCleanupNotAttempted {
 		t.Fatalf("已取消请求状态错误: %+v %v calls=%d", got, err, calls)
 	}
 }
@@ -421,7 +427,7 @@ func (b *closeErrorBody) Close() error { return b.err }
 func TestCreatedIndexIsCleanedAfterResponseCloseFailure(t *testing.T) {
 	closeErr := errors.New("create response close failed")
 	deleted := false
-	svc := newDirectService(t, func(r *http.Request) (*http.Response, error) {
+	client := newValidationClient(t, func(r *http.Request) (*http.Response, error) {
 		switch r.Method {
 		case http.MethodPut:
 			return &http.Response{
@@ -438,8 +444,8 @@ func TestCreatedIndexIsCleanedAfterResponseCloseFailure(t *testing.T) {
 		t.Fatalf("意外请求: %s", r.Method)
 		return nil, nil
 	})
-	got, err := svc.ValidateSynonyms(context.Background(), elasticsearchservice.ValidationOptions{SynonymsPath: "test"})
-	if !deleted || !errors.Is(err, closeErr) || got.Valid || got.MayExist || got.Cleanup != elasticsearchservice.CleanupSucceeded || got.Stage != elasticsearchservice.StageCreate {
+	got, err := client.ValidateSynonyms(context.Background(), elasticsearchx.SynonymValidationOptions{SynonymsPath: "test"})
+	if !deleted || !errors.Is(err, closeErr) || got.Valid || got.MayExist || got.Cleanup != elasticsearchx.SynonymCleanupSucceeded || got.Stage != elasticsearchx.SynonymStageCreate {
 		t.Fatalf("关闭失败丢失已创建资源: %+v %v", got, err)
 	}
 }
@@ -447,22 +453,22 @@ func TestCreatedIndexIsCleanedAfterResponseCloseFailure(t *testing.T) {
 func TestUnknownCreationDoesNotDeleteOrRetry(t *testing.T) {
 	networkErr := errors.New("connection lost")
 	calls := 0
-	svc := newDirectService(t, func(r *http.Request) (*http.Response, error) {
+	client := newValidationClient(t, func(r *http.Request) (*http.Response, error) {
 		calls++
 		if r.Method != http.MethodPut {
 			t.Fatalf("创建未知时尝试删除: %s", r.Method)
 		}
 		return nil, networkErr
 	})
-	got, err := svc.ValidateSynonyms(context.Background(), elasticsearchservice.ValidationOptions{SynonymsPath: "test"})
-	if calls != 1 || !errors.Is(err, networkErr) || got.Index == "" || !got.MayExist || got.Cleanup != elasticsearchservice.CleanupNotAttempted {
+	got, err := client.ValidateSynonyms(context.Background(), elasticsearchx.SynonymValidationOptions{SynonymsPath: "test"})
+	if calls != 1 || !errors.Is(err, networkErr) || got.Index == "" || !got.MayExist || got.Cleanup != elasticsearchx.SynonymCleanupNotAttempted {
 		t.Fatalf("创建未知状态丢失: %+v %v calls=%d", got, err, calls)
 	}
 }
 
 func TestDeleteMissingIndexDoesNotHideResponseCloseFailure(t *testing.T) {
 	closeErr := errors.New("delete response close failed")
-	svc := newDirectService(t, func(r *http.Request) (*http.Response, error) {
+	client := newValidationClient(t, func(r *http.Request) (*http.Response, error) {
 		switch r.Method {
 		case http.MethodPut:
 			return response(fmt.Sprintf(`{"acknowledged":true,"shards_acknowledged":true,"index":%q}`, strings.TrimPrefix(r.URL.Path, "/"))), nil
@@ -478,8 +484,8 @@ func TestDeleteMissingIndexDoesNotHideResponseCloseFailure(t *testing.T) {
 		t.Fatalf("意外请求: %s", r.Method)
 		return nil, nil
 	})
-	got, err := svc.ValidateSynonyms(context.Background(), elasticsearchservice.ValidationOptions{SynonymsPath: "test"})
-	if !got.Valid || !errors.Is(err, closeErr) || got.Cleanup != elasticsearchservice.CleanupFailed || !got.MayExist {
+	got, err := client.ValidateSynonyms(context.Background(), elasticsearchx.SynonymValidationOptions{SynonymsPath: "test"})
+	if !got.Valid || !errors.Is(err, closeErr) || got.Cleanup != elasticsearchx.SynonymCleanupFailed || !got.MayExist {
 		t.Fatalf("索引404掩盖关闭失败: %+v %v", got, err)
 	}
 }
@@ -487,7 +493,7 @@ func TestDeleteMissingIndexDoesNotHideResponseCloseFailure(t *testing.T) {
 func TestConcurrentValidationKeepsIndependentIndices(t *testing.T) {
 	var mu sync.Mutex
 	created, deleted := map[string]bool{}, map[string]bool{}
-	svc := newHTTPService(t, 8, func(w http.ResponseWriter, r *http.Request) {
+	client := newValidationHTTPClient(t, 8, func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		index := strings.TrimPrefix(r.URL.Path, "/")
@@ -509,7 +515,7 @@ func TestConcurrentValidationKeepsIndependentIndices(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
-			if _, err := svc.ValidateSynonyms(context.Background(), elasticsearchservice.ValidationOptions{SynonymsPath: "analysis/test.txt"}); err != nil {
+			if _, err := client.ValidateSynonyms(context.Background(), elasticsearchx.SynonymValidationOptions{SynonymsPath: "analysis/test.txt"}); err != nil {
 				t.Error(err)
 			}
 		})

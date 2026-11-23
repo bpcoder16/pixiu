@@ -50,6 +50,22 @@
 // 三者均拒绝通配符和索引列表。HTTPError 的 Reason、RootCause、CausedBy 可显式用于诊断，
 // Error() 文本和概要日志仍只包含状态与类型。
 //
+// ValidateSynonyms 让 ES 用 standard → lowercase → synonym_graph 严格加载节点上的 Solr 词库。
+// 调用方传入节点配置目录下的词库路径。临时索引和主分片均获确认时，Valid 为 true。
+// 确认本次创建后，方法会使用独立超时清理索引，再向调用方返回结果。
+// 清理失败时仍保留 Valid。若 MayExist 为 true，可按 Index 核查可能遗留的索引。
+// 已关闭的客户端在发送创建请求前返回，Index 为空，MayExist 为 false。
+//
+//	result, err := client.ValidateSynonyms(ctx, elasticsearchx.SynonymValidationOptions{
+//		SynonymsPath: "analysis/synonyms.txt",
+//	})
+//	if err != nil {
+//		if result.MayExist {
+//			return fmt.Errorf("核查临时索引 %s: %w", result.Index, err)
+//		}
+//		return err
+//	}
+//
 // ReloadSearchAnalyzers 重载单个具体索引的搜索分析器，成功后仅清理 request cache。
 // 调用前须将同义词文件更新到所有数据节点，过滤器设置 updateable: true 且仅用于搜索分析器。
 // 两次请求共用 ctx，分别记录日志和耗时，不重试或回滚。
