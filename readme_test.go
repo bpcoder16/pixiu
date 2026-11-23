@@ -1,4 +1,4 @@
-package bootstrap_test
+package pixiu_test
 
 import (
 	"fmt"
@@ -10,11 +10,7 @@ import (
 )
 
 func TestREADMEExamplesCompile(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(root, "README.md"))
+	data, err := os.ReadFile("README.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +33,6 @@ func TestREADMEExamplesCompile(t *testing.T) {
 			}
 			// 从仓库根目录构建临时源码，使用当前工作区实现；不执行示例的副作用。
 			cmd := exec.CommandContext(t.Context(), "go", "build", "-o", filepath.Join(dir, "example"), file)
-			cmd.Dir = root
 			if output, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("README 完整示例编译失败: %v\n%s", err, output)
 			}

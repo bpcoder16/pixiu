@@ -173,7 +173,6 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | --- | --- | --- |
 | [`biz/common`](biz/common/doc.go) | 按应用时区生成 ID、格式化时间，int64 万分之一整数与百分比精确互转，名称脱敏 | 常规业务工具；ID 与时间依赖 env，百分比支持负数，MaskName 支持自定义符号 |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
-| [`biz/bootstrap`](biz/bootstrap/doc.go) | 从 gin.yaml 构造独立 Gin Engine | 注册业务路由，在 debug/test 环境提供 OpenAPI 文档 |
 | [`biz/ossservice`](biz/ossservice/doc.go) | multipart 上传、指定对象的 STS 凭据签发、URL 内容 MD5 | 上传需要 OSS，签发另需 STS；MD5FromURL 为独立包函数，无需客户端 |
 | [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
 | [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，默认及命名执行器，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
@@ -197,7 +196,7 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 
 ### 最小 HTTP 应用
 
-示例读取 HTTP 监听配置，提供健康检查，并在收到停机信号后等待请求排空。将模板复制为 `conf/http.yaml`，保存以下代码为 `main.go` 后运行 `go run .`。访问 `http://127.0.0.1:8888/healthz` 应返回 HTTP 204，按 Ctrl+C 关闭服务。[HTTP 配置模板](biz/bootstrap/conf.example/http.yaml)
+示例读取 HTTP 监听配置，提供健康检查，并在收到停机信号后等待请求排空。将模板复制为 `conf/http.yaml`，保存以下代码为 `main.go` 后运行 `go run .`。访问 `http://127.0.0.1:8888/healthz` 应返回 HTTP 204，按 Ctrl+C 关闭服务。[HTTP 配置模板](infra/httpserver/conf.example/http.yaml)
 
 <details>
 <summary>展开完整示例（无需外部服务）</summary>
@@ -258,18 +257,7 @@ func run() error {
 
 ### Gin 与 OpenAPI 文档
 
-将 `gin.yaml` 放入 `env.Init` 指定的配置目录，文件内容为 `{}` 时使用默认值。初始化环境后调用 `gin.SetMode(env.RunMode())`，通过 `biz/bootstrap` 的 `NewGinEngine()` 创建 Engine。注册业务路由后，将 Engine 传给上例中的 `httpserver.New`。[Gin 配置模板](biz/bootstrap/conf.example/gin.yaml)
-
-`NewGinEngine` 根据应用环境决定文档路由：
-
-- **debug/test**：自动注册 OpenAPI 与内嵌的 Stoplight Elements。应用须先使用 Swag CLI 生成文档（例如 `swag init -o ./openapi`），并在入口 blank import 生成包；未注册文档时构造返回错误。默认页面为 `/docs`，文档为 `/openapi/doc.json`。
-- **release**：不自动注册文档路由，也不要求生成文档。
-
-多模块应用可向 `NewGinEngine` 传入 `ginx.OpenAPIModule`，以 `Name` 对应 Swag 的命名文档实例，`Title` 作为导航标题。每个模块提供 `/openapi/<Name>.json` 和 `/docs/<Name>`，`/docs` 展示首个模块；静态资源位于 `/docs/assets/`。生成参数、Bearer 前缀补齐等用法见 [`ginx` 包文档](infra/ginx/doc.go)。
-
-文档路由在 Engine 构造时注册，之后添加的业务中间件不会作用于它们，也不会自动增加认证。需要控制文档访问时，可使用 `ginx.New`，在带认证中间件的路由组调用 `ginx.RegisterOpenAPI`。
-
-文档页面、JSON 端点和内嵌静态资源的 GET 路由会自动跳过 ginx 访问日志、请求和响应详情采集及 `Observe`，仍保留请求作用域、组中间件与 Recovery。`gin.yaml` 模板默认保留普通访问日志，关闭请求和响应详情。已复制旧模板的服务需自行将 `logRequestInfo`、`logResponseInfo` 改为 `false`。其他需要跳过观察的路由可通过 `ginx.RegisterIgnoredRoute` 显式登记。
+使用 Baize 的宿主通过 `httpboot.Gin` 注册业务路由。直接使用 Pixiu 时，通过 `ginx.New` 创建 Engine，将它传给上例中的 `httpserver.New`。需要文档页面时，先导入 Swag 生成的文档包，再在选定的路由组调用 `ginx.RegisterOpenAPI`。多模块应用可以传入 `ginx.OpenAPIModule` 指定文档名称和导航标题。[Gin 与 OpenAPI 包文档](infra/ginx/doc.go)
 
 ### MySQL / PostgreSQL 表结构迁移与种子
 
