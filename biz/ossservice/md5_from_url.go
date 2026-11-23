@@ -53,7 +53,8 @@ func fileReadError(ctx context.Context, cause error) error {
 		return errors.Join(ErrFileRead, ctxErr)
 	}
 	// url.Error.Timeout 只检查直接原因，传输层用 %w 包装的超时需要继续向内查找。
-	if u, ok := cause.(*url.Error); ok && !u.Timeout() {
+	var u *url.Error
+	if errors.As(cause, &u) && !u.Timeout() {
 		cause = u.Err
 	}
 	timeout, ok := errors.AsType[net.Error](cause)
