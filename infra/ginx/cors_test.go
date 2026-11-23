@@ -3,7 +3,9 @@ package ginx
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -141,6 +143,94 @@ func TestCORSUsesSameScopeAsRouter(t *testing.T) {
 	if w.Code != http.StatusOK || w.Header().Get("Access-Control-Allow-Origin") != "" {
 		t.Fatalf("路由规范化后超出规则范围，得到 %d %v", w.Code, w.Header())
 	}
+}
+
+func TestCORSChinesePathPrefix(t *testing.T) {
+	const origin = "https://web.example.com"
+	mw, err := NewCORS(CORSRule{
+		PathPrefix:   "/订单",
+		AllowOrigins: []string{origin},
+		AllowMethods: []string{http.MethodGet},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := gin.New()
+	engine.Use(mw)
+	engine.GET("/订单/:id", func(c *gin.Context) {
+		c.String(http.StatusOK, c.Param("id"))
+	})
+
+	prefix := "/" + url.PathEscape("订单")
+	for _, tc := range []struct{ target, wantOrigin string }{
+		{prefix + "/a:b", origin},
+		{prefix + "/a%3Ab", origin},
+		{strings.ToLower(prefix) + "/a%3Ab", origin},
+		{prefix + "%2Fa:b", ""}, // 原始路径中缺少完整路径段边界。
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.target, nil)
+		req.Header.Set("Origin", origin)
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || w.Body.String() != "a:b" || w.Header().Get("Access-Control-Allow-Origin") != tc.wantOrigin {
+			t.Errorf("%s 期望跨域来源 %q，得到 %d %q %v", tc.target, tc.wantOrigin, w.Code, w.Body.String(), w.Header())
+		}
+	}
+}
+
+func TestCORSRawPathASCIIPrefix(t *testing.T) {
+	p := corsPolicy{prefix: "/v1"}
+	if !p.matchesRawPath("/v1/items") || p.matchesRawPath("/v%31/items") {
+		t.Fatal("规则 /v1 应匹配 /v1/items，并拒绝原始路径 /v%31/items")
+	}
+}
+
+func TestCORSConcurrent(t *testing.T) {
+	const origin = "https://web.example.com"
+	mw, err := NewCORS(CORSRule{
+		PathPrefix:   "/订单",
+		AllowOrigins: []string{origin},
+		AllowMethods: []string{http.MethodGet},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := gin.New()
+	engine.Use(mw)
+	engine.GET("/订单/:id", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	prefix := "/" + url.PathEscape("订单")
+	cases := []struct {
+		method, target, origin string
+		status                 int
+		wantOrigin             string
+	}{
+		{http.MethodGet, prefix + "/123", origin, http.StatusOK, origin},
+		{http.MethodGet, prefix + "/a%3Ab", origin, http.StatusOK, origin},
+		{http.MethodOptions, prefix + "/a%3Ab", origin, http.StatusNoContent, origin},
+		{http.MethodGet, prefix + "/a%3Ab", "https://other.example.com", http.StatusOK, ""},
+	}
+	var workers sync.WaitGroup
+	for i := range 8 {
+		tc := cases[i%len(cases)]
+		workers.Go(func() {
+			// 每个协程复用自己的无正文请求，每次派发都使用独立的响应。
+			req := httptest.NewRequest(tc.method, tc.target, nil)
+			req.Header.Set("Origin", tc.origin)
+			if tc.method == http.MethodOptions {
+				req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+			}
+			for range 512 {
+				w := httptest.NewRecorder()
+				engine.ServeHTTP(w, req)
+				if got := w.Header().Get("Access-Control-Allow-Origin"); got != tc.wantOrigin || w.Code != tc.status {
+					t.Errorf("%s %s 来源 %q 得到 %d %q，期望 %d %q", tc.method, tc.target, tc.origin, w.Code, got, tc.status, tc.wantOrigin)
+					return
+				}
+			}
+		})
+	}
+	workers.Wait()
 }
 
 func TestCORSPreservesVaryWildcard(t *testing.T) {

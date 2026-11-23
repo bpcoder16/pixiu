@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/net/http/httpguts"
@@ -21,6 +22,7 @@ type CORSRule struct {
 	// PathPrefix 是按完整路径段匹配的绝对前缀，/ 表示整个 Engine。
 	PathPrefix string `mapstructure:"pathPrefix"`
 	// AllowOrigins 为 HTTP(S) 来源，或单独的 "*"；启用凭据时必须列举来源。
+	// IPv4 请按浏览器 location.origin 填写完整地址，例如 127.0.0.1，简写 127.1 无法匹配。
 	AllowOrigins []string `mapstructure:"allowOrigins"`
 	// AllowMethods 显式列举可跨域访问的业务方法，方法名区分大小写。
 	AllowMethods []string `mapstructure:"allowMethods"`
@@ -69,9 +71,13 @@ func NewCORS(rules ...CORSRule) (gin.HandlerFunc, error) {
 				continue
 			}
 			// Gin 可开启路径清理或按 RawPath 路由；各表示须属于同一授权范围。
-			if p.matches(path.Clean(u.Path)) && (u.RawPath == "" || p.matches(u.RawPath) && p.matches(path.Clean(u.RawPath))) {
-				p.apply(c)
+			if !p.matches(path.Clean(u.Path)) {
+				return
 			}
+			if u.RawPath != "" && (!p.matchesRawPath(u.RawPath) || !p.matchesRawPath(path.Clean(u.RawPath))) {
+				return
+			}
+			p.apply(c)
 			return
 		}
 	}, nil
@@ -80,6 +86,28 @@ func NewCORS(rules ...CORSRule) (gin.HandlerFunc, error) {
 func (p *corsPolicy) matches(requestPath string) bool {
 	tail, ok := strings.CutPrefix(requestPath, p.prefix)
 	return p.prefix == "/" || ok && (tail == "" || tail[0] == '/')
+}
+
+func (p *corsPolicy) matchesRawPath(rawPath string) bool {
+	if p.matches(rawPath) {
+		return true
+	}
+	// 仅将百分号编码的非 ASCII 字节视作等价，斜杠等 ASCII 字节仍须原样匹配。
+	for i := 0; i < len(p.prefix); i++ {
+		if len(rawPath) > 0 && rawPath[0] == p.prefix[i] {
+			rawPath = rawPath[1:]
+			continue
+		}
+		if p.prefix[i] < utf8.RuneSelf || len(rawPath) < 3 || rawPath[0] != '%' {
+			return false
+		}
+		b, err := strconv.ParseUint(rawPath[1:3], 16, 8)
+		if err != nil || byte(b) != p.prefix[i] {
+			return false
+		}
+		rawPath = rawPath[3:]
+	}
+	return rawPath == "" || rawPath[0] == '/'
 }
 
 func compileCORS(r CORSRule) (corsPolicy, error) {
