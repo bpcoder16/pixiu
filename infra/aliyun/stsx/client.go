@@ -10,7 +10,7 @@ import (
 
 	stssdk "github.com/alibabacloud-go/sts-20150401/v2/client"
 	"github.com/aliyun/credentials-go/credentials"
-	"github.com/bpcoder16/pixiu/infra/internal/aliyun"
+	"github.com/bpcoder16/pixiu/infra/aliyun/internal/sdk"
 )
 
 // ErrClosed 表示客户端已关闭，不再接受新操作。
@@ -61,10 +61,10 @@ func New(cfg Config, opts ...Option) (*Client, error) {
 	if cfg.Endpoint == "" {
 		cfg.Endpoint = "https://sts." + cfg.Region + ".aliyuncs.com"
 	}
-	if err := aliyun.ValidateConfig(cfg.Name, cfg.Region, cfg.Endpoint, cfg.RequestTimeout, cfg.SlowThreshold); err != nil {
+	if err := sdk.ValidateConfig(cfg.Name, cfg.Region, cfg.Endpoint, cfg.RequestTimeout, cfg.SlowThreshold); err != nil {
 		return nil, fmt.Errorf("stsx: %w", err)
 	}
-	credential, err := aliyun.ResolveCredential(cfg.AccessKeyID, cfg.AccessKeySecret, cfg.Credential)
+	credential, err := sdk.ResolveCredential(cfg.AccessKeyID, cfg.AccessKeySecret, cfg.Credential)
 	if err != nil {
 		return nil, fmt.Errorf("stsx: %w", err)
 	}
@@ -74,18 +74,18 @@ func New(cfg Config, opts ...Option) (*Client, error) {
 	if cfg.SlowThreshold == 0 {
 		cfg.SlowThreshold = 500 * time.Millisecond
 	}
-	httpClient, transport, err := aliyun.NewHTTPClient()
+	httpClient, transport, err := sdk.NewHTTPClient()
 	if err != nil {
 		return nil, fmt.Errorf("stsx: %w", err)
 	}
-	sdk, err := newSTSClient(cfg.Region, cfg.Endpoint, credential, httpClient)
+	stsClient, err := newSTSClient(cfg.Region, cfg.Endpoint, credential, httpClient)
 	if err != nil {
 		transport.CloseIdleConnections()
 		return nil, fmt.Errorf("stsx: create client: %w", err)
 	}
 	c := &Client{
 		name:           cfg.Name,
-		sdk:            sdk,
+		sdk:            stsClient,
 		transport:      transport,
 		requestTimeout: cfg.RequestTimeout,
 		slowThreshold:  cfg.SlowThreshold,

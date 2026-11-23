@@ -14,7 +14,7 @@ import (
 	essdk "github.com/alibabacloud-go/elasticsearch-20170613/v6/client"
 	"github.com/alibabacloud-go/tea/dara"
 	"github.com/aliyun/credentials-go/credentials"
-	"github.com/bpcoder16/pixiu/infra/internal/aliyun"
+	"github.com/bpcoder16/pixiu/infra/aliyun/internal/sdk"
 )
 
 // ErrClosed 表示客户端已关闭，不再接受新操作。
@@ -62,13 +62,13 @@ type Client struct {
 
 // New 只校验和构造独立客户端，不发起网络验活，也不登记为共享实例。
 func New(cfg Config, opts ...Option) (*Client, error) {
-	if err := aliyun.ValidateConfig(cfg.Name, cfg.Region, cfg.Endpoint, cfg.RequestTimeout, cfg.SlowThreshold); err != nil {
+	if err := sdk.ValidateConfig(cfg.Name, cfg.Region, cfg.Endpoint, cfg.RequestTimeout, cfg.SlowThreshold); err != nil {
 		return nil, fmt.Errorf("esx: %w", err)
 	}
 	if cfg.InstanceID == "" || strings.TrimSpace(cfg.InstanceID) != cfg.InstanceID {
 		return nil, errors.New("esx: instance ID is required and must not have surrounding whitespace")
 	}
-	credential, err := aliyun.ResolveCredential(cfg.AccessKeyID, cfg.AccessKeySecret, cfg.Credential)
+	credential, err := sdk.ResolveCredential(cfg.AccessKeyID, cfg.AccessKeySecret, cfg.Credential)
 	if err != nil {
 		return nil, fmt.Errorf("esx: %w", err)
 	}
@@ -78,7 +78,7 @@ func New(cfg Config, opts ...Option) (*Client, error) {
 	if cfg.SlowThreshold == 0 {
 		cfg.SlowThreshold = 200 * time.Millisecond
 	}
-	httpClient, transport, err := aliyun.NewHTTPClient()
+	httpClient, transport, err := sdk.NewHTTPClient()
 	if err != nil {
 		return nil, fmt.Errorf("esx: %w", err)
 	}
@@ -103,12 +103,12 @@ func New(cfg Config, opts ...Option) (*Client, error) {
 		sdkConfig.Endpoint = new(endpoint.Host)
 		sdkConfig.Protocol = new(endpoint.Scheme)
 	}
-	sdk, err := essdk.NewClient(sdkConfig)
+	esClient, err := essdk.NewClient(sdkConfig)
 	if err != nil {
 		transport.CloseIdleConnections()
 		return nil, fmt.Errorf("esx: create SDK client: %w", err)
 	}
-	c.sdk = sdk
+	c.sdk = esClient
 	for _, opt := range opts {
 		if opt != nil {
 			opt(c)

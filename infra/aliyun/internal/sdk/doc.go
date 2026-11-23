@@ -1,16 +1,16 @@
-// Package aliyun 提供阿里云 SDK 适配包内部共用的配置校验、凭据解析、HTTP 客户端构造和 Tea 结果日志分类。
+// Package sdk 提供阿里云 SDK 适配包内部共用的配置校验、凭据解析、HTTP 客户端构造和 Tea 结果日志分类。
 // 不保存全局账号、客户端或注册表；每次构造的凭据和连接池独立。
 // 服务包保留自己的公开 Config、默认值、SDK 适配、请求执行及关闭逻辑。
 // 例如服务包的构造函数可依次校验参数、解析凭据并创建连接池：
 //
-//	if err := aliyun.ValidateConfig(name, region, endpoint, requestTimeout, slowThreshold); err != nil {
+//	if err := sdk.ValidateConfig(name, region, endpoint, requestTimeout, slowThreshold); err != nil {
 //		return err
 //	}
-//	credential, err := aliyun.ResolveCredential(accessKeyID, accessKeySecret, providedCredential)
+//	credential, err := sdk.ResolveCredential(accessKeyID, accessKeySecret, providedCredential)
 //	if err != nil {
 //		return err
 //	}
-//	httpClient, transport, err := aliyun.NewHTTPClient()
+//	httpClient, transport, err := sdk.NewHTTPClient()
 //	if err != nil {
 //		return err
 //	}
@@ -22,4 +22,4 @@
 // 注入凭据与任意 AK/SK 字段互斥，动态凭据不提前读取，所有构造函数均不联网。
 // 配置错误由服务包补充前缀。ES 和 STS 通过 ClassifyTeaResult 提取结果日志所需的字段和级别，
 // 各自输出日志并将 SDK 错误返回给调用方。
-package aliyun
+package sdk

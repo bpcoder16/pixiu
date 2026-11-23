@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/bpcoder16/pixiu/infra/internal/aliyun"
+	"github.com/bpcoder16/pixiu/infra/aliyun/internal/sdk"
 	"github.com/bpcoder16/pixiu/logit"
 )
 
@@ -15,7 +15,7 @@ func (c *Client) finish(ctx context.Context, operation, requestID string, status
 	if !c.logRequests {
 		return
 	}
-	result := aliyun.ClassifyTeaResult(status, requestID, err, duration, c.slowThreshold)
+	result := sdk.ClassifyTeaResult(status, requestID, err, duration, c.slowThreshold)
 	if !logit.LoggerFromContext(ctx).Enabled(result.Level) {
 		return
 	}
