@@ -54,7 +54,7 @@
 // Handler 必须等待其子工作完成，不得使用 runtime.Goexit 或同步等待自身关闭。
 //
 // Config.Locker 可直接接收 gocron.Locker；所有任务共享该锁策略，并须设置正 Timeout。
-// gocron-redis-lock 的连接、前缀、TTL 与续租由宿主配置，不扩展 lockx。
+// gocron-redis-lock 的连接、键前缀、租期与续租间隔由宿主配置。
 // 获取锁失败跳过本轮；解锁使用独立 1s context 并记录错误，等实际业务返回后才释放。
 // 租约有效时提供同名任务互斥，不保证每个时间点集群只执行一次；各节点独立调度。
 // Redis 插件失租不会通知或取消 Handler，关键业务仍须幂等和数据端约束。
