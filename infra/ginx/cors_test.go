@@ -164,6 +164,17 @@ func TestCORSPreservesVaryWildcard(t *testing.T) {
 	}
 }
 
+func TestSerializedOriginIPv4MappedIPv6(t *testing.T) {
+	got, err := serializedOrigin("https://[::ffff:192.0.2.1]:8443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "https://[::ffff:c000:201]:8443"
+	if got != want {
+		t.Fatalf("来源应与浏览器格式一致，得到 %q，期望 %q", got, want)
+	}
+}
+
 func TestCORSInvalidRules(t *testing.T) {
 	valid := CORSRule{
 		PathPrefix:   "/api",

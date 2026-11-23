@@ -1,6 +1,7 @@
 package ginx
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -153,7 +154,13 @@ func serializedOrigin(raw string) (string, error) {
 		if err != nil || !addr.Is6() || !strings.HasPrefix(u.Host, "[") {
 			return "", fmt.Errorf("invalid IPv6 origin %q", raw)
 		}
-		host = "[" + addr.String() + "]"
+		if addr.Is4In6() {
+			// 浏览器用两个十六进制分组表示映射地址的 IPv4 部分。
+			v4 := addr.As4()
+			host = fmt.Sprintf("[::ffff:%x:%x]", binary.BigEndian.Uint16(v4[:2]), binary.BigEndian.Uint16(v4[2:]))
+		} else {
+			host = "[" + addr.String() + "]"
+		}
 	}
 	if port := u.Port(); port != "" {
 		n, err := strconv.ParseUint(port, 10, 16)
@@ -173,7 +180,7 @@ func (p *corsPolicy) apply(c *gin.Context) {
 	req := c.Request
 	h := c.Writer.Header()
 	method := req.Method
-	// 预检与普通 OPTIONS 可能共用缓存。已有 Vary: * 已覆盖全部维度。
+	// 保留已有 Vary，仅补充影响 CORS 响应的请求头；通配符已覆盖全部维度。
 	if !httpguts.HeaderValuesContainsToken(h.Values("Vary"), "*") {
 		addVary(h, "Origin")
 		if method == http.MethodOptions {
