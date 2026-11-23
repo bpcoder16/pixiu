@@ -16,6 +16,24 @@
 //	})
 //	// router 实现 http.Handler,交给应用选用的 HTTP 服务端。
 //
+// 可选跨域策略通过 Engine 级中间件接入，在注册路由前安装。以下示例仅向指定前端开放 /items：
+//
+//	cors, err := ginx.NewCORS(ginx.CORSRule{
+//		PathPrefix:   "/items",
+//		AllowOrigins: []string{"https://web.example.com"},
+//		AllowMethods: []string{"POST"},
+//		AllowHeaders: []string{"Authorization", "Content-Type"},
+//	})
+//	if err != nil {
+//		return err
+//	}
+//	router, err := ginx.New(ginx.Config{
+//		Middlewares: []gin.HandlerFunc{cors},
+//	})
+//	if err != nil {
+//		return err
+//	}
+//
 // New 不修改 Gin 全局模式或 Validator,不自动注册管理端点。
 // 默认开启 ContextWithFallback,兼容直接传 c 时透传请求的取消、deadline 与日志上下文。
 // 业务仍推荐使用 c.Request.Context(),不要将可复用的 *gin.Context 交给后台任务。

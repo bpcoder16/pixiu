@@ -15,7 +15,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" alt="许可证 Apache-2.0"></a>
 </p>
 
-貔貅将 Go 服务中反复出现的工程能力沉淀为职责清楚、可按需引入的包：从结构化日志、文件轮转和并发任务，到 HTTP、数据库、缓存、消息通信、JWT 签发验签，以及可复用的分布式锁流程。
+貔貅将 Go 服务中反复出现的工程能力沉淀为职责清楚、可按需引入的包：从结构化日志、文件轮转和并发任务，到 HTTP、数据库、缓存、消息通信和 JWT 签发验签。
 
 你可以只引入一个基础模块，也可以在应用中组合多种能力。资源的创建、业务配置与退出顺序由应用明确掌握。
 
@@ -56,7 +56,6 @@ go get github.com/bpcoder16/pixiu/logit
 go get github.com/bpcoder16/pixiu/rotatefile
 go get github.com/bpcoder16/pixiu/infra/httpcall
 go get github.com/bpcoder16/pixiu/infra/jwtx
-go get github.com/bpcoder16/pixiu/biz/lockx/redislock
 ```
 
 各包共享根 Go module，导入路径都以 `github.com/bpcoder16/pixiu` 开头。只使用基础模块时不会编译 `infra/` 的代码，但根 `go.mod` 仍记录基础功能与业务功能使用的第三方依赖。
@@ -102,7 +101,7 @@ func main() {
 
 这个例子会向标准输出写入 JSON 日志，在同一请求中沿用 `logId` 和 `service` 字段，并在结束日志中追加自身与总耗时。
 
-默认全局 Logger 为空操作 Logger：未调用 `SetDefault` 时，日志不输出到 stdout/stderr，所有级别（包括 Fatal）直接返回，`Enabled` 为 false，`Close` 返回 nil。仅使用 `biz/lockx`、`infra/elasticsearchx` 等能力时，无需初始化 logit。需要日志时，在启动阶段通过 `New` / `MustNew` 构造实例并调用 `SetDefault`；也可直接使用独立实例，或通过 `SetNamed` 注册命名 Logger。`WithContext` 的前置约束和 panic 专用接口语义保持不变。
+默认全局 Logger 为空操作 Logger：未调用 `SetDefault` 时，日志不输出到 stdout/stderr，所有级别（包括 Fatal）直接返回，`Enabled` 为 false，`Close` 返回 nil。仅使用 `infra/elasticsearchx` 等能力时，无需初始化 logit。需要日志时，在启动阶段通过 `New` / `MustNew` 构造实例并调用 `SetDefault`；也可直接使用独立实例，或通过 `SetNamed` 注册命名 Logger。`WithContext` 的前置约束和 panic 专用接口语义保持不变。
 
 需要缓存模块 Logger 时，应在启动阶段完成 `logit.SetDefault` 或 `logit.SetNamed` 后再获取实例。初始化前缓存的空操作 Logger 会继续保持静默。包级 `logit.Info(ctx, ...)` 等方法在每次调用时选择当前 Logger。
 
@@ -123,6 +122,7 @@ func main() {
 | [`netx`](netx/doc.go) | 本机 IPv4 / IPv6 地址查询 | 获取符合筛选规则的网卡地址 |
 | [`validx`](validx/doc.go) | 手机号、邮箱、HTTP URL、IP、数字串与 rune 长度验证 | 请求参数的无状态格式检查 |
 | [`moneyx`](moneyx/doc.go) | 元字符串与 int64 分金额精确转换，支持负数、格式及溢出错误 | 金额输入解析与固定两位小数输出 |
+| [`percentx`](percentx/doc.go) | 万分之一整数与百分比文本精确互转，支持整个 int64 范围 | 费率输入与百分比展示 |
 
 以上基础模块的生产代码仅依赖 Go 标准库，彼此不互相导入。
 
@@ -152,7 +152,7 @@ func main() {
 | [`infra/redisx`](infra/redisx/doc.go) | 单机 Redis 客户端、初始化验活、命令结果日志 | go-redis v9、logit |
 | [`infra/natsx`](infra/natsx/doc.go) | Core / JetStream 消息收发、启动期批量消费注册、Handler 注册表、命名空间与统一日志 | nats.go、logit |
 | [`infra/elasticsearchx`](infra/elasticsearchx/doc.go) | Elasticsearch 通用操作、Bulk、默认及命名实例、结果日志与版本适配 | 官方 Elasticsearch SDK、logit |
-| [`infra/estextsearch`](infra/estextsearch/doc.go) | Elasticsearch 短文本查询 DSL、基础召回与混合输入扩展召回 | 标准库 |
+| [`infra/elasticsearchx/textsearch`](infra/elasticsearchx/textsearch/doc.go) | Elasticsearch 短文本查询 DSL、基础召回与混合输入扩展召回 | 标准库 |
 | [`infra/aliyun/ossx`](infra/aliyun/ossx/doc.go) | OSS 固定 Bucket 的上传、对象查询、下载签名与生命周期 | 阿里云 OSS SDK V2、credentials-go、logit |
 | [`infra/aliyun/stsx`](infra/aliyun/stsx/doc.go) | STS AssumeRole、临时凭据与独立生命周期 | 阿里云 STS SDK、credentials-go、logit |
 | [`infra/aliyun/esx`](infra/aliyun/esx/doc.go) | 阿里云 ES 固定 InstanceID 的同义词清单、完整清单更新、实例查询 | 阿里云 Elasticsearch 管理 SDK、credentials-go、logit |
@@ -161,7 +161,9 @@ Elasticsearch 连接按服务端主版本选择 [`v7`](infra/elasticsearchx/v7/d
 
 独立 Elasticsearch 客户端默认关闭请求结果日志，通过 `OptLogRequests(true)` 开启；请求体和响应详情还需开启 `OptLogDetails(true)`。context 已调用 `logit.WithStart` 时，关闭结果日志仍会记录请求级下游耗时。`Search` 超时或分片失败会保留已有结果并返回 `PartialSearchError`；`Bulk` 动作失败返回 `BulkError` 并保留成功数与失败项，调用方应检查错误后再决定是否接受结果或重试。
 
-`infra/estextsearch` 独立构建查询子句，不执行网络请求：`Query(field, text)` 提供基础召回，`QueryExpanded(field, text)` 扩展跨词同义词与编号等符号片段的组合召回，可能增加查询成本并改变评分或排名。调用方须准备主字段及 `.contains`、`.contains_unigram` 子字段，索引配置见 [模板说明](infra/estextsearch/templates/README.md)；空输入返回 `nil, nil`，合并请求时应省略该条件。
+原 `biz/elasticsearchservice` 的词库验证已合入 `infra/elasticsearchx`。已有客户端可直接调用 `client.ValidateSynonyms(ctx, elasticsearchx.SynonymValidationOptions{SynonymsPath: "analysis/synonyms.txt"})`。结果分别报告验证与清理状态，`MayExist` 为真时按 `Index` 核查临时索引。
+
+原 `infra/estextsearch` 已迁至 `infra/elasticsearchx/textsearch`，包名改为 `textsearch`。该包独立构建查询子句，不执行网络请求：`Query(field, text)` 提供基础召回，`QueryExpanded(field, text)` 扩展跨词同义词与编号等符号片段的组合召回，可能增加查询成本并改变评分或排名。调用方须准备主字段及 `.contains`、`.contains_unigram` 子字段，索引配置见 [模板说明](infra/elasticsearchx/textsearch/templates/README.md)；空输入返回 `nil, nil`，合并请求时应省略该条件。
 
 `infra/aliyun/ossx`、`infra/aliyun/stsx` 和 `infra/aliyun/esx` 独立持有配置、凭据、连接池和命名注册表，可使用不同账号。三者均支持成对配置 `AccessKeyID` / `AccessKeySecret`，或注入与其互斥的 `Credential`；`New` 只构造，不联网验活，结果日志默认关闭。共享实例使用 `NewNamed` / `NewDefault` 创建并统一 `CloseAll`；独立 `New` 创建的实例自行关闭。
 
@@ -171,14 +173,14 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 
 | 包 | 能力 | 典型用途 |
 | --- | --- | --- |
-| [`biz/common`](biz/common/doc.go) | 按应用时区生成 ID、格式化时间，int64 万分之一整数与百分比精确互转，名称脱敏 | 常规业务工具；ID 与时间依赖 env，百分比支持负数，MaskName 支持自定义符号 |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
 | [`biz/ossservice`](biz/ossservice/doc.go) | multipart 上传、指定对象的 STS 凭据签发、URL 内容 MD5 | 上传需要 OSS，签发另需 STS；MD5FromURL 为独立包函数，无需客户端 |
-| [`biz/elasticsearchservice`](biz/elasticsearchservice/doc.go) | 固定 standard → lowercase → synonym_graph，创建临时索引严格验证并清理 | 通过 `ValidateSynonyms` 验证 `synonyms_path`，保留 ES 错误原因与清理状态 |
-| [`biz/lockx`](biz/lockx/doc.go) | 阻塞 / 非阻塞锁契约，默认及命名执行器，`Do` / `TryDo` 协调获取、执行与释放 | 受锁保护的业务流程 |
-| [`biz/lockx/redislock`](biz/lockx/redislock/doc.go) | 基于单机 Redis 的固定租期锁，原子校验身份并释放 | 同一协议下的多实例协调 |
 
 新宿主使用 Baize 加载应用配置、初始化日志、装配资源和执行数据库迁移，通过 Baize 的 `httpboot.Gin`、`cronboot.Service`、`natsboot.ConsumerService` 和 `realtimeboot.Service` 装配常驻服务。事务发件箱使用 Baize 的 `service/outbox`，JetStream 投递通过 `outboxboot.PrepareJetStream` 装配。[Baize v0.1.0](https://github.com/bpcoder16/baize/tree/v0.1.0)
+
+原 `biz/common` 已拆分。百分比转换改用 Pixiu 的 `percentx.Format` 和 `percentx.Parse`，两个百分比错误也随包迁移。业务编号改用 Baize 的 `bizid.Generate`，时间展示与名称脱敏改用 Baize 的 `display.FormatTime` 和 `display.MaskName`。
+
+分布式业务锁已从 `github.com/bpcoder16/pixiu/biz/lockx` 迁至 `github.com/bpcoder16/baize/service/lockx`，Redis 后端随之迁至新路径的 `redislock` 子包。升级 Pixiu 前，将宿主的 `redisboot.PrepareLock` 配置、`lockx.Named` 调用和测试后端一起切换到新包。两个包各有独立的命名注册表。已迁移的宿主使用 Baize `v0.1.2-0.20261123080219-0af689c5bc07`。[Baize 锁包文档](https://github.com/bpcoder16/baize/blob/0af689c5bc072c1424da58ebb4dcf7969d2d5e7f/service/lockx/doc.go)
 
 ## 分层架构
 
@@ -580,7 +582,7 @@ func run() error {
 
 接入 HTTP 认证时，应用实现 [`httpauth.Authenticator`](biz/httpauth/doc.go)，通过 `httpauth.BearerToken` 提取凭证，再调用 jwtx 验签器的 `Verify`，成功后返回 `Principal`。按名称注册认证方案，再用 [`ginauth`](biz/httpauth/ginauth/doc.go) 的 `Require(name)` 绑定路由；业务从请求 Context 读取身份。刷新、撤销和授权规则由应用实现，认证成功不自动代表具备业务权限。
 
-更多示例：[`ginx` 请求处理](infra/ginx/doc.go)、[`httpserver` 启停](infra/httpserver/doc.go)、[`lrucache` 缓存](infra/lrucache/doc.go)、[`mysqlx` 主从查询](infra/mysqlx/doc.go)、[`natsx` 消息通信](infra/natsx/doc.go)、[`redislock` 锁流程](biz/lockx/redislock/doc.go)。
+更多示例：[`ginx` 请求处理](infra/ginx/doc.go)、[`httpserver` 启停](infra/httpserver/doc.go)、[`lrucache` 缓存](infra/lrucache/doc.go)、[`mysqlx` 主从查询](infra/mysqlx/doc.go)、[`natsx` 消息通信](infra/natsx/doc.go)。
 
 ## 使用约定
 
@@ -595,7 +597,6 @@ func run() error {
 | 文件轮转 | 路径必须为绝对路径，同一路径由一个 Writer 管理。进入新时段后的首次 Write 触发轮转，每小时整点清理旧文件，清理完成前文件数可能暂时超过保留上限；旧文件异步 Sync / Close，Writer 的 Sync / Close 等待收尾。 |
 | 日志详情 | 各适配包的日志开关与默认值见包文档。开启 Header / Body / SQL / 命令参数等详情时，按包契约保留完整内容，应用需决定记录范围及敏感数据策略。 |
 | 数据库读写 | 事务与要求读己之写的查询显式使用主库；可接受延迟的读取可选择从库。模型迁移由应用决定。 |
-| Redis 锁 | `biz/lockx/redislock` 使用固定租期。同一资源的竞争者使用相同实现与协议，业务自行响应取消，并结合幂等、事务或数据端版本约束保护结果。 |
 | JWT 验签 | 实例固定算法与密钥。每次验签使用新的空 claims 对象，仅在 `Verify` 返回 nil 后使用身份字段；失败时丢弃可能已解码的不可信内容。HTTP 认证可组合 httpauth / ginauth，会话刷新、撤销与授权规则由应用处理。 |
 | 应用退出 | 先停止入口与生产者，等待任务结束，再关闭下游资源，最后关闭日志。`lifecycle.Stack` 逆序关闭资源，所以日志关闭函数应先登记。 |
 
