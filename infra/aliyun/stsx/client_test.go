@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -88,6 +89,45 @@ func TestAssumeRoleAndValidation(t *testing.T) {
 	if calls.Load() != 2 {
 		t.Fatal("invalid input made network calls")
 	}
+}
+
+func TestAssumeRoleConcurrentSessions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	var arrived atomic.Int32
+	bothArrived := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		session := r.FormValue("RoleSessionName")
+		// 两次签发都到达后才返回各自的令牌，确保同一客户端允许请求同时在途。
+		if arrived.Add(1) == 2 {
+			close(bothArrived)
+		}
+		select {
+		case <-bothArrived:
+		case <-ctx.Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, strings.Replace(successResponse, "temporary-token", session, 1))
+	}))
+	defer server.Close()
+	client := newTestClient(t, testConfig(server.URL))
+	var calls sync.WaitGroup
+	for _, session := range []string{"upload-a", "upload-b"} {
+		calls.Go(func() {
+			req := testRequest()
+			req.SessionName = session
+			got, err := client.AssumeRole(ctx, req)
+			if err != nil {
+				t.Errorf("会话 %s 签发失败: %v", session, err)
+				return
+			}
+			if got.SecurityToken != session {
+				t.Errorf("会话 %s 收到的令牌与请求不符", session)
+			}
+		})
+	}
+	calls.Wait()
 }
 
 func TestAssumeRoleFailureLogs(t *testing.T) {

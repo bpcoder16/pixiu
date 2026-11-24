@@ -70,7 +70,9 @@ func (c *Client) AssumeRole(ctx context.Context, req AssumeRoleRequest) (result 
 	if req.Policy != "" {
 		request.Policy = new(req.Policy)
 	}
-	response, err := c.sdk.AssumeRoleWithContext(callCtx, request, &dara.RuntimeOptions{Autoretry: new(false)})
+	// SDK 会读取并清空自身的 Headers 字段。每次调用使用独立副本，继续复用 HTTP 连接池和凭据提供者。
+	client := *c.sdk
+	response, err := client.AssumeRoleWithContext(callCtx, request, &dara.RuntimeOptions{Autoretry: new(false)})
 	if err != nil {
 		if callCtx.Err() != nil {
 			err = errors.Join(err, callCtx.Err())
