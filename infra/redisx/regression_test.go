@@ -20,7 +20,7 @@ func TestCommandCancelDuringReadPreservesDriverResult(t *testing.T) {
 	received := make(chan struct{})
 	release := make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(release) })
-	client := newWireClient(t, false, func(string) string {
+	client := newWireClient(t, Config{}, func(string) string {
 		close(received)
 		<-release
 		return "$5\r\nvalue\r\n"
@@ -105,7 +105,7 @@ func TestCommandLogsRedisErrorCode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			useLogger(t, &buf, logit.DebugLevel)
-			client := newWireClient(t, true, func(string) string { return tt.reply })
+			client := newWireClient(t, Config{LogCommands: true}, func(string) string { return tt.reply })
 			err := client.Client().Get(context.Background(), "key").Err()
 			switch tt.status {
 			case "error":
@@ -140,7 +140,7 @@ func TestPipelineLogsFirstRedisErrorCode(t *testing.T) {
 	var buf bytes.Buffer
 	useLogger(t, &buf, logit.DebugLevel)
 	commands := 0
-	client := newWireClient(t, false, func(string) string {
+	client := newWireClient(t, Config{}, func(string) string {
 		commands++
 		// 先读完批量请求再写响应，避免 net.Pipe 两端同时阻塞在写入。
 		if commands < 3 {
@@ -169,8 +169,63 @@ func TestPipelineLogsFirstRedisErrorCode(t *testing.T) {
 	}
 }
 
+func TestOmitLogArgs(t *testing.T) {
+	const key, value = "private-key", "private-value"
+	for _, tt := range []struct {
+		level  string
+		reply  string
+		status string
+	}{
+		{level: "WARN", reply: "+OK\r\n", status: "ok"},
+		{level: "ERROR", reply: "-WRONGTYPE invalid value\r\n", status: "error"},
+	} {
+		t.Run(tt.level, func(t *testing.T) {
+			var buf bytes.Buffer
+			useLogger(t, &buf, logit.DebugLevel)
+			client := newWireClient(t, Config{
+				SlowThreshold: time.Nanosecond,
+				OmitLogArgs:   true,
+			}, func(string) string { return tt.reply })
+			ctx := t.Context()
+			for _, operation := range []string{"set", "pipeline"} {
+				buf.Reset()
+				var err error
+				if operation == "set" {
+					err = client.Client().Set(ctx, key, value, 0).Err()
+				} else {
+					_, err = client.Client().Pipelined(ctx, func(pipe redis.Pipeliner) error {
+						pipe.Set(ctx, key, value, 0)
+						return nil
+					})
+				}
+				if (err != nil) != (tt.status == "error") {
+					t.Fatalf("%s 命令结果异常：%v", operation, err)
+				}
+				record := onlyRecord(t, &buf)
+				details := record["downstream_details"].(map[string]any)
+				if record["level"] != tt.level || record["downstream_duration_ms"] == nil ||
+					details["command"] != operation || details["status"] != tt.status {
+					t.Fatalf("%s 诊断信息不完整：%v", operation, record)
+				}
+				if tt.status == "error" && (details["error_type"] != "redis" || details["error_code"] != "WRONGTYPE") {
+					t.Fatalf("%s 错误分类不完整：%v", operation, details)
+				}
+				if operation == "pipeline" {
+					commands := details["commands"].([]any)
+					if len(commands) != 1 || commands[0].(map[string]any)["command"] != "set" {
+						t.Fatalf("批量日志应保留业务命令名：%v", details)
+					}
+				}
+				if strings.Contains(buf.String(), `"args"`) || strings.Contains(buf.String(), key) || strings.Contains(buf.String(), value) {
+					t.Fatalf("%s 日志包含命令参数：%v", operation, record)
+				}
+			}
+		})
+	}
+}
+
 // 复用 RESP 请求解析，通过底层客户端验证命令执行与日志的完整链路。
-func newWireClient(t *testing.T, logCommands bool, reply func(string) string) *Client {
+func newWireClient(t *testing.T, cfg Config, reply func(string) string) *Client {
 	t.Helper()
 	dialer := func(context.Context, string, string) (net.Conn, error) {
 		client, server := net.Pipe()
@@ -202,20 +257,20 @@ func newWireClient(t *testing.T, logCommands bool, reply func(string) string) *C
 		}()
 		return client, nil
 	}
-	client, err := New(Config{
-		Name:          "cache",
-		SlowThreshold: time.Hour,
-		LogCommands:   logCommands,
-		Options: redis.Options{
-			Addr:            "test",
-			Dialer:          dialer,
-			Protocol:        2,
-			DisableIdentity: true,
-			MaxRetries:      -1,
-			ReadTimeout:     time.Second,
-			WriteTimeout:    time.Second,
-		},
-	})
+	cfg.Name = "cache"
+	if cfg.SlowThreshold == 0 {
+		cfg.SlowThreshold = time.Hour
+	}
+	cfg.Options = redis.Options{
+		Addr:            "test",
+		Dialer:          dialer,
+		Protocol:        2,
+		DisableIdentity: true,
+		MaxRetries:      -1,
+		ReadTimeout:     time.Second,
+		WriteTimeout:    time.Second,
+	}
+	client, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

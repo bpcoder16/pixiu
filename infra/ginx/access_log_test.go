@@ -443,6 +443,43 @@ func TestAccessLogAlwaysInfoDuration(t *testing.T) {
 	}
 }
 
+func TestAccessLogIsolatesRequestDurations(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		output := captureAccessLogs(t)
+		router, err := New(Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		router.GET("/:name", func(c *gin.Context) {
+			time.Sleep(2 * time.Millisecond)
+			logit.AddDownstreamDurationAuto(c.Request.Context(), c.Param("name"), time.Millisecond)
+		})
+
+		parent := logit.WithStart(t.Context())
+		time.Sleep(time.Second)
+		for _, name := range []string{"first", "second"} {
+			req := httptest.NewRequestWithContext(parent, http.MethodGet, "/"+name, nil)
+			router.ServeHTTP(httptest.NewRecorder(), req)
+		}
+		logit.InfoDuration(parent, "parent")
+		records := accessLogRecords(t, output)
+		if len(records) != 3 {
+			t.Fatalf("预期两条访问日志和一条父级日志，得到 %v", records)
+		}
+		for i, name := range []string{"first", "second"} {
+			if records[i][name+"_1_duration_ms"] != float64(1) || records[i]["total_duration_ms"] != float64(2) {
+				t.Errorf("请求 %s 的耗时应从本次入口独立计算：%v", name, records[i])
+			}
+		}
+		if _, exists := records[1]["first_1_duration_ms"]; exists {
+			t.Errorf("第二个请求包含第一个请求的耗时：%v", records[1])
+		}
+		if records[2]["self_duration_ms"] != records[2]["total_duration_ms"] {
+			t.Errorf("请求的下游耗时计入了父级：%v", records[2])
+		}
+	})
+}
+
 func TestAccessLogInfoFiltering(t *testing.T) {
 	output := captureAccessLogs(t, logit.OptMinLevel(logit.WarnLevel))
 	input := &accessLogBody{Reader: strings.NewReader("不应预读的正文")}

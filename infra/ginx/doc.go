@@ -41,6 +41,7 @@
 // 需要可观测的重定向时可在显式路由中调用 c.Redirect。
 // 自行重新开启 Gin 自动重定向会绕过内置中间件,不产生访问日志、Observe 或日志 ID 响应头。
 // 通过 TraceHeader(PIXIU-Log-Id)接收并回写日志 ID;非空值原样使用,缺失或为空时生成。
+// 每个请求从进入 ginx 开始独立计时，父 context 和其他请求的下游耗时分别汇总。
 // 访问日志统一使用 logit.InfoDuration,不随状态码改变 Info 级别。
 // LogRequestInfo、LogResponseInfo 默认关闭,分别追加 request_info、response_info 详情;
 // DisableAccessLog 为 true 时两者均不生效,Observe 回调和独立 panic 错误日志不受影响。

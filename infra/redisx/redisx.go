@@ -18,9 +18,11 @@ type Config struct {
 	Options redis.Options
 	// SlowThreshold 是慢命令阈值；零值默认 200 毫秒，负数无效。
 	SlowThreshold time.Duration
-	// LogCommands 控制是否记录正常命令的 Info 日志；所有已输出的业务命令日志
-	// 均附加完整请求参数，可能包含 key、值和凭据。
+	// LogCommands 控制是否记录正常命令的 Info 日志。
 	LogCommands bool
+	// OmitLogArgs 使本实例的命令结果日志省略 args 字段，适用于单命令、Pipeline 和 TxPipeline。
+	// 零值保留完整请求参数，可能包含 key、值和凭据。
+	OmitLogArgs bool
 }
 
 // Client 持有一个可并发使用的 Redis 客户端。
@@ -54,7 +56,7 @@ func New(cfg Config) (*Client, error) {
 	options := cfg.Options
 	options.ContextTimeoutEnabled = true
 	rdb := redis.NewClient(&options)
-	rdb.AddHook(newLoggerHook(cfg.Name, cfg.SlowThreshold, cfg.LogCommands))
+	rdb.AddHook(newLoggerHook(&cfg))
 	c := &Client{redis: rdb}
 	// 初始化 Ping 的失败交给 New 调用方统一记录，避免同一启动错误重复入日志。
 	pingCtx := context.WithValue(context.Background(), startupPingKey{}, true)

@@ -13,7 +13,8 @@
 //	    return err
 //	}
 //	client, err := redisx.New(redisx.Config{
-//	    Name: "cache",
+//	    Name:        "cache",
+//	    OmitLogArgs: true,
 //	    Options: redis.Options{
 //	        Addr:         "127.0.0.1:6379",
 //	        MaxRetries:   -1,
@@ -80,7 +81,8 @@
 // 默认只记录失败与慢调用；LogCommands 开启后正常命令也以 Info 输出。
 // 未配置 logit 时，命令结果日志为空操作；go-redis 自有诊断沿用驱动配置，
 // 仍可能写入 stderr，与 logit 初始化状态无关。
-// 所有已输出的业务命令日志均附加完整请求参数，可能包含 key、值和凭据。
+// 默认记录完整请求参数，可能包含 key、值和凭据。设置 OmitLogArgs 后，所有级别的命令结果日志
+// 均省略 args 字段；Pipeline 和 TxPipeline 仍按顺序列出业务命令名并保留批量统计。
 // 日志保留 error_type 分类，并以 error_code 输出白名单内的 Redis 错误码，
 // 其他情况为空字符串；不包含命令返回值或原始错误文本。底层客户端供业务使用全部命令、
 // Pipeline、Lua 和 Pub/Sub；调用方不能自行关闭它或在运行期修改配置与 Hook。

@@ -100,7 +100,7 @@ func New(cfg Config) (*gin.Engine, error) {
 func requestContext(loggerName string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := logit.NewContextScope(c.Request.Context())
-		ctx = logit.WithStart(ctx)
+		ctx = logit.NewDurationScope(ctx)
 		if loggerName != "" {
 			ctx = logit.WithLoggerName(ctx, loggerName)
 		}

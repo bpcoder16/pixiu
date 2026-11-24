@@ -230,7 +230,7 @@ func TestHookLogsCommandResultsAndArgs(t *testing.T) {
 	ctx := context.Background()
 	cmd := redis.NewStringCmd(ctx, "GET", "private-key")
 	cmd.SetVal("private-value")
-	hook := newLoggerHook("cache", time.Hour, true)
+	hook := testLoggerHook("cache", time.Hour, true)
 	if err := hook.ProcessHook(func(context.Context, redis.Cmder) error { return nil })(ctx, cmd); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestHookLogsCommandResultsAndArgs(t *testing.T) {
 	}
 
 	buf.Reset()
-	hook = newLoggerHook("cache", time.Hour, false)
+	hook = testLoggerHook("cache", time.Hour, false)
 	_ = hook.ProcessHook(func(context.Context, redis.Cmder) error { return nil })(ctx, cmd)
 	if buf.Len() != 0 {
 		t.Fatalf("高频成功命令默认不产生日志: %q", buf.String())
@@ -280,7 +280,7 @@ func TestHookLogsCommandResultsAndArgs(t *testing.T) {
 	}
 
 	buf.Reset()
-	hook = newLoggerHook("cache", time.Hour, true)
+	hook = testLoggerHook("cache", time.Hour, true)
 	_ = hook.ProcessHook(func(context.Context, redis.Cmder) error { return secretErr })(ctx, cmd)
 	record = onlyRecord(t, &buf)
 	details = record["downstream_details"].(map[string]any)
@@ -295,7 +295,7 @@ func TestHookMissSlowAndInternalCommands(t *testing.T) {
 	useLogger(t, &buf, logit.InfoLevel)
 	ctx := context.Background()
 	cmd := redis.NewStringCmd(ctx, "GET", "key")
-	hook := newLoggerHook("cache", time.Hour, true)
+	hook := testLoggerHook("cache", time.Hour, true)
 	got := hook.ProcessHook(func(context.Context, redis.Cmder) error { return redis.Nil })(ctx, cmd)
 	if !errors.Is(got, redis.Nil) {
 		t.Fatalf("未命中语义改变: %v", got)
@@ -306,7 +306,7 @@ func TestHookMissSlowAndInternalCommands(t *testing.T) {
 	}
 
 	buf.Reset()
-	hook = newLoggerHook("cache", time.Nanosecond, false)
+	hook = testLoggerHook("cache", time.Nanosecond, false)
 	_ = hook.ProcessHook(func(context.Context, redis.Cmder) error {
 		time.Sleep(time.Millisecond)
 		return nil
@@ -338,7 +338,7 @@ func TestHookMissSlowAndInternalCommands(t *testing.T) {
 func TestClientListLogsAndRecordsDuration(t *testing.T) {
 	var buf bytes.Buffer
 	useLogger(t, &buf, logit.DebugLevel)
-	client := newWireClient(t, true, func(string) string { return "+OK\r\n" })
+	client := newWireClient(t, Config{LogCommands: true}, func(string) string { return "+OK\r\n" })
 	ctx := logit.WithStart(context.Background())
 	if err := client.Client().ClientList(ctx).Err(); err != nil {
 		t.Fatal(err)
@@ -363,7 +363,7 @@ func TestHookClientUnblockLogsErrorAndSlow(t *testing.T) {
 			var buf bytes.Buffer
 			useLogger(t, &buf, logit.DebugLevel)
 			ctx := logit.WithStart(context.Background())
-			hook := newLoggerHook("cache", time.Nanosecond, false)
+			hook := testLoggerHook("cache", time.Nanosecond, false)
 			var commandErr error
 			wantLevel := "WARN"
 			if fail {
@@ -394,7 +394,7 @@ func TestHookClientPipelineFiltersOnlyHandshake(t *testing.T) {
 	var buf bytes.Buffer
 	useLogger(t, &buf, logit.DebugLevel)
 	ctx := logit.WithStart(context.Background())
-	hook := newLoggerHook("cache", time.Hour, true)
+	hook := testLoggerHook("cache", time.Hour, true)
 	cmds := []redis.Cmder{
 		redis.NewStatusCmd(ctx, "CLIENT", "SETNAME", "private-name"),
 		redis.NewStatusCmd(ctx, "CLIENT", "SETINFO", "LIB-NAME", "private-library"),
@@ -438,7 +438,7 @@ func TestHookPipelineReportsLaterErrorAndTxCount(t *testing.T) {
 		redis.NewStatusCmd(ctx, "SET", "private-key", "private-value"),
 		redis.NewStatusCmd(ctx, "EXEC"),
 	}
-	hook := newLoggerHook("cache", time.Hour, false)
+	hook := testLoggerHook("cache", time.Hour, false)
 	got := hook.ProcessPipelineHook(func(_ context.Context, list []redis.Cmder) error {
 		list[1].SetErr(redis.Nil)
 		list[2].SetErr(errors.New("private-error"))
@@ -487,7 +487,7 @@ func TestHookPipelineLogsBusinessCommands(t *testing.T) {
 		redis.NewStatusCmd(ctx, "SET", "private-key", "private-value"),
 		redis.NewStatusCmd(ctx, "EXEC"),
 	}
-	hook := newLoggerHook("cache", time.Hour, true)
+	hook := testLoggerHook("cache", time.Hour, true)
 	_ = hook.ProcessPipelineHook(func(context.Context, []redis.Cmder) error { return nil })(ctx, cmds)
 	record := onlyRecord(t, &buf)
 	details := record["downstream_details"].(map[string]any)
@@ -523,7 +523,7 @@ func TestHookPipelineLogsBusinessCommands(t *testing.T) {
 	}
 
 	buf.Reset()
-	hook = newLoggerHook("cache", time.Hour, false)
+	hook = testLoggerHook("cache", time.Hour, false)
 	commandErr := errors.New("private-error")
 	if err := hook.ProcessPipelineHook(func(context.Context, []redis.Cmder) error {
 		return commandErr
@@ -551,7 +551,7 @@ func TestHookRoutesByContextName(t *testing.T) {
 	logit.SetNamed(name, logit.MustNew(logit.OptEncoder(logit.DefaultJSONEncoder), logit.OptWriter(logit.NewWriter(&namedBuf))))
 	ctx := logit.WithLoggerName(context.Background(), name)
 	cmd := redis.NewStatusCmd(ctx, "SET", "key", "value")
-	hook := newLoggerHook("cache", time.Hour, true)
+	hook := testLoggerHook("cache", time.Hour, true)
 	_ = hook.ProcessHook(func(context.Context, redis.Cmder) error { return nil })(ctx, cmd)
 	if defaultBuf.Len() != 0 || namedBuf.Len() == 0 {
 		t.Fatalf("日志未按 context 路由: default=%q named=%q", defaultBuf.String(), namedBuf.String())
@@ -576,7 +576,7 @@ func TestHookRecordsDurationWithoutCommandLog(t *testing.T) {
 			logCommands: true,
 		},
 	} {
-		hook := newLoggerHook(cfg.name, time.Hour, cfg.logCommands)
+		hook := testLoggerHook(cfg.name, time.Hour, cfg.logCommands)
 		if err := hook.ProcessHook(func(context.Context, redis.Cmder) error {
 			return nil
 		})(ctx, cmd); err != nil {
@@ -605,7 +605,7 @@ func TestHookRecordsDurationForMissErrorAndBatch(t *testing.T) {
 	var buf bytes.Buffer
 	useLogger(t, &buf, logit.InfoLevel)
 	ctx := logit.WithStart(context.Background())
-	hook := newLoggerHook("cache", time.Hour, false)
+	hook := testLoggerHook("cache", time.Hour, false)
 	cmd := redis.NewStringCmd(ctx, "GET", "key")
 
 	if err := hook.ProcessHook(func(context.Context, redis.Cmder) error {
@@ -659,7 +659,7 @@ func TestHookSkipsDurationForStartupAndInternalCommands(t *testing.T) {
 	var buf bytes.Buffer
 	useLogger(t, &buf, logit.InfoLevel)
 	ctx := logit.WithStart(context.Background())
-	hook := newLoggerHook("cache", time.Hour, false)
+	hook := testLoggerHook("cache", time.Hour, false)
 	call := hook.ProcessHook(func(context.Context, redis.Cmder) error {
 		return nil
 	})
@@ -689,6 +689,14 @@ func TestHookSkipsDurationForStartupAndInternalCommands(t *testing.T) {
 	if _, ok := record["Redis_cache_1_duration_ms"]; ok {
 		t.Fatalf("跳过的命令被计入请求耗时: %v", record)
 	}
+}
+
+func testLoggerHook(name string, slowThreshold time.Duration, logCommands bool) *loggerHook {
+	return newLoggerHook(&Config{
+		Name:          name,
+		SlowThreshold: slowThreshold,
+		LogCommands:   logCommands,
+	})
 }
 
 func useLogger(t *testing.T, buf *bytes.Buffer, level logit.Level) {

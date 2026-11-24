@@ -18,17 +18,19 @@ type loggerHook struct {
 	durationPrefix string
 	slowThreshold  time.Duration
 	logCommands    bool
+	omitLogArgs    bool
 }
 
 var _ redis.Hook = (*loggerHook)(nil)
 
-func newLoggerHook(name string, slowThreshold time.Duration, logCommands bool) *loggerHook {
+func newLoggerHook(cfg *Config) *loggerHook {
 	// 构造时固定耗时前缀，避免逐条命令重复拼接。
 	return &loggerHook{
-		name:           name,
-		durationPrefix: downstreamRedisMessage + "_" + name,
-		slowThreshold:  slowThreshold,
-		logCommands:    logCommands,
+		name:           cfg.Name,
+		durationPrefix: downstreamRedisMessage + "_" + cfg.Name,
+		slowThreshold:  cfg.SlowThreshold,
+		logCommands:    cfg.LogCommands,
+		omitLogArgs:    cfg.OmitLogArgs,
 	}
 }
 
@@ -118,18 +120,22 @@ func (h *loggerHook) logResult(ctx context.Context, elapsed time.Duration, comma
 		"status":     status,
 		"error_type": classifyError(err),
 		"error_code": redisErrorCode(err),
-		"args":       commandArgs(cmd),
 	}
+	h.addCommandArgs(details, cmd)
 	fields := logit.DownstreamFields(downstreamRedisMessage, h.name, elapsed, details)
 	logit.Output(ctx, level, 0, downstreamRedisMessage, fields...)
 }
 
-func commandArgs(cmd redis.Cmder) []any {
+func (h *loggerHook) addCommandArgs(details map[string]any, cmd redis.Cmder) {
+	if h.omitLogArgs {
+		return
+	}
 	args := cmd.Args()
 	if len(args) <= 1 {
-		return []any{}
+		details["args"] = []any{}
+		return
 	}
-	return args[1:]
+	details["args"] = args[1:]
 }
 
 func (h *loggerHook) logBatch(ctx context.Context, elapsed time.Duration, cmds []redis.Cmder, resultErr error) {
@@ -186,10 +192,11 @@ func (h *loggerHook) logBatch(ctx context.Context, elapsed time.Duration, cmds [
 		if isInternalCommand(cmd) {
 			continue
 		}
-		commands = append(commands, map[string]any{
+		entry := map[string]any{
 			"command": strings.ToLower(cmd.Name()),
-			"args":    commandArgs(cmd),
-		})
+		}
+		h.addCommandArgs(entry, cmd)
+		commands = append(commands, entry)
 	}
 	details["commands"] = commands
 	fields := logit.DownstreamFields(downstreamRedisMessage, h.name, elapsed, details)
