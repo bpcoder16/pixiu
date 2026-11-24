@@ -13,8 +13,7 @@
 // HeadObject 返回大小、MIME 和 ETag，对象缺失用 errors.Is(err, ErrObjectNotFound) 识别；桶错误原样保留。
 // DeleteObject 按 Key 删除单个对象，对象已不存在时也返回成功。开启版本控制时，OSS 创建删除标记。
 // PresignGetObject 本地签发 GET URL，有效期还受所用临时凭据的剩余期限限制。
-// STS 临时凭据由独立的 stsx.AssumeRole 签发；biz/ossservice 可组合上传策略和签发流程，
-// 文件校验、Key 生成、记录保存和响应格式由应用负责。
+// STS 临时凭据由独立的 stsx.AssumeRole 签发。上传策略、文件校验、Key 生成、记录保存和响应格式由上层负责。
 // SDK 错误可用 errors.As 识别；失败时保留 context 取消或超时原因供 errors.Is 判定，超时不代表远端没有写入。
 //
 // OptLogRequests(true) 开启脱敏结果日志，默认关闭；不提供正文日志。

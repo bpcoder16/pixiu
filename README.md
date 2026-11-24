@@ -174,11 +174,12 @@ OSS 每个实例固定一个 `Config.Bucket`，阿里云 ES 管理端每个实�
 | 包 | 能力 | 典型用途 |
 | --- | --- | --- |
 | [`biz/httpauth`](biz/httpauth/doc.go) / [`ginauth`](biz/httpauth/ginauth/doc.go) | 命名认证方案、统一身份、标准 Context 与 Gin 中间件 | 支持多平台认证，按平台注册认证实现，由路由显式选择认证方案 |
-| [`biz/ossservice`](biz/ossservice/doc.go) | multipart 上传、指定对象的 STS 凭据签发、URL 内容 MD5 | 上传需要 OSS，签发另需 STS；MD5FromURL 为独立包函数，无需客户端 |
 
 新宿主使用 Baize 加载应用配置、初始化日志、装配资源和执行数据库迁移，通过 Baize 的 `httpboot.Gin`、`cronboot.Service`、`natsboot.ConsumerService` 和 `realtimeboot.Service` 装配常驻服务。事务发件箱使用 Baize 的 `service/outbox`，JetStream 投递通过 `outboxboot.PrepareJetStream` 装配。[Baize v0.1.0](https://github.com/bpcoder16/baize/tree/v0.1.0)
 
 原 `biz/common` 已拆分。百分比转换改用 Pixiu 的 `percentx.Format` 和 `percentx.Parse`，两个百分比错误也随包迁移。业务编号改用 Baize 的 `bizid.Generate`，时间展示与名称脱敏改用 Baize 的 `display.FormatTime` 和 `display.MaskName`。
+
+原 `biz/ossservice` 的 multipart 上传、上传凭据签发和 URL 内容 MD5 已迁至 `github.com/bpcoder16/baize/service/oss`。升级 Pixiu 前，直接使用旧包的宿主需切换导入路径。使用 Baize 的上传接口时，通过 `ossboot.Prepare` 装配并将三个 handler 挂载到宿主的鉴权路由。
 
 分布式业务锁已从 `github.com/bpcoder16/pixiu/biz/lockx` 迁至 `github.com/bpcoder16/baize/service/lockx`，Redis 后端随之迁至新路径的 `redislock` 子包。升级 Pixiu 前，将宿主的 `redisboot.PrepareLock` 配置、`lockx.Named` 调用和测试后端一起切换到新包。两个包各有独立的命名注册表。已迁移的宿主使用 Baize `v0.1.2-0.20261123080219-0af689c5bc07`。[Baize 锁包文档](https://github.com/bpcoder16/baize/blob/0af689c5bc072c1424da58ebb4dcf7969d2d5e7f/service/lockx/doc.go)
 
