@@ -14,7 +14,7 @@ Go 版本要求为 **1.27.3 或更高版本**。所有包共用 `github.com/bpco
 go get github.com/bpcoder16/pixiu/moneyx
 ```
 
-顶层基础包的生产代码仅使用标准库，彼此独立。单独使用 `moneyx` 时，Pixiu 不会为程序引入第三方依赖。`infra/` 和 `biz/` 的依赖由实际导入的包决定。使用 SQLite 驱动时，需要启用 cgo 并准备 C 编译器。[模块定义](go.mod)
+顶层基础包的生产代码仅使用标准库，彼此独立。单独使用 `moneyx` 时，Pixiu 不会为程序引入第三方依赖。`infra/` 的依赖由实际导入的包决定。使用 SQLite 驱动时，需要启用 cgo 并准备 C 编译器。[模块定义](go.mod)
 
 ## 快速开始
 
@@ -141,12 +141,7 @@ func checkHealth() error {
 | 为短文本检索构造 Elasticsearch 查询子句 | [`infra/elasticsearchx/textsearch`](infra/elasticsearchx/textsearch/doc.go) |
 | 阿里云 OSS 对象操作、STS AssumeRole、Elasticsearch 实例与词典管理 | [`infra/aliyun/ossx`](infra/aliyun/ossx/doc.go)、[`infra/aliyun/stsx`](infra/aliyun/stsx/doc.go)、[`infra/aliyun/esx`](infra/aliyun/esx/doc.go) |
 
-### 通用业务功能
-
-| 需要的能力 | 包 |
-| --- | --- |
-| 注册命名 HTTP 认证方案，通过标准 `context.Context` 传递用户身份。应用实现凭证校验 | [`biz/httpauth`](biz/httpauth/doc.go) |
-| 在 Gin 路由上要求指定认证方案，注入身份或中止认证失败的请求 | [`biz/httpauth/ginauth`](biz/httpauth/ginauth/doc.go) |
+HTTP 身份认证已迁入 `github.com/bpcoder16/baize/httpauth`。Gin 路由通过 `github.com/bpcoder16/baize/middleware/ginauth` 直接绑定认证器。
 
 ## 组合与使用约定
 
