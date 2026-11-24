@@ -4,46 +4,119 @@
 
 # 貔貅 · Pixiu
 
-Pixiu 是一个可以按包使用的 Go 基础库。只需精确换算金额时，导入 `moneyx` 即可。编写 HTTP 服务时，可以分别选择日志、路由、客户端和服务退出管理。应用决定启用哪些组件、如何配置，以及何时释放资源。
+**Pixiu 是一个可以按包使用的 Go 后端基础库，涵盖日志、HTTP 服务、消息处理和数据访问。** 你可以只用 `logit` 给现有服务加上结构化日志，也可以把 Gin 入口、下游 HTTP 调用和数据库查询串在同一个请求上下文里，在一条汇总日志中看到时间花在哪里。
 
-## 安装
+顶层包彼此独立，生产代码只依赖 Go 标准库，适合直接用在服务或命令行工具中。例如，`moneyx.YuanToCent("19.90")` 会得到整数 `1990` 分。`infra/` 中的组件封装 Gin、GORM、NATS 等库，应用按需创建客户端、注册路由或消息处理函数，并控制服务的启动和关闭。
 
-Go 版本要求为 **1.27.3 或更高版本**。所有包共用 `github.com/bpcoder16/pixiu` 这一个 Go module，在已有 Go 项目中按导入路径添加需要的包。
-
-```sh
-go get github.com/bpcoder16/pixiu/moneyx
-```
-
-顶层基础包的生产代码仅使用标准库，彼此独立。单独使用 `moneyx` 时，Pixiu 不会为程序引入第三方依赖。`infra/` 的依赖由实际导入的包决定。使用 SQLite 驱动时，需要启用 cgo 并准备 C 编译器。[模块定义](go.mod)
+[快速开始](#快速开始) · [按场景选包](#按场景选包) · [HTTP 调用示例](#http-调用示例) · [开发与验证](#开发与验证)
 
 ## 快速开始
 
-### 把元转换为分
+需要 **Go 1.27.3 或更高版本**。下面新建一个 Go module，用同一个 `logId` 关联两条 JSON 日志。已有项目只需在模块目录执行最后一条命令。
 
-`moneyx` 用整数字段保存分，用十进制字符串表示元，避免金额经过浮点数。输入超过两位小数会返回错误。将下面的程序保存为 `main.go`，在模块目录执行 `go run .`，会输出 `1990 19.90`。
+```sh
+mkdir hello-pixiu
+cd hello-pixiu
+go mod init example.com/hello-pixiu
+go get github.com/bpcoder16/pixiu/logit@v0.2.12
+```
+
+把下面的代码保存为 `main.go`，然后运行 `go run .`。
 
 ```go
 package main
 
 import (
-	"fmt"
-	"log"
+	"context"
 
-	"github.com/bpcoder16/pixiu/moneyx"
+	"github.com/bpcoder16/pixiu/logit"
 )
 
 func main() {
-	cent, err := moneyx.YuanToCent("19.90")
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(cent, moneyx.CentToYuan(cent))
+	logger := logit.MustNew(
+		logit.OptWriter(logit.Stdout()),
+		logit.OptEncoder(logit.DefaultJSONEncoder),
+	)
+	defer logit.Close(logger)
+
+	ctx := logit.WithContextLogID(context.Background())
+	logit.AddField(ctx, logit.Str("job", "catalog-sync"))
+	logger.Info(ctx, "开始同步")
+	logger.Info(ctx, "同步完成")
 }
 ```
 
-### 在一次 HTTP 调用中关联日志与耗时
+两条日志会带上相同的 `logId` 和 `job`。一次运行的输出节选如下，省略了级别和时间戳。
 
-这个示例会启动一个临时本地 HTTP 服务并发送一次请求。在模块目录执行 `go get github.com/bpcoder16/pixiu/infra/httpcall`，再将下面的程序保存为 `main.go` 并运行。标准输出会出现两条 JSON 日志，共用同一个 `logId`。第二条的 `HttpCall_health_1_duration_ms` 是本次下游调用耗时，`total_duration_ms` 是从 `WithStart` 到汇总时的总耗时。
+```jsonl
+{"logId":"6943c048-b4b9-4685-9be8-b05810d34ec3","job":"catalog-sync","msg":"开始同步"}
+{"logId":"6943c048-b4b9-4685-9be8-b05810d34ec3","job":"catalog-sync","msg":"同步完成"}
+```
+
+这里直接使用创建好的 Logger。希望 Pixiu 的 HTTP、数据库等组件也写入同一目标时，在应用启动时调用 `logit.SetDefault(logger)`。[日志用法](logit/doc.go)
+
+## 按场景选包
+
+所有包都在 `github.com/bpcoder16/pixiu` 这一个 Go module 下。下表中的包名也是相对导入路径，点开可查看该包的调用示例。使用 SQLite 驱动还需启用 cgo 并准备 C 编译器。[模块定义](go.mod)
+
+### 日志、并发与应用退出
+
+| 想做什么 | 使用的包 |
+| --- | --- |
+| 输出结构化日志，把请求字段、下游耗时和总耗时放进同一条记录 | [`logit`](logit/doc.go) |
+| 按小时或天轮转文件，通过稳定路径访问当前文件 | [`rotatefile`](rotatefile/doc.go) |
+| 并发执行一组任务，按名称收集结果和错误 | [`conc`](conc/doc.go) |
+| 在一个总期限内按登记逆序关闭资源 | [`lifecycle`](lifecycle/doc.go) |
+| 让多个常驻服务一起运行，退出时停止接收新工作并等待在途工作结束 | [`infra/apprun`](infra/apprun/doc.go) |
+| 提交本地后台任务，或按 Cron 表达式、固定及随机间隔调度 | [`infra/taskpool`](infra/taskpool/doc.go)、[`infra/cronx`](infra/cronx/doc.go) |
+
+使用文件日志时，把绝对路径交给 `rotatefile.New`，再通过 `logit.NewWriter` 接入日志。使用 `lifecycle.Stack` 回收资源时，先登记日志关闭函数，数据库和其他组件在收尾时仍可写日志。
+
+### HTTP、长连接与消息
+
+| 想做什么 | 使用的包 |
+| --- | --- |
+| 给标准 `http.Handler` 配置监听、超时和优雅关闭 | [`infra/httpserver`](infra/httpserver/doc.go) |
+| 创建 Gin 路由，记录访问日志，恢复 panic，按需启用 CORS 和 OpenAPI 文档页 | [`infra/ginx`](infra/ginx/doc.go) |
+| 复用 HTTP 连接池，自动记录每次下游调用的状态和耗时 | [`infra/httpcall`](infra/httpcall/doc.go) |
+| 接入 WebSocket，管理连接、心跳、收发队列和握手认证回调 | [`infra/websocketx`](infra/websocketx/doc.go) |
+| 签发和验证 JWT，在路由中间件中校验签名和声明 | [`infra/jwtx`](infra/jwtx/doc.go) |
+| 使用 NATS Core 发布、订阅和请求应答，或用 JetStream 发布、消费并确认消息 | [`infra/natsx`](infra/natsx/doc.go) |
+
+已有 Gin 路由可以直接作为 `http.Handler` 交给 `httpserver`。在 `ginx` 的处理函数中把 `c.Request.Context()` 传给下游客户端，访问日志就可以汇总本次请求的下游耗时。
+
+### 数据、搜索与云服务
+
+| 想做什么 | 使用的包 |
+| --- | --- |
+| 管理 GORM 连接池，显式选择 MySQL、PostgreSQL 或 ClickHouse 的主从会话 | [`infra/mysqlx`](infra/mysqlx/doc.go)、[`infra/postgresqlx`](infra/postgresqlx/doc.go)、[`infra/clickhousex`](infra/clickhousex/doc.go) |
+| 打开 SQLite 文件或内存数据库 | [`infra/sqlitex`](infra/sqlitex/doc.go) |
+| 给数据访问层注入主从会话，或对包含通配符的原文做 LIKE 匹配 | [`infra/gormx`](infra/gormx/doc.go) |
+| 迁移应用登记的 GORM 模型，按记录数校准 SQL 种子数据 | [`infra/schemamigrate`](infra/schemamigrate/doc.go) |
+| 连接单机 Redis，或在进程内使用有容量上限和 TTL 的 LRU 缓存 | [`infra/redisx`](infra/redisx/doc.go)、[`infra/lrucache`](infra/lrucache/doc.go) |
+| 按 Elasticsearch 服务端主版本创建客户端，再通过统一接口读写索引和文档 | [`infra/elasticsearchx/v7`](infra/elasticsearchx/v7/doc.go)、[`infra/elasticsearchx/v8`](infra/elasticsearchx/v8/doc.go)、[`infra/elasticsearchx/v9`](infra/elasticsearchx/v9/doc.go)、[`infra/elasticsearchx`](infra/elasticsearchx/doc.go) |
+| 为短文本检索构建 Elasticsearch 查询子句 | [`infra/elasticsearchx/textsearch`](infra/elasticsearchx/textsearch/doc.go) |
+| 上传 OSS 对象、通过 STS 获取临时凭据、管理阿里云 Elasticsearch 实例和词典 | [`infra/aliyun/ossx`](infra/aliyun/ossx/doc.go)、[`infra/aliyun/stsx`](infra/aliyun/stsx/doc.go)、[`infra/aliyun/esx`](infra/aliyun/esx/doc.go) |
+
+### 配置与基础工具
+
+| 想做什么 | 使用的包 |
+| --- | --- |
+| 将 YAML、TOML 或 JSON 配置按字段映射到 Go 结构体 | [`infra/configx`](infra/configx/doc.go) |
+| 在应用启动时初始化应用名、运行模式和时区，供其他包读取 | [`infra/env`](infra/env/doc.go) |
+| 在元与整数分、百分比文本与整数万分比之间精确换算 | [`moneyx`](moneyx/doc.go)、[`percentx`](percentx/doc.go) |
+| 读取 JSON 流的首个值，同时保留解码过程中发现的底层读取错误 | [`jsonx`](jsonx/doc.go) |
+| 使用 HMAC-SHA256、AES-GCM 或生成密码学安全随机数 | [`cryptox`](cryptox/doc.go) |
+| 查询本机 IPv4、IPv6 地址，或校验中国大陆手机号、邮箱、HTTP URL 和 IP 的格式 | [`netx`](netx/doc.go)、[`validx`](validx/doc.go) |
+
+## HTTP 调用示例
+
+一次请求慢在哪里？`httpcall` 把下游调用的耗时写入 `context`，`logit.InfoDuration` 在请求结束时输出汇总。下面的程序会启动临时本地 HTTP 服务并访问一次，只需 Go 环境。
+
+在快速开始的目录运行 `go get github.com/bpcoder16/pixiu/infra/httpcall@v0.2.12`，将 `main.go` 替换为下方程序，再运行 `go run .`。
+
+<details>
+<summary>查看完整的 HTTP 示例</summary>
 
 ```go
 package main
@@ -97,61 +170,22 @@ func checkHealth() error {
 }
 ```
 
-在常驻服务中，启动时创建并复用 `httpcall.Client`，每次调用用 `Request(ctx)` 创建新请求。HTTP 4xx 和 5xx 需要从响应状态码判断。需要把已有的 `logId` 传给下游服务时，创建客户端时启用 `OptPropagateLogID(true)`。[HTTP 客户端用法](infra/httpcall/doc.go)
+</details>
 
-## 包导航
+按同一个 `logId` 可以查到两条记录。
 
-下面的链接指向各包的 `doc.go`，包含调用示例和使用约束。导入路径为 `github.com/bpcoder16/pixiu/` 加上表中的包路径。
-
-### 基础模块
-
-| 需要的能力 | 包 |
+| 消息 | 可以看到什么 |
 | --- | --- |
-| 结构化日志、文本或有序 JSON 编码、上下文字段和耗时汇总 | [`logit`](logit/doc.go) |
-| 按小时或天轮转文件、维护稳定软链、清理到期文件 | [`rotatefile`](rotatefile/doc.go) |
-| 在统一期限内按登记逆序关闭资源 | [`lifecycle`](lifecycle/doc.go) |
-| 在单次调用中并发执行任务，收集各任务的结果、错误和耗时 | [`conc`](conc/doc.go) |
-| 解码 JSON 流的首个值，保留读取期间观察到的底层错误 | [`jsonx`](jsonx/doc.go) |
-| HMAC-SHA256、AES-GCM 和密码学安全随机数 | [`cryptox`](cryptox/doc.go) |
-| 查询本机 IPv4、IPv6 地址 | [`netx`](netx/doc.go) |
-| 校验手机号、邮箱、HTTP URL、IP 地址等输入格式 | [`validx`](validx/doc.go) |
-| 元文本与整数分互转、百分比文本与整数万分比互转 | [`moneyx`](moneyx/doc.go)、[`percentx`](percentx/doc.go) |
+| `HttpCall` | 客户端名称 `health`、请求方法、URL、HTTP 状态和调用耗时 |
+| `健康检查完成` | `HttpCall_health_1_duration_ms` 是第一次调用的耗时，`total_duration_ms` 是从 `WithStart` 到汇总的总耗时 |
 
-### 基础功能
+常驻服务应在启动时创建并复用 `httpcall.Client`，每次调用用 `Request(ctx)` 创建请求，并从响应状态码判断 HTTP 4xx 和 5xx。需要向下游服务传递已有 `logId` 时，启用 `OptPropagateLogID(true)`。[HTTP 客户端用法](infra/httpcall/doc.go)
 
-| 需要的能力 | 包 |
-| --- | --- |
-| 读取应用名、运行模式、时区等运行环境信息 | [`infra/env`](infra/env/doc.go) |
-| 将 YAML、TOML、JSON 配置文件严格映射为结构体，按名称读取配置 | [`infra/configx`](infra/configx/doc.go) |
-| 监督常驻服务，统一停收、等待排空和取消 | [`infra/apprun`](infra/apprun/doc.go) |
-| 向本地任务池提交异步任务，为任务建立独立日志作用域 | [`infra/taskpool`](infra/taskpool/doc.go) |
-| 按 Cron 表达式、固定间隔或随机间隔调度任务 | [`infra/cronx`](infra/cronx/doc.go) |
-| 托管标准 `http.Handler`，控制监听、停收与排空 | [`infra/httpserver`](infra/httpserver/doc.go) |
-| 创建 Gin 路由，接入请求日志、panic 恢复、可选 CORS 和 OpenAPI 文档页 | [`infra/ginx`](infra/ginx/doc.go) |
-| 复用 HTTP 客户端和连接池，记录下游请求及耗时 | [`infra/httpcall`](infra/httpcall/doc.go) |
-| 通过标准 `http.Handler` 提供 WebSocket 连接、心跳、有界队列和认证回调 | [`infra/websocketx`](infra/websocketx/doc.go) |
-| JWT 签发与验签，支持 HS256、RS256、ES256、PS256 | [`infra/jwtx`](infra/jwtx/doc.go) |
-| 使用有容量上限、支持 TTL 的进程内 LRU 缓存 | [`infra/lrucache`](infra/lrucache/doc.go) |
-| 创建 GORM 数据库连接池，显式选择主从会话或使用 SQLite 单库 | [`infra/mysqlx`](infra/mysqlx/doc.go)、[`infra/postgresqlx`](infra/postgresqlx/doc.go)、[`infra/clickhousex`](infra/clickhousex/doc.go)、[`infra/sqlitex`](infra/sqlitex/doc.go) |
-| 为数据访问层注入主从会话，构建按原文匹配的 LIKE 查询 | [`infra/gormx`](infra/gormx/doc.go) |
-| 对登记的模型执行 GORM AutoMigrate，校准 SQL 种子数据 | [`infra/schemamigrate`](infra/schemamigrate/doc.go) |
-| 管理单机 Redis 客户端、连接验活和命令结果日志 | [`infra/redisx`](infra/redisx/doc.go) |
-| NATS Core 发布、订阅和请求应答，JetStream 发布和消费 | [`infra/natsx`](infra/natsx/doc.go) |
-| Elasticsearch 通用操作与日志，按服务端主版本选择官方客户端 | [`infra/elasticsearchx`](infra/elasticsearchx/doc.go)、[`infra/elasticsearchx/v7`](infra/elasticsearchx/v7/doc.go)、[`infra/elasticsearchx/v8`](infra/elasticsearchx/v8/doc.go)、[`infra/elasticsearchx/v9`](infra/elasticsearchx/v9/doc.go) |
-| 为短文本检索构造 Elasticsearch 查询子句 | [`infra/elasticsearchx/textsearch`](infra/elasticsearchx/textsearch/doc.go) |
-| 阿里云 OSS 对象操作、STS AssumeRole、Elasticsearch 实例与词典管理 | [`infra/aliyun/ossx`](infra/aliyun/ossx/doc.go)、[`infra/aliyun/stsx`](infra/aliyun/stsx/doc.go)、[`infra/aliyun/esx`](infra/aliyun/esx/doc.go) |
-
-HTTP 身份认证已迁入 `github.com/bpcoder16/baize/httpauth`。Gin 路由通过 `github.com/bpcoder16/baize/middleware/ginauth` 直接绑定认证器。
-
-## 组合与使用约定
-
-- **请求上下文**。使用 `logit.AddField` 或 `AddMeta` 前，通过 `WithContext` 或 `WithContextLogID` 初始化字段存储。`ginx` 已为每个请求建立独立的耗时统计，在处理函数中向下传递 `c.Request.Context()` 即可。[日志](logit/doc.go) · [Gin](infra/ginx/doc.go)
-- **日志内容**。`httpcall` 默认记录请求摘要，开启详情会记录请求头和可读取的正文。`redisx` 默认在失败和慢调用日志中记录完整参数。要省略键和值，设置 `redisx.Config.OmitLogArgs` 为 `true`，对单条命令、Pipeline 和 TxPipeline 均生效。[HTTP 日志](infra/httpcall/doc.go) · [Redis 日志](infra/redisx/doc.go)
-- **文件与退出**。`rotatefile.New` 接受绝对路径，创建的轮转文件可以通过 `logit.NewWriter` 接入。使用 `lifecycle.Stack` 时先登记日志关闭函数，其他组件就能在释放资源时继续写日志。[轮转文件](rotatefile/doc.go) · [资源关闭顺序](lifecycle/doc.go)
+`httpcall` 默认记录请求摘要，开启详情会记录原始请求头和可读取的正文。`redisx` 默认在慢调用和错误日志中记录完整命令参数，设置 `OmitLogArgs: true` 可省略键和值。[HTTP 日志](infra/httpcall/doc.go) · [Redis 日志](infra/redisx/doc.go)
 
 ## 开发与验证
 
-在仓库根目录运行以下命令。全量测试包括 SQLite 驱动测试，并会编译本页的完整 Go 示例。
+在仓库根目录运行以下命令。全量测试会编译本页的完整 Go 程序，覆盖 SQLite 驱动，并使用回环端口启动本地测试服务。
 
 ```sh
 go build ./...
@@ -161,4 +195,4 @@ make test-race
 
 ## 许可证
 
-Pixiu 采用 Apache License 2.0。Go 依赖及内嵌 OpenAPI 文档页资源的版本、修改和归属见第三方声明。[项目许可证](LICENSE) · [第三方声明](THIRD_PARTY_NOTICES.md)
+Pixiu 使用 Apache License 2.0。第三方声明列出了 Go 依赖的版本和许可，以及内嵌 OpenAPI 文档页资源的来源和修改。[项目许可证](LICENSE) · [第三方声明](THIRD_PARTY_NOTICES.md)

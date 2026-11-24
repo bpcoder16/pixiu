@@ -1,28 +1,36 @@
-# 第三方软件声明
+# Pixiu 第三方软件声明
 
-Pixiu 自身采用 Apache License 2.0。仓库直接收录了 OpenAPI 文档页的前端资源，其余第三方 Go 代码通过 Go modules 获取。下文分别给出内嵌资源的来源、改动，以及当前 Go 依赖的版本和许可证。[Pixiu 许可证](LICENSE) · [Go 模块定义](go.mod)
+Pixiu 自身采用 Apache License 2.0。顶层基础包的生产代码只使用 Go 标准库。`infra/` 按包引入第三方 Go 模块，其中 `infra/ginx` 还随仓库分发 OpenAPI 文档页的 JavaScript 和 CSS。发布应用时，应按实际编入程序或随程序分发的组件核对许可和署名。[Pixiu 许可证](LICENSE) · [Go 模块定义](go.mod)
 
-## 仓库内分发的前端资源
+[内嵌前端资源](#内嵌前端资源) · [Go 直接依赖](#go-直接依赖) · [组件附带的其他声明](#组件附带的其他声明) · [核对具体发行物](#核对具体发行物)
 
-`infra/ginx` 的 OpenAPI 文档页使用 **Stoplight Elements 9.0.28**，取自 npm 发布包 `@stoplight/elements@9.0.28`。`web-components.min.js` 和 `styles.min.css` 通过 `go:embed` 编入提供文档页的程序。上游项目采用 Apache-2.0，打包进前端资源的组件保留各自的许可及署名。[上游发布包](https://registry.npmjs.org/@stoplight/elements/-/elements-9.0.28.tgz) · [随附许可证](infra/ginx/elements/LICENSE) · [随附组件声明](infra/ginx/elements/web-components.min.js.LICENSE.txt)
+## 内嵌前端资源
 
-**Pixiu 修改了 JavaScript 文件。** 对显式设置 `x-pixiu-bearer` 的 Swagger 2.0 认证方案，在线调试和生成的请求示例会为 `Authorization` 补齐一次 `Bearer` 前缀。CSS 沿用上游文件。补丁脚本支持重放和校验，资源说明记录了发布包与文件的校验值。[补丁脚本](infra/ginx/elements/patch-bearer.mjs) · [资源来源与校验值](infra/ginx/elements/README.md)
+`infra/ginx` 的文档页通过 `go:embed` 加载以下三个文件。前两个取自 npm 发布包 **`@stoplight/elements@9.0.28`**。Stoplight Elements 采用 Apache-2.0，打包进其 JavaScript 的组件保留各自的许可和署名。[上游发布包](https://registry.npmjs.org/@stoplight/elements/-/elements-9.0.28.tgz) · [随附许可证](infra/ginx/elements/LICENSE)
 
-上游组件声明包含以下署名。分发带有这些资源的程序时，请随发行材料保留适用的许可证与组件声明。
+| 文件 | 来源与修改 |
+| --- | --- |
+| `elements/web-components.min.js` | **Pixiu 修改了上游 JavaScript。** 对标有 `x-pixiu-bearer` 的 Swagger 2.0 认证方案，在线调试和生成的请求示例会为 `Authorization` 补齐一次 `Bearer` 前缀。[补丁脚本](infra/ginx/elements/patch-bearer.mjs) |
+| `elements/styles.min.css` | Stoplight Elements 原版样式表。[资源来源及 SHA-256](infra/ginx/elements/README.md) |
+| `openapi.js` | Pixiu 编写的页面加载脚本，负责适配文档地址和文件上传参数。[加载脚本](infra/ginx/openapi.js) |
+
+在仓库根目录运行 `node infra/ginx/elements/patch-bearer.mjs --check` 可校验 JavaScript 补丁。分发带有这些资源的程序时，应随发行材料保留适用的许可证和组件声明。下表摘列部分署名，完整内容见发布包随附的声明文件。[上游组件声明原文](infra/ginx/elements/web-components.min.js.LICENSE.txt)
 
 | 组件 | 上游署名与许可 |
 | --- | --- |
 | Font Awesome Free 6.1.1 | Copyright 2022 Fonticons, Inc. 图标采用 CC BY 4.0，字体采用 SIL OFL 1.1，代码采用 MIT。[Font Awesome 许可说明](https://fontawesome.com/license/free) |
 | EventEmitter 5.2.9 | Oliver Caldwell，Unlicense |
 | ieee754 | Feross Aboukhadijeh，BSD-3-Clause |
+| React、React DOM 16.14.0 | Facebook, Inc. and its affiliates，MIT |
+| React Router、React Router DOM 6.28.0 | Remix Software Inc.，MIT |
 
 ## Go 直接依赖
 
-下表对应 `go.mod` 中的直接依赖，许可证取自所列版本的模块根目录。直接依赖也包括测试代码显式导入的模块。例如 `infra/natsx` 的测试用 `nats-server/v2` 启动本地服务，生产代码使用 `nats.go` 连接 NATS。
+下表列出 `go.mod` 中的直接依赖，许可证取自对应版本的模块根目录。Go 会按应用导入的包选择参与构建的代码。测试直接导入的模块也在表中，例如 `infra/natsx` 使用 `nats.go` 连接 NATS，测试使用 `nats-server/v2` 启动本地服务。
 
 | Go 模块 | 版本 | 许可证 | 在 Pixiu 中的用途 |
 | --- | --- | --- | --- |
-| `github.com/ClickHouse/ch-go` | `v0.75.0` | Apache-2.0 | ClickHouse 原生协议与类型 |
+| `github.com/ClickHouse/ch-go` | `v0.75.0` | Apache-2.0 | `infra/clickhousex` 测试直接使用原生协议类型，生产驱动 `clickhouse-go/v2` 也使用该模块 |
 | `github.com/ClickHouse/clickhouse-go/v2` | `v2.50.0` | Apache-2.0 | ClickHouse Go 驱动 |
 | `github.com/alibabacloud-go/darabonba-openapi/v2` | `v2.2.4` | Apache-2.0 | 阿里云 OpenAPI 客户端 |
 | `github.com/alibabacloud-go/elasticsearch-20170613/v6` | `v6.4.1` | Apache-2.0 | 阿里云 Elasticsearch 管理 API |
@@ -57,14 +65,16 @@ Pixiu 自身采用 Apache License 2.0。仓库直接收录了 OpenAPI 文档页�
 | `gorm.io/driver/sqlite` | `v1.6.0` | MIT | GORM SQLite 方言 |
 | `gorm.io/gorm` | `v1.31.2` | MIT | 数据库会话与模型操作 |
 
-`go.mod` 中标记为 `// indirect` 的条目给出了间接依赖的版本。分发时还应核对实际链接的间接模块及其随附文件，尤其是模块中另有授权的代码。以下是当前依赖中需要分别处理的情况。
+## 组件附带的其他声明
+
+个别 Go 模块还附有 `NOTICE`、多份许可文本，或包含按其他条款授权的源码。下列条目涉及直接依赖及其依赖链。`go.mod` 中的 `// indirect` 标记可用于核对间接依赖的版本。
 
 - **SQLite**。`github.com/mattn/go-sqlite3` 的 Go 驱动采用 MIT，其包含的 SQLite 核心由上游贡献至公有领域。[SQLite 官方声明](https://sqlite.org/copyright.html)
 - **Elasticsearch**。`elastic-transport-go/v8` 的 `NOTICE` 含 Elasticsearch BV 版权与 Apache Software Foundation 归属。`go-elasticsearch/v8` 和 `go-elasticsearch/v9` 各自附有 Elasticsearch B.V. 的 `NOTICE`。分发对应组件时保留适用的原文。
 - **GORM ClickHouse 驱动**。`gorm.io/driver/clickhouse` 随附 `LICENCE` 和 `License` 两份 MIT 文本，保留了不同的版权署名。
 - **YAML**。间接模块 `go.yaml.in/yaml/v3 v3.0.6` 中从 libyaml 移植的文件采用 MIT，其余文件采用 Apache-2.0。上游根目录的 `LICENSE` 列出了文件范围，`NOTICE` 保留 Canonical Ltd. 的归属。
 
-## MPL-2.0 对应源码
+### MPL-2.0 对应源码
 
 以下两个模块分别经 MySQL 驱动和 ClickHouse 驱动引入。对外分发含 MPL 受覆盖代码的可执行文件时，应按 MPL 第 3.2 节向接收者说明如何获取相应受覆盖源码。使用未修改版本时可从下列标签取得源码，发布者应确保获取方式可用且与实际分发版本一致。修改过受覆盖文件时，应提供包含这些修改的对应源码。[MPL-2.0 原文](https://www.mozilla.org/en-US/MPL/2.0/)
 
@@ -75,6 +85,6 @@ Pixiu 自身采用 Apache License 2.0。仓库直接收录了 OpenAPI 文档页�
 
 ## 核对具体发行物
 
-1. 对 Go 可执行文件运行 `go version -m <可执行文件路径>`，查看构建时记录的模块版本和替换项。另行核对通过 `go:embed` 嵌入的资源。
+1. 对最终的 Go 可执行文件运行 `go version -m <可执行文件路径>`，查看构建时记录的模块版本和替换项。若程序提供内嵌 OpenAPI 文档页，还要核对上面的前端资源及随附声明。
 2. 用 `go mod download -json 模块路径@版本` 取得对应源码目录（`Dir`）。检查其中的 `LICENSE`、`LICENCE`、`COPYING`、`NOTICE` 及具体文件的版权头。使用本地替换或补丁时，以实际参与构建的源码为准。
 3. 按发行物包含的代码和资源附上相应材料。MIT 和 BSD 组件须保留适用的版权、许可条件和免责声明。Apache-2.0 组件需附许可证、保留适用的归属声明，并标明对文件的修改。MPL 组件还需按上节提供对应源码的获取方式。[Apache-2.0 第 4 节](https://www.apache.org/licenses/LICENSE-2.0#redistribution)

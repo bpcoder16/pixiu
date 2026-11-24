@@ -3,7 +3,7 @@
 固定使用 `@stoplight/elements@9.0.28` 的官方 npm 发布包。JS 应用下述 Pixiu Bearer 补丁，其余文件保持发布内容不变：
 
 - `web-components.min.js`：独立 Web Component，包含运行时依赖。
-- `styles.min.css`：配套样式，字体资源已包含在 CSS 内。
+- `styles.min.css` 提供组件样式，浏览器按样式中列出的顺序选用可用字体。
 - `LICENSE`：Apache-2.0 许可证。
 - `web-components.min.js.LICENSE.txt`：发布包附带的第三方版权声明。
 
