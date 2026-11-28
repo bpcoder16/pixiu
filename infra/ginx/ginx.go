@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/bpcoder16/pixiu/logit"
@@ -23,6 +24,9 @@ type Config struct {
 
 	// LoggerName 指定请求使用的命名 Logger;为空时沿用请求 context 的 Logger 路由。
 	LoggerName string
+
+	// RequireLogID 要求入站请求携带非空的 PIXIU-Log-Id，缺少时返回 HTTP 400。
+	RequireLogID bool
 
 	// DisableAccessLog 关闭 HTTP 访问日志,不影响 Observe 回调或 panic 错误日志。
 	DisableAccessLog bool
@@ -93,6 +97,14 @@ func New(cfg Config) (*gin.Engine, error) {
 		return nil, err
 	}
 	r.Use(requestContext(cfg.LoggerName), observe(cfg), recovery())
+	if cfg.RequireLogID {
+		// 校验调用方的原始头，响应头可能已经由 requestContext 生成。拒绝结果仍由 observe 采集。
+		r.Use(func(c *gin.Context) {
+			if strings.TrimSpace(c.GetHeader(TraceHeader)) == "" {
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": TraceHeader + " header is required"})
+			}
+		})
+	}
 	r.Use(cfg.Middlewares...)
 	return r, nil
 }

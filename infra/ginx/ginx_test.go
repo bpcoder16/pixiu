@@ -230,3 +230,57 @@ func TestAbortHandlerAndObserverIsolation(t *testing.T) {
 		t.Fatalf("中断结果不准确: %+v", result)
 	}
 }
+
+func TestRequireLogID(t *testing.T) {
+	var results []RequestResult
+	r, err := New(Config{
+		RequireLogID: true,
+		Observe: func(_ context.Context, result RequestResult) {
+			results = append(results, result)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var called int
+	r.GET("/", func(c *gin.Context) {
+		called++
+		id, _ := logit.LogIDFromContext(c.Request.Context())
+		if id != "upstream-id" {
+			t.Errorf("业务收到 logId %q", id)
+		}
+		c.Status(http.StatusNoContent)
+	})
+	for _, tc := range []struct {
+		name   string
+		header []string
+		status int
+	}{
+		{"缺失", nil, http.StatusBadRequest},
+		{"空值", []string{""}, http.StatusBadRequest},
+		{"仅空白", []string{"  "}, http.StatusBadRequest},
+		{"上游提供", []string{"upstream-id"}, http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			for _, h := range tc.header {
+				req.Header.Add(TraceHeader, h)
+			}
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != tc.status || w.Header().Get(TraceHeader) == "" {
+				t.Fatalf("响应状态 %d，响应头 %v", w.Code, w.Header())
+			}
+			if w.Code == http.StatusBadRequest && !strings.Contains(w.Body.String(), TraceHeader) {
+				t.Errorf("响应应指明缺少的请求头，得到 %q", w.Body.String())
+			}
+			if len(results) != 1 || results[0].Status != tc.status || results[0].Panicked {
+				t.Errorf("观察结果 %v", results)
+			}
+			results = nil
+		})
+	}
+	if called != 1 {
+		t.Fatalf("业务处理次数 %d，预期 1", called)
+	}
+}
