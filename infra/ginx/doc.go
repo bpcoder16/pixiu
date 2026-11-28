@@ -42,7 +42,7 @@
 // 自行重新开启 Gin 自动重定向会绕过内置中间件,不产生访问日志、Observe 或日志 ID 响应头。
 // 通过 TraceHeader(PIXIU-Log-Id)接收并回写日志 ID;非空值原样使用,缺失或为空时生成。
 // 服务间接口可设置 Config.RequireLogID；缺少该请求头、值为空或仅含空白时，返回 HTTP 400 并跳过业务处理。
-// 此规则作用于整个 Engine，包括探针、文档路由和 OPTIONS 预检；被拒绝请求沿用原访问日志和 Observe 设置。
+// 业务接口、探针和 OPTIONS 预检均执行校验。RegisterOpenAPI 注册的文档页面、资源和 JSON 可省略请求头，由框架生成日志 ID。
 // 每个请求从进入 ginx 开始独立计时，父 context 和其他请求的下游耗时分别汇总。
 // 访问日志统一使用 logit.InfoDuration,不随状态码改变 Info 级别。
 // LogRequestInfo、LogResponseInfo 默认关闭,分别追加 request_info、response_info 详情;

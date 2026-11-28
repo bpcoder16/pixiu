@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/swaggo/swag"
 )
 
@@ -15,6 +16,7 @@ func TestRegisterOpenAPIModules(t *testing.T) {
 		output := captureAccessLogs(t)
 		var observations int
 		router, err := New(Config{
+			RequireLogID:    true,
 			LogRequestInfo:  true,
 			LogResponseInfo: true,
 			Observe: func(context.Context, RequestResult) {
@@ -35,6 +37,10 @@ func TestRegisterOpenAPIModules(t *testing.T) {
 			t.Fatal("后续模块失败时不应留下部分路由")
 		}
 		swag.Register("admin", &swag.Spec{SwaggerTemplate: admin})
+		group := &router.RouterGroup
+		handler := func(c *gin.Context) { c.Status(http.StatusNoContent) }
+		router.POST("/docs", handler)
+		RegisterIgnoredRoute(group, http.MethodGet, "/docs/probe", handler)
 		for _, prefix := range []string{"", "/internal"} {
 			if err := RegisterOpenAPI(router.Group(prefix), modules...); err != nil {
 				t.Fatal(err)
@@ -46,12 +52,14 @@ func TestRegisterOpenAPIModules(t *testing.T) {
 				{"/docs/app", `data-document-url="` + prefix + `/openapi/app.json"`},
 				{"/docs/admin", `data-document-url="` + prefix + `/openapi/admin.json"`},
 				{"/docs/assets/openapi.js", "apiDescriptionDocument"},
+				{"/docs/assets/web-components.min.js", "elements-api"},
+				{"/docs/assets/styles.min.css", ".sl-elements"},
 			} {
 				output.Reset()
 				observations = 0
 				response := httptest.NewRecorder()
 				router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, prefix+tc.path, nil))
-				if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), tc.contains) {
+				if response.Code != http.StatusOK || response.Header().Get(TraceHeader) == "" || !strings.Contains(response.Body.String(), tc.contains) {
 					t.Fatalf("%s%s = %d %s", prefix, tc.path, response.Code, response.Body.String())
 				}
 				if output.Len() != 0 || observations != 0 {
@@ -78,13 +86,26 @@ func TestRegisterOpenAPIModules(t *testing.T) {
 				output.Reset()
 				observations = 0
 				response := httptest.NewRecorder()
-				router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, prefix+path, nil))
+				req := httptest.NewRequest(http.MethodGet, prefix+path, nil)
+				req.Header.Set(TraceHeader, "request-id")
+				router.ServeHTTP(response, req)
 				if response.Code != http.StatusNotFound {
 					t.Fatalf("未注册的文档路径 %s%s = %d，预期 404", prefix, path, response.Code)
 				}
 				if len(accessLogRecords(t, output)) != 1 || observations != 1 {
 					t.Fatalf("未匹配的模块文档请求被忽略: path=%s%s, Observe=%d", prefix, path, observations)
 				}
+			}
+		}
+		for _, tc := range []struct{ method, path string }{
+			{http.MethodPost, "/docs"},
+			{http.MethodGet, "/docs/probe"},
+			{http.MethodGet, "/openapi/missing.json"},
+		} {
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(tc.method, tc.path, nil))
+			if response.Code != http.StatusBadRequest {
+				t.Errorf("%s %s 缺少 %s 时返回 %d", tc.method, tc.path, TraceHeader, response.Code)
 			}
 		}
 	})
